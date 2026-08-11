@@ -7,168 +7,210 @@ use App\Models\DetalleAsiento;
 use App\Models\CuentaContable;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
+use Exception;
 
 class ContabilidadService
 {
+    // Caché en memoria para evitar consultas redundantes a la base de datos
+    protected array $cachedCuentas = [];
+    protected ?int $monedaBaseId = null;
+
+    /**
+     * Obtiene el ID de una cuenta contable mediante su código, utilizando caché local.
+     */
+    protected function getCuentaIdByCodigo(string $codigo): int
+    {
+        if (!isset($this->cachedCuentas[$codigo])) {
+            $cuenta = CuentaContable::where('codigo', $codigo)->first();
+            if (!$cuenta) {
+                throw new Exception("Error de Configuración Contable: La cuenta con código [{$codigo}] no existe en el catálogo.");
+            }
+            $this->cachedCuentas[$codigo] = $cuenta->id;
+        }
+        return $this->cachedCuentas[$codigo];
+    }
+
+    /**
+     * Obtiene la moneda base del sistema.
+     */
+    protected function getMonedaBaseId(): int
+    {
+        if (is_null($this->monedaBaseId)) {
+            $moneda = DB::table('monedas')->where('es_base', true)->first();
+            if (!$moneda) {
+                throw new Exception("Error del Sistema: No se ha definido una Moneda Base contable.");
+            }
+            $this->monedaBaseId = $moneda->id;
+        }
+        return $this->monedaBaseId;
+    }
+
     public function contabilizarVenta($sale)
     {
         // 1. Identificar el periodo actual
         $periodo = DB::table('periodos_contables')
-                     ->where('estado', 'abierto')
-                     ->whereDate('fecha_inicio', '<=', $sale->created_at)
-                     ->whereDate('fecha_fin', '>=', $sale->created_at)
-                     ->first();
+            ->where('estado', 'abierto')
+            ->whereDate('fecha_inicio', '<=', $sale->created_at)
+            ->whereDate('fecha_fin', '>=', $sale->created_at)
+            ->first();
 
-        if (!$periodo) return; // Si no hay periodo fiscal abierto, aborta la contabilidad
+        if (!$periodo) {
+            throw new Exception("Operación Cancelada: No existe un periodo contable abierto para la fecha de esta venta.");
+        }
 
-        // 2. Extraer las Cuentas Contables del Catálogo
-        $cuentaCaja = CuentaContable::where('codigo', '1.1.1')->first()->id; 
-        $cuentaBanco = CuentaContable::where('codigo', '1.1.2.1')->first()->id; 
-        $cuentaIngresoServicio = CuentaContable::where('codigo', '4.1')->first()->id; 
-        $cuentaIngresoProducto = CuentaContable::where('codigo', '4.4')->first()->id; 
+        $monedaBase = $this->getMonedaBaseId();
         
-        $cuentaCostoInsumo = CuentaContable::where('codigo', '5.2')->first()->id; 
-        $cuentaInventario = CuentaContable::where('codigo', '1.1.5')->first()->id; 
+        // Determinar factor de conversión bimonetaria
+        // Si la venta es en USD, los montos se normalizan a la moneda base (Córdoba) usando la tasa registrada de la venta
+        $tasa = ($sale->currency === 'usd' || $sale->currency === 'dolar') ? $sale->exchange_rate : 1.00;
 
-        $monedaBase = DB::table('monedas')->where('es_base', true)->first()->id;
+        $montoTotalNormalizado = round($sale->total * $tasa, 2);
+        $montoDescuentoNormalizado = round($sale->discount * $tasa, 2);
 
-        // ==========================================
-        // ASIENTO 1: RECONOCIMIENTO DE INGRESO
-        // ==========================================
-        $asientoIngreso = AsientoContable::create([
-            'numero_asiento' => 'ING-' . str_pad($sale->id, 5, '0', STR_PAD_LEFT),
-            'fecha' => Carbon::now(),
-            'concepto' => 'Ingreso por venta de factura #' . $sale->id,
-            'modulo_origen' => 'ventas',
-            'referencia_id' => $sale->id,
-            'periodo_id' => $periodo->id,
-            'usuario_id' => auth()->id() ?? 1,
-        ]);
-
-        // DEBE: A dónde entra el dinero (Mapeo exacto según el Catálogo Adaptado)
-        if ($sale->payment_method == 'bac') {
-            $cuentaDestinoFondos = CuentaContable::where('codigo', '1.1.3.02')->first()->id ?? 1; 
-        } elseif ($sale->payment_method == 'lafise') {
-            $cuentaDestinoFondos = CuentaContable::where('codigo', '1.1.3.01')->first()->id ?? 1; 
-        } else {
-            // Si es efectivo, verificamos la moneda
-            if ($sale->currency == 'usd') {
-                $cuentaDestinoFondos = CuentaContable::where('codigo', '1.1.2')->first()->id ?? 1; 
-            } else {
-                $cuentaDestinoFondos = CuentaContable::where('codigo', '1.1.1')->first()->id ?? 1; 
-            }
-        }
-        
-        DetalleAsiento::create([
-            'asiento_id' => $asientoIngreso->id,
-            'cuenta_id' => $cuentaDestinoFondos,
-            'moneda_id' => $monedaBase,
-            'debe' => $sale->total,
-            'haber' => 0,
-            'descripcion' => 'Cobro de factura #' . $sale->id,
-        ]);
-
-        // Registrar el Descuento en el DEBE (Contra-ingreso)
-        if ($sale->discount > 0) {
-            $cuentaDescuento = \App\Models\CuentaContable::where('codigo', '4.5')->first()->id ?? 1; 
-            
-            \App\Models\DetalleAsiento::create([
-                'asiento_id' => $asientoIngreso->id,
-                'cuenta_id' => $cuentaDescuento,
-                'moneda_id' => $monedaBase,
-                'debe' => $sale->discount, 
-                'haber' => 0,
-                'descripcion' => 'Descuento otorgado en venta #' . $sale->id,
-            ]);
-        }
-
-        // --- ¡EL CANDADO SE QUITÓ DE AQUÍ! ---
-
-        // HABER: Desglosar el ingreso entre Servicios y Productos
-        $totalServicios = 0;
-        $totalProductos = 0;
-        $costoInsumosConsumidos = 0;
-
-        foreach ($sale->details as $detail) {
-            if ($detail->service_id != null) {
-                $totalServicios += ($detail->unit_price * $detail->quantity);
-                
-                // Calcular el costo de los insumos usados en este servicio para el Asiento 2
-                $service = \App\Models\Service::with('formulas.item')->find($detail->service_id);
-                foreach ($service->formulas as $formula) {
-                    $item = $formula->item;
-                    $precioPorUnidad = $item->precio_c / $item->total_volume; 
-                    $costoInsumosConsumidos += ($precioPorUnidad * $formula->quantity_used * $detail->quantity);
-                }
-            } else {
-                $totalProductos += ($detail->unit_price * $detail->quantity);
-            }
-        }
-
-        // Registrar el Haber de Servicios
-        if ($totalServicios > 0) {
-            DetalleAsiento::create([
-                'asiento_id' => $asientoIngreso->id,
-                'cuenta_id' => $cuentaIngresoServicio,
-                'moneda_id' => $monedaBase,
-                'debe' => 0,
-                'haber' => $totalServicios,
-                'descripcion' => 'Ingreso por servicios brindados',
-            ]);
-        }
-
-        // Registrar el Haber de Productos
-        if ($totalProductos > 0) {
-            DetalleAsiento::create([
-                'asiento_id' => $asientoIngreso->id,
-                'cuenta_id' => $cuentaIngresoProducto,
-                'moneda_id' => $monedaBase,
-                'debe' => 0,
-                'haber' => $totalProductos,
-                'descripcion' => 'Ingreso por venta directa de productos',
-            ]);
-        }
-
-        // --- ¡AQUÍ ES EL LUGAR CORRECTO DEL PRIMER CANDADO! ---
-        // Ya registramos el DEBE (dinero en caja) y el HABER (servicios/productos).
-        $this->validarCuadre($asientoIngreso->id);
-
-        // ==========================================
-        // ASIENTO 2: COSTO DE INSUMOS (Condicional)
-        // ==========================================
-        if ($costoInsumosConsumidos > 0) {
-            $asientoCosto = AsientoContable::create([
-                'numero_asiento' => 'CST-' . str_pad($sale->id, 5, '0', STR_PAD_LEFT),
+        // Iniciar transacción atómica para asegurar la integridad de los datos
+        DB::beginTransaction();
+        try {
+            // ASIENTO 1: RECONOCIMIENTO DE INGRESO
+            $asientoIngreso = AsientoContable::create([
+                'numero_asiento' => 'ING-' . str_pad($sale->id, 5, '0', STR_PAD_LEFT),
                 'fecha' => Carbon::now(),
-                'concepto' => 'Costo de insumos consumidos en factura #' . $sale->id,
-                'modulo_origen' => 'inventario',
+                'concepto' => 'Ingreso por venta de factura #' . $sale->id . ($tasa > 1 ? " (Conversión USD a NIO)" : ""),
+                'modulo_origen' => 'ventas',
                 'referencia_id' => $sale->id,
                 'periodo_id' => $periodo->id,
                 'usuario_id' => auth()->id() ?? 1,
             ]);
 
-            // DEBE: Reconocimiento del Gasto/Costo
+            // DEBE: Mapeo exacto de la cuenta de destino según el método de pago
+            if ($sale->payment_method === 'bac') {
+                $cuentaDestinoFondos = $this->getCuentaIdByCodigo('1.1.2.2'); // Banco BAC
+            } elseif ($sale->payment_method === 'lafise') {
+                $cuentaDestinoFondos = $this->getCuentaIdByCodigo('1.1.2.1'); // Banco Lafise
+            } else {
+                // Efectivo en base a divisa
+                if ($sale->currency === 'usd' || $sale->currency === 'dolar') {
+                    $cuentaDestinoFondos = $this->getCuentaIdByCodigo('1.1.2'); // Cuenta Transitoria / Bancos USD
+                } else {
+                    $cuentaDestinoFondos = $this->getCuentaIdByCodigo('1.1.1'); // Caja General
+                }
+            }
+            
             DetalleAsiento::create([
-                'asiento_id' => $asientoCosto->id,
-                'cuenta_id' => $cuentaCostoInsumo,
+                'asiento_id' => $asientoIngreso->id,
+                'cuenta_id' => $cuentaDestinoFondos,
                 'moneda_id' => $monedaBase,
-                'debe' => $costoInsumosConsumidos,
+                'debe' => $montoTotalNormalizado,
                 'haber' => 0,
-                'descripcion' => 'Costo de insumos en servicio',
+                'descripcion' => 'Cobro de factura #' . $sale->id,
             ]);
 
-            // HABER: Salida del Inventario Físico
-            DetalleAsiento::create([
-                'asiento_id' => $asientoCosto->id,
-                'cuenta_id' => $cuentaInventario,
-                'moneda_id' => $monedaBase,
-                'debe' => 0,
-                'haber' => $costoInsumosConsumidos,
-                'descripcion' => 'Baja de inventario por consumo interno',
-            ]);
+            // Registrar el Descuento en el DEBE (Contra-ingreso) si aplica
+            if ($montoDescuentoNormalizado > 0) {
+                $cuentaDescuento = $this->getCuentaIdByCodigo('4.5'); 
 
-           
-            $this->validarCuadre($asientoCosto->id);
+                DetalleAsiento::create([
+                    'asiento_id' => $asientoIngreso->id,
+                    'cuenta_id' => $cuentaDescuento,
+                    'moneda_id' => $monedaBase,
+                    'debe' => $montoDescuentoNormalizado, 
+                    'haber' => 0,
+                    'descripcion' => 'Descuento otorgado en venta #' . $sale->id,
+                ]);
+            }
+
+            // HABER: Desglosar los ingresos entre Servicios y Productos
+            $totalServicios = 0;
+            $totalProductos = 0;
+            $costoInsumosConsumidos = 0;
+
+            foreach ($sale->details as $detail) {
+                $subtotalLineaNormalizado = ($detail->unit_price * $detail->quantity) * $tasa;
+                
+                if ($detail->service_id != null) {
+                    $totalServicios += $subtotalLineaNormalizado;
+                    
+                    // Lógica del cálculo de costo de insumos del servicio
+                    $service = \App\Models\Service::with('formulas.item')->find($detail->service_id);
+                    if ($service) {
+                        foreach ($service->formulas as $formula) {
+                            $item = $formula->item;
+                            if ($item && $item->total_volume > 0) {
+                                $precioPorUnidad = $item->precio_c / $item->total_volume; 
+                                $costoInsumosConsumidos += ($precioPorUnidad * $formula->quantity_used * $detail->quantity);
+                            }
+                        }
+                    }
+                } else {
+                    $totalProductos += $subtotalLineaNormalizado;
+                }
+            }
+
+            // Asentamiento del Haber de Servicios
+            if ($totalServicios > 0) {
+                DetalleAsiento::create([
+                    'asiento_id' => $asientoIngreso->id,
+                    'cuenta_id' => $this->getCuentaIdByCodigo('4.1'),
+                    'moneda_id' => $monedaBase,
+                    'debe' => 0,
+                    'haber' => round($totalServicios, 2),
+                    'descripcion' => 'Ingreso por servicios brindados',
+                ]);
+            }
+
+            // Asentamiento del Haber de Productos
+            if ($totalProductos > 0) {
+                DetalleAsiento::create([
+                    'asiento_id' => $asientoIngreso->id,
+                    'cuenta_id' => $this->getCuentaIdByCodigo('4.4'),
+                    'moneda_id' => $monedaBase,
+                    'debe' => 0,
+                    'haber' => round($totalProductos, 2),
+                    'descripcion' => 'Ingreso por venta directa de productos',
+                ]);
+            }
+
+            // Candado de seguridad y validación de doble partida
+            $this->validarCuadre($asientoIngreso->id);
+
+            // ASIENTO 2: COSTO DE INSUMOS (Si aplica consumo interno)
+            if ($costoInsumosConsumidos > 0) {
+                $asientoCosto = AsientoContable::create([
+                    'numero_asiento' => 'CST-' . str_pad($sale->id, 5, '0', STR_PAD_LEFT),
+                    'fecha' => Carbon::now(),
+                    'concepto' => 'Costo de insumos consumidos en factura #' . $sale->id,
+                    'modulo_origen' => 'inventario',
+                    'referencia_id' => $sale->id,
+                    'periodo_id' => $periodo->id,
+                    'usuario_id' => auth()->id() ?? 1,
+                ]);
+
+                // DEBE: Aumento de Costos
+                DetalleAsiento::create([
+                    'asiento_id' => $asientoCosto->id,
+                    'cuenta_id' => $this->getCuentaIdByCodigo('5.2'),
+                    'moneda_id' => $monedaBase,
+                    'debe' => round($costoInsumosConsumidos, 2),
+                    'haber' => 0,
+                    'descripcion' => 'Costo de insumos en servicio',
+                ]);
+
+                // HABER: Disminución de Activo por Inventario de Insumos
+                DetalleAsiento::create([
+                    'asiento_id' => $asientoCosto->id,
+                    'cuenta_id' => $this->getCuentaIdByCodigo('1.1.5'),
+                    'moneda_id' => $monedaBase,
+                    'debe' => 0,
+                    'haber' => round($costoInsumosConsumidos, 2),
+                    'descripcion' => 'Baja de inventario por consumo interno',
+                ]);
+
+                $this->validarCuadre($asientoCosto->id);
+            }
+
+            DB::commit();
+        } catch (Exception $e) {
+            DB::rollBack();
+            throw $e;
         }
     }
     
@@ -572,19 +614,17 @@ class ContabilidadService
      */
     public function validarCuadre($asientoId)
     {
-        $totales = \Illuminate\Support\Facades\DB::table('detalle_asientos')
+        $totales = DB::table('detalle_asientos')
             ->where('asiento_id', $asientoId)
             ->selectRaw('SUM(debe) as total_debe, SUM(haber) as total_haber')
             ->first();
 
-        // Usamos round() a 2 decimales para evitar los micro-errores de punto flotante de PHP
-        $debe = round($totales->total_debe, 2);
-        $haber = round($totales->total_haber, 2);
+        $debe = round($totales->total_debe ?? 0, 2);
+        $haber = round($totales->total_haber ?? 0, 2);
         $diferencia = round(abs($debe - $haber), 2);
 
-        if ($diferencia > 0) {
-            // Esto cancela la transacción completa y evita que la base de datos se corrompa
-            throw new \Exception("Asiento descuadrado por C$ {$diferencia}. Debe: C$ {$debe} | Haber: C$ {$haber}");
+        if ($diferencia > 0.00) {
+            throw new Exception("Error Crítico de Partida Doble: Asiento contable ID [{$asientoId}] descuadrado por C$ {$diferencia}. (Debe: C$ {$debe} | Haber: C$ {$haber}).");
         }
     }
 
