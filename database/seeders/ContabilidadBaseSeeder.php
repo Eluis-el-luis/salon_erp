@@ -116,6 +116,7 @@ class ContabilidadBaseSeeder extends Seeder
             ['codigo' => '6.4', 'nombre' => 'Mantenimiento y Reparación', 'tipo' => 'gasto', 'naturaleza' => 'deudora', 'cuenta_padre_id' => $gasto, 'nivel' => 2, 'permite_movimiento' => true, 'created_at' => now()],
             ['codigo' => '6.5', 'nombre' => 'Productos de Limpieza y Papelería', 'tipo' => 'gasto', 'naturaleza' => 'deudora', 'cuenta_padre_id' => $gasto, 'nivel' => 2, 'permite_movimiento' => true, 'created_at' => now()],
             ['codigo' => '6.6', 'nombre' => 'Licencias, Permisos y Seguros', 'tipo' => 'gasto', 'naturaleza' => 'deudora', 'cuenta_padre_id' => $gasto, 'nivel' => 2, 'permite_movimiento' => true, 'created_at' => now()],
+            ['codigo' => '6.7', 'nombre' => 'Sueldos y Salarios', 'tipo' => 'gasto', 'naturaleza' => 'deudora', 'cuenta_padre_id' => $gasto, 'nivel' => 2, 'permite_movimiento' => true, 'created_at' => now()],
         ]);
 
         // --- CLASE 7: OTROS GASTOS Y EGRESOS (Adaptado del Libro Diario) ---

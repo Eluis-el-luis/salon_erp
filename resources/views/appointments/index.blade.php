@@ -27,32 +27,32 @@
             </thead>
             <tbody class="bg-white divide-y divide-gray-200">
             <!-- Iteramos sobre las citas reales -->
-                @forelse ($appointments as $appointment)
+                @forelse ($citas as $cita)
                     <tr>
                         <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                             <!-- Usamos Carbon para formatear la hora (ej: 14:00) -->
-                            {{ \Carbon\Carbon::parse($appointment->appointment_date)->format('H:i') }}
+                            {{ \Carbon\Carbon::parse($cita->appointment_date)->format('H:i') }}
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
                             <!-- Accedemos a la relación del cliente -->
-                            {{ $appointment->client->name }} <br>
-                            <span class="text-xs text-gray-500">{{ $appointment->client->phone ?? 'Sin teléfono' }}</span>
+                            {{ $cita->cliente->name }} <br>
+                            <span class="text-xs text-gray-500">{{ $cita->cliente->phone ?? 'Sin teléfono' }}</span>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-medium">
-                            {{ $appointment->service->name ?? 'Servicio no encontrado' }}
+                            {{ $cita->servicio->name ?? 'Servicio no encontrado' }}
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700 font-medium">
-                            @foreach($appointment->stylists as $stylist)
-                                <span class="bg-gray-100 px-2 py-1 rounded text-xs block mb-1">{{ $stylist->name }}</span>
+                            @foreach($cita->estilistas as $estilista)
+                                <span class="bg-gray-100 px-2 py-1 rounded text-xs block mb-1">{{ $estilista->name }}</span>
                             @endforeach
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap">
                             <!-- Lógica visual de colores según el estado -->
-                            @if($appointment->status === 'pendiente')
+                            @if($cita->status === 'pendiente')
                                 <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-yellow-100 text-yellow-800">
                                     Pendiente
                                 </span>
-                            @elseif($appointment->status === 'completada')
+                            @elseif($cita->status === 'completada')
                                 <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
                                     Completada
                                 </span>
@@ -60,18 +60,18 @@
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                         
-                            @if($appointment->status === 'pendiente')
-                                <button @click="completeAppointment({{ $appointment->id }})" class="text-emerald-600 hover:text-emerald-900 font-bold mr-3 transition duration-150">
+                            @if($cita->status === 'pendiente')
+                                <button @click="completeAppointment({{ $cita->id }})" class="text-emerald-600 hover:text-emerald-900 font-bold mr-3 transition duration-150">
                                     ✓ Completar
                                 </button>
                             @endif
 
-                            @if($appointment->status !== 'cancelada' && $appointment->status !== 'completada')
+                            @if($cita->status !== 'cancelada' && $cita->status !== 'completada')
                                 @php
                                     // Preparamos los IDs para enviarlos al POS
-                                    $stylistIds = $appointment->stylists->pluck('id')->join(',');
+                                    $stylistIds = $cita->estilistas->pluck('id')->join(',');
                                 @endphp
-                                <a href="{{ url('/pos') }}?appointment_id={{ $appointment->id }}&service_id={{ $appointment->service_id }}&service_name={{ urlencode($appointment->service->name) }}&price={{ $appointment->service->price }}&client_id={{ $appointment->client_id }}&stylist_ids={{ $stylistIds }}" 
+                                <a href="{{ url('/pos') }}?appointment_id={{ $cita->id }}&service_id={{ $cita->service_id }}&service_name={{ urlencode($cita->servicio->name) }}&price={{ $cita->servicio->price }}&client_id={{ $cita->client_id }}&stylist_ids={{ $stylistIds }}" 
                                 class="inline-block text-blue-600 hover:text-blue-900 font-bold transition duration-150">
                                     Facturar
                                 </a>
@@ -110,8 +110,8 @@
                         <label class="block text-sm font-medium text-gray-700 mb-2">Cliente</label>
                         <select x-model.number="form.client_id" class="w-full border-gray-300 rounded-md shadow-sm focus:border-emerald-500 focus:ring-emerald-500" required>
                             <option value="">Seleccione un cliente...</option>
-                            @foreach($clients as $client)
-                                <option value="{{ $client->id }}">{{ $client->name }}</option>
+                            @foreach($clientes as $cliente)
+                                <option value="{{ $cliente->id }}">{{ $cliente->name }}</option>
                             @endforeach
                         </select>
                     </div>
@@ -120,8 +120,8 @@
                         <label class="block text-sm font-medium text-gray-700 mb-2">Servicio</label>
                             <select x-model.number="form.service_id" class="w-full border-gray-300 rounded-md shadow-sm focus:border-emerald-500 focus:ring-emerald-500" required>
                                 <option value="">Seleccione el servicio...</option>
-                                @foreach($services as $service)
-                                    <option value="{{ $service->id }}">{{ $service->name }} (C$ {{ number_format($service->price, 2) }})</option>
+                                @foreach($servicios as $servicio)
+                                    <option value="{{ $servicio->id }}">{{ $servicio->name }} (C$ {{ number_format($servicio->price, 2) }})</option>
                                 @endforeach
                             </select>
                         </div>
@@ -130,8 +130,8 @@
                             <label class="block text-sm font-medium text-gray-700 mb-1">Estilista(s) Asignado(s)</label>
                             <p class="text-xs text-gray-500 mb-2">Mantén presionada la tecla Ctrl (o Cmd en Mac) para seleccionar varios.</p>
                             <select multiple x-model="form.stylists" class="w-full h-24 border-gray-300 rounded-md shadow-sm focus:border-emerald-500 focus:ring-emerald-500 text-sm p-2" required>
-                                @foreach($stylists as $stylist)
-                                    <option value="{{ $stylist->id }}">{{ $stylist->name }}</option>
+                                @foreach($estilistas as $estilista)
+                                    <option value="{{ $estilista->id }}">{{ $estilista->name }}</option>
                                 @endforeach
                             </select>
                         </div>

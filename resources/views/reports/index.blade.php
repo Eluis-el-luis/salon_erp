@@ -13,11 +13,11 @@
         <form method="GET" action="{{ url('/reportes') }}" class="flex flex-wrap items-end gap-3 bg-gray-50 p-3 rounded-xl border border-gray-200">
             <div>
                 <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Desde</label>
-                <input type="date" name="start_date" value="{{ $startDate->format('Y-m-d') }}" class="text-sm border-gray-300 rounded focus:ring-emerald-500">
+                <input type="date" name="start_date" value="{{ $fechaInicio->format('Y-m-d') }}" class="text-sm border-gray-300 rounded focus:ring-emerald-500">
             </div>
             <div>
                 <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Hasta</label>
-                <input type="date" name="end_date" value="{{ $endDate->format('Y-m-d') }}" class="text-sm border-gray-300 rounded focus:ring-emerald-500">
+                <input type="date" name="end_date" value="{{ $fechaFin->format('Y-m-d') }}" class="text-sm border-gray-300 rounded focus:ring-emerald-500">
             </div>
             
             <!-- Botón de Filtrar en Pantalla -->
@@ -139,19 +139,19 @@
 
             <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 border-l-4 border-l-red-500">
                 <p class="text-xs font-bold text-gray-500 uppercase tracking-widest mb-1">Alertas de Stock</p>
-                <h3 class="text-3xl font-black text-red-500">{{ $itemsCriticos->count() }} <span class="text-lg text-gray-600">productos críticos</span></h3>
+                <h3 class="text-3xl font-black text-red-500">{{ $articulosCriticos->count() }} <span class="text-lg text-gray-600">productos críticos</span></h3>
                 <p class="text-xs text-gray-400 mt-2">Artículos por debajo del nivel mínimo permitido</p>
             </div>
         </div>
 
-        @if($itemsCriticos->count() > 0)
+        @if($articulosCriticos->count() > 0)
         <div class="bg-red-50 border border-red-200 rounded-xl overflow-hidden">
             <div class="px-6 py-3 border-b border-red-200 bg-red-100">
                 <h3 class="text-sm font-bold text-red-800">Atención: Productos que necesitan reabastecimiento</h3>
             </div>
             <table class="min-w-full divide-y divide-red-200 text-sm">
                 <tbody class="divide-y divide-red-100 bg-white">
-                    @foreach($itemsCriticos as $critico)
+                    @foreach($articulosCriticos as $critico)
                         <tr>
                             <td class="px-6 py-3 font-bold text-gray-900">{{ $critico->codigo }} - {{ $critico->producto }}</td>
                             <td class="px-6 py-3 text-right">

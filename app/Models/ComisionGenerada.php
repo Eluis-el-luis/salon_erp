@@ -15,11 +15,11 @@ class ComisionGenerada extends Model
 
     public function empleado()
     {
-        return $this->belongsTo(User::class, 'empleado_id');
+        return $this->belongsTo(Usuario::class, 'empleado_id');
     }
 
     public function venta()
     {
-        return $this->belongsTo(Sale::class, 'venta_id');
+        return $this->belongsTo(Venta::class, 'venta_id');
     }
 }

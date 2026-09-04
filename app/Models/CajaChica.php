@@ -12,7 +12,7 @@ class CajaChica extends Model
     // Relación con el usuario (Cajero/Recepcionista)
     public function responsable()
     {
-        return $this->belongsTo(User::class, 'responsable_id');
+        return $this->belongsTo(Usuario::class, 'responsable_id');
     }
 
     // Los gastos que se han hecho con esta caja[cite: 2]

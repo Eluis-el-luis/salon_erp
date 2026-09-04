@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ticket #{{ str_pad($sale->id, 5, '0', STR_PAD_LEFT) }}</title>
+    <title>Ticket #{{ str_pad($venta->id, 5, '0', STR_PAD_LEFT) }}</title>
     @vite(['resources/css/app.css'])
     <style>
         /* Estilos optimizados para impresora térmica de 80mm */
@@ -39,19 +39,19 @@
         <div class="text-xs mb-4 space-y-1">
             <div class="flex justify-between">
                 <span class="font-bold">Factura #:</span>
-                <span>INV-{{ str_pad($sale->id, 5, '0', STR_PAD_LEFT) }}</span>
+                <span>INV-{{ str_pad($venta->id, 5, '0', STR_PAD_LEFT) }}</span>
             </div>
             <div class="flex justify-between">
                 <span class="font-bold">Fecha:</span>
-                <span>{{ $sale->created_at->format('d/m/Y h:i A') }}</span>
+                <span>{{ $venta->created_at->format('d/m/Y h:i A') }}</span>
             </div>
             <div class="flex justify-between">
                 <span class="font-bold">Cliente:</span>
-                <span>{{ $sale->client ? $sale->client->name : 'Consumidor Final' }}</span>
+                <span>{{ $venta->cliente ? $venta->cliente->name : 'Consumidor Final' }}</span>
             </div>
             <div class="flex justify-between">
                 <span class="font-bold">Cajero:</span>
-                <span>{{ $sale->cashier ? $sale->cashier->name : 'Admin' }}</span>
+                <span>{{ $venta->cajero ? $venta->cajero->name : 'Admin' }}</span>
             </div>
         </div>
 
@@ -66,28 +66,28 @@
                 </tr>
             </thead>
             <tbody>
-                @foreach($sale->details as $detail)
+                @foreach($venta->detalles as $detail)
                 <tr class="border-b border-gray-100">
                     <td class="py-2">
                         <span class="font-bold">{{ $detail->quantity }}x</span> 
                         
-                        @if($detail->service)
-                            {{ $detail->service->name }} <br>
-                            <span class="text-[10px] text-gray-500 italic">Por: {{ $detail->stylist ? $detail->stylist->name : 'N/A' }}</span>
+                        @if($detail->servicio)
+                            {{ $detail->servicio->name }} <br>
+                            <span class="text-[10px] text-gray-500 italic">Por: {{ $detail->estilista ? $detail->estilista->name : 'N/A' }}</span>
                             
                             <!-- NUEVO: Mostrar insumos gastados -->
-                            @if($detail->service->formulas && $detail->service->formulas->count() > 0)
+                            @if($detail->servicio->formulas && $detail->servicio->formulas->count() > 0)
                                 <span class="text-[9px] text-gray-400 block mt-1 leading-tight">
                                     [ Insumos: 
-                                    @foreach($detail->service->formulas as $formula)
-                                        {{ $formula->quantity_used * $detail->quantity }}{{ $formula->item->unit_measure }} {{ $formula->item->producto }}@if(!$loop->last), @endif
+                                    @foreach($detail->servicio->formulas as $formula)
+                                        {{ $formula->quantity_used * $detail->quantity }}{{ $formula->articulo->unit_measure }} {{ $formula->articulo->producto }}@if(!$loop->last), @endif
                                     @endforeach
                                     ]
                                 </span>
                             @endif
                             
-                        @elseif($detail->item)
-                            {{ $detail->item->producto }}
+                        @elseif($detail->articulo)
+                            {{ $detail->articulo->producto }}
                         @else
                             Artículo General
                         @endif
@@ -102,36 +102,36 @@
         <div class="space-y-1 text-sm">
             <div class="flex justify-between text-gray-600">
                 <span>Subtotal:</span>
-                <span>C$ {{ number_format($sale->subtotal, 2) }}</span>
+                <span>C$ {{ number_format($venta->subtotal, 2) }}</span>
             </div>
-            @if($sale->discount > 0)
+            @if($venta->discount > 0)
             <div class="flex justify-between text-red-500">
                 <span>Descuento:</span>
-                <span>- C$ {{ number_format($sale->discount, 2) }}</span>
+                <span>- C$ {{ number_format($venta->discount, 2) }}</span>
             </div>
             @endif
             <div class="flex justify-between font-black text-lg border-t border-gray-300 pt-2 mt-2">
                 <span>TOTAL A PAGAR:</span>
-                <span>C$ {{ number_format($sale->total, 2) }}</span>
+                <span>C$ {{ number_format($venta->total, 2) }}</span>
             </div>
         </div>
 
         <div class="bg-gray-100 p-2 mt-4 rounded text-center">
             <p class="text-xs text-gray-700 uppercase font-bold">
                 PAGO RECIBIDO EN: 
-                @if($sale->payment_method == 'efectivo')
+                @if($venta->payment_method == 'efectivo')
                     Efectivo (Caja)
                 @else
-                    Banco {{ strtoupper($sale->payment_method) }}
+                    Banco {{ strtoupper($venta->payment_method) }}
                 @endif
             </p>
             
-            @if($sale->currency == 'usd')
+            @if($venta->currency == 'usd')
                 <p class="text-[11px] font-black text-gray-900 mt-1">
-                    Equivalente cobrado: $ {{ number_format($sale->total / $sale->exchange_rate, 2) }} USD
+                    Equivalente cobrado: $ {{ number_format($venta->total / $venta->exchange_rate, 2) }} USD
                 </p>
                 <p class="text-[9px] text-gray-500 italic mt-0.5">
-                    (Tasa de cambio aplicada: C$ {{ number_format($sale->exchange_rate, 2) }})
+                    (Tasa de cambio aplicada: C$ {{ number_format($venta->exchange_rate, 2) }})
                 </p>
             @endif
         </div>

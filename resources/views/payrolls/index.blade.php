@@ -28,8 +28,8 @@
                     <label class="block text-sm font-bold text-gray-700 mb-1">Empleado / Estilista</label>
                     <select name="user_id" required class="w-full shadow-sm border border-gray-300 rounded-md py-2 px-3 focus:ring-emerald-500 focus:border-emerald-500">
                         <option value="">Seleccione un colaborador...</option>
-                        @foreach($employees as $employee)
-                            <option value="{{ $employee->id }}">{{ $employee->name }} ({{ ucfirst($employee->role) }})</option>
+                        @foreach($empleados as $empleado)
+                            <option value="{{ $empleado->id }}">{{ $empleado->name }} ({{ ucfirst($empleado->role) }})</option>
                         @endforeach
                     </select>
                 </div>
@@ -68,28 +68,28 @@
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-gray-100 bg-white">
-                        @forelse($payrolls as $payroll)
+                        @forelse($nominas as $nomina)
                         <tr class="hover:bg-gray-50 transition">
                             <td class="px-6 py-4 whitespace-nowrap">
-                                <div class="text-sm font-bold text-gray-900">{{ $payroll->user->name }}</div>
-                                <div class="text-xs text-gray-500">Base: C$ {{ number_format($payroll->active_salary, 2) }}</div>
+                                <div class="text-sm font-bold text-gray-900">{{ $nomina->usuario->name }}</div>
+                                <div class="text-xs text-gray-500">Base: C$ {{ number_format($nomina->active_salary, 2) }}</div>
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600 font-medium">
-                                {{ \Carbon\Carbon::parse($payroll->start_date)->format('d/m/Y') }} - {{ \Carbon\Carbon::parse($payroll->end_date)->format('d/m/Y') }}
+                                {{ \Carbon\Carbon::parse($nomina->start_date)->format('d/m/Y') }} - {{ \Carbon\Carbon::parse($nomina->end_date)->format('d/m/Y') }}
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap text-right">
-                                <div class="text-sm font-black text-emerald-600">C$ {{ number_format($payroll->total_to_pay, 2) }}</div>
-                                <div class="text-xs text-red-500">Adelantos: -C$ {{ number_format($payroll->salary_advances, 2) }}</div>
+                                <div class="text-sm font-black text-emerald-600">C$ {{ number_format($nomina->total_to_pay, 2) }}</div>
+                                <div class="text-xs text-red-500">Adelantos: -C$ {{ number_format($nomina->salary_advances, 2) }}</div>
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap text-center">
-                                @if($payroll->status == 'borrador')
+                                @if($nomina->status == 'borrador')
                                     <span class="px-3 py-1 inline-flex text-xs leading-5 font-bold rounded-full bg-amber-100 text-amber-800">Borrador</span>
                                 @else
                                     <span class="px-3 py-1 inline-flex text-xs leading-5 font-bold rounded-full bg-green-100 text-green-800">Pagado</span>
                                 @endif
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap text-center">
-                                <a href="{{ url('/nomina/'.$payroll->id.'/ticket') }}" target="_blank" class="text-emerald-600 hover:text-emerald-900 flex justify-center items-center font-bold transition">
+                                <a href="{{ url('/nomina/'.$nomina->id.'/ticket') }}" target="_blank" class="text-emerald-600 hover:text-emerald-900 flex justify-center items-center font-bold transition">
                                     <svg class="w-5 h-5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"></path></svg>
                                     Colilla
                                 </a>

@@ -29,7 +29,7 @@
             <h1 class="text-3xl font-black uppercase tracking-widest text-gray-900">Álvaro Rugama</h1>
             <p class="text-sm font-bold text-gray-500 uppercase mt-1">Reporte Gerencial Consolidado</p>
             <p class="text-xs text-gray-400 mt-2 font-medium">
-                PERIODO: {{ $startDate->format('d/m/Y') }} AL {{ $endDate->format('d/m/Y') }}
+                PERIODO: {{ $fechaInicio->format('d/m/Y') }} AL {{ $fechaFin->format('d/m/Y') }}
             </p>
         </div>
 

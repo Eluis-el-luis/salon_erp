@@ -29,53 +29,53 @@
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-gray-100 bg-white">
-                    @forelse ($products as $product)
+                    @forelse ($articulos as $articulo)
                     <tr class="hover:bg-gray-50 transition duration-150">
                         
                         <!-- Código y Ubicación -->
                         <td class="px-6 py-4 whitespace-nowrap">
-                            <div class="text-sm font-bold text-gray-900 font-mono">{{ $product->codigo ?? 'SIN CÓDIGO' }}</div>
+                            <div class="text-sm font-bold text-gray-900 font-mono">{{ $articulo->codigo ?? 'SIN CÓDIGO' }}</div>
                             <div class="text-xs text-gray-500 mt-1 flex items-center">
                                 <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
-                                {{ $product->ubicacion ?? 'Sin asignar' }}
+                                {{ $articulo->ubicacion ?? 'Sin asignar' }}
                             </div>
                         </td>
 
                         <!-- Producto, Marca y Categoría -->
                         <td class="px-6 py-4">
-                            <div class="text-sm font-black text-gray-900">{{ $product->producto }}</div>
+                            <div class="text-sm font-black text-gray-900">{{ $articulo->producto }}</div>
                             <div class="text-xs text-gray-500 mt-1 flex space-x-2">
-                                <span class="bg-gray-100 px-2 py-0.5 rounded text-gray-600">{{ $product->marca ?? 'Genérico' }}</span>
-                                <span class="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded border border-emerald-100">{{ $product->categoria ?? 'General' }}</span>
+                                <span class="bg-gray-100 px-2 py-0.5 rounded text-gray-600">{{ $articulo->marca ?? 'Genérico' }}</span>
+                                <span class="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded border border-emerald-100">{{ $articulo->categoria ?? 'General' }}</span>
                             </div>
                         </td>
 
                         <!-- Precios -->
                         <td class="px-6 py-4 whitespace-nowrap text-right">
-                            <div class="text-sm font-bold text-emerald-600">C$ {{ number_format($product->precio_c, 2) }}</div>
-                            <div class="text-xs text-gray-500">$ {{ number_format($product->precio_usd, 2) }}</div>
+                            <div class="text-sm font-bold text-emerald-600">C$ {{ number_format($articulo->precio_c, 2) }}</div>
+                            <div class="text-xs text-gray-500">$ {{ number_format($articulo->precio_usd, 2) }}</div>
                         </td>
 
                         <!-- Control de Stock -->
                         <td class="px-6 py-4 whitespace-nowrap text-center">
                             <div class="flex flex-col items-center justify-center">
-                                @if($product->existencia_actual <= $product->stock_min)
+                                @if($articulo->existencia_actual <= $articulo->stock_min)
                                     <span class="px-3 py-1 inline-flex text-sm leading-5 font-black rounded-full bg-red-100 text-red-700 border border-red-200" title="¡Stock Crítico!">
-                                        ⚠ {{ $product->existencia_actual }} und.
+                                        ⚠ {{ $articulo->existencia_actual }} und.
                                     </span>
                                 @else
                                     <span class="px-3 py-1 inline-flex text-sm leading-5 font-bold rounded-full bg-green-100 text-green-800">
-                                        {{ $product->existencia_actual }} und.
+                                        {{ $articulo->existencia_actual }} und.
                                     </span>
                                 @endif
-                                <span class="text-[10px] text-gray-400 mt-1 font-bold">Mínimo: {{ $product->stock_min }}</span>
+                                <span class="text-[10px] text-gray-400 mt-1 font-bold">Mínimo: {{ $articulo->stock_min }}</span>
                             </div>
                         </td>
 
                         <!-- Acciones conectadas a Alpine -->
                         <td class="px-6 py-4 whitespace-nowrap text-center text-sm font-medium">
-                            <button @click="editProduct({{ $product }})" class="text-blue-600 hover:text-blue-900 mr-3 font-bold transition duration-150">Editar</button>
-                            <button @click="deleteProduct({{ $product->id }})" class="text-red-600 hover:text-red-900 font-bold transition duration-150">Eliminar</button>
+                            <button @click="editProduct({{ $articulo }})" class="text-blue-600 hover:text-blue-900 mr-3 font-bold transition duration-150">Editar</button>
+                            <button @click="deleteProduct({{ $articulo->id }})" class="text-red-600 hover:text-red-900 font-bold transition duration-150">Eliminar</button>
                         </td>
                     </tr>
                     @empty
@@ -127,8 +127,8 @@
                             <label class="block text-xs font-bold text-gray-700 mb-1">Proveedor (Opcional)</label>
                             <select x-model="form.provider_id" class="w-full shadow-sm border rounded py-2 px-3 text-gray-700 focus:ring-emerald-500">
                                 <option value="">Sin proveedor asignado</option>
-                                @foreach($providers as $provider)
-                                    <option value="{{ $provider->id }}">{{ $provider->name }}</option>
+                                @foreach($proveedores as $proveedor)
+                                    <option value="{{ $proveedor->id }}">{{ $proveedor->name }}</option>
                                 @endforeach
                             </select>
                         </div>

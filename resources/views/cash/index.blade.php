@@ -8,7 +8,7 @@
         <p class="text-gray-500 text-sm mt-1">Apertura, cierre y arqueo físico del turno actual.</p>
     </div>
 
-    @if(!$session)
+    @if(!$sesion)
         <!-- PANTALLA DE APERTURA -->
         <div class="bg-white p-8 rounded-2xl shadow border border-emerald-100 text-center max-w-md mx-auto">
             <div class="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -29,7 +29,7 @@
     @else
         <!-- PANTALLA DE CIERRE / ARQUEO -->
         @php
-            $montoTeorico = $session->monto_apertura + $ventasEfectivo;
+            $montoTeorico = $sesion->monto_apertura + $ventasEfectivo;
         @endphp
         
         <!-- Alerta de Auditoría del Turno Activo -->
@@ -40,9 +40,9 @@
                 </div>
                 <div class="ml-3">
                     <p class="text-sm text-blue-700 font-medium">
-                        Turno abierto por <span class="font-black">{{ $session->user->name }}</span> el 
-                        <span class="font-black">{{ \Carbon\Carbon::parse($session->fecha_apertura)->format('d/m/Y') }}</span> a las 
-                        <span class="font-black">{{ \Carbon\Carbon::parse($session->fecha_apertura)->format('h:i A') }}</span>.
+                        Turno abierto por <span class="font-black">{{ $sesion->usuario->name }}</span> el 
+                        <span class="font-black">{{ \Carbon\Carbon::parse($sesion->fecha_apertura)->format('d/m/Y') }}</span> a las 
+                        <span class="font-black">{{ \Carbon\Carbon::parse($sesion->fecha_apertura)->format('h:i A') }}</span>.
                     </p>
                 </div>
             </div>
@@ -59,7 +59,7 @@
                 <div class="space-y-4">
                     <div class="flex justify-between border-b border-gray-700 pb-2">
                         <span>Fondo Inicial:</span>
-                        <span class="font-bold">C$ {{ number_format($session->monto_apertura, 2) }}</span>
+                        <span class="font-bold">C$ {{ number_format($sesion->monto_apertura, 2) }}</span>
                     </div>
                     <div class="flex justify-between border-b border-gray-700 pb-2">
                         <span>Ventas en Efectivo del Turno:</span>
@@ -111,7 +111,7 @@
             <tbody class="divide-y divide-gray-200 bg-white">
                 @forelse($historial as $turno)
                     <tr class="hover:bg-gray-50">
-                        <td class="px-6 py-3 font-bold text-gray-900">{{ $turno->user->name }}</td>
+                        <td class="px-6 py-3 font-bold text-gray-900">{{ $turno->usuario->name }}</td>
                         <td class="px-6 py-3 text-gray-600">
                             {{ \Carbon\Carbon::parse($turno->fecha_apertura)->format('d/m/y') }}<br>
                             <span class="text-xs font-bold">{{ \Carbon\Carbon::parse($turno->fecha_apertura)->format('h:i A') }}</span>

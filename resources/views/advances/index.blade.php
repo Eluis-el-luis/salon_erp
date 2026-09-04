@@ -28,17 +28,17 @@
                 </tr>
             </thead>
             <tbody class="bg-white divide-y divide-gray-200">
-                @forelse ($advances as $mov)
+                @forelse ($adelantos as $mov)
                     <tr class="hover:bg-gray-50 transition">
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
                             {{ \Carbon\Carbon::parse($mov->date)->format('d/m/Y') }}
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap">
                             @if($mov->user_id)
-                                <div class="text-sm font-bold text-blue-700">{{ $mov->user->name }}</div>
+                                <div class="text-sm font-bold text-blue-700">{{ $mov->usuario->name }}</div>
                                 <div class="text-[10px] uppercase font-bold text-blue-400 bg-blue-50 inline-block px-1 rounded">Colaborador</div>
                             @elseif($mov->client_id)
-                                <div class="text-sm font-bold text-purple-700">{{ $mov->client->name }}</div>
+                                <div class="text-sm font-bold text-purple-700">{{ $mov->cliente->name }}</div>
                                 <div class="text-[10px] uppercase font-bold text-purple-400 bg-purple-50 inline-block px-1 rounded">Cliente</div>
                             @endif
                         </td>
@@ -112,15 +112,15 @@
 
                             <select x-show="entityType === 'employee'" x-model="form.user_id" class="w-full shadow-sm border rounded py-2 px-3 text-gray-700 focus:ring-emerald-500">
                                 <option value="" disabled>Seleccione un colaborador...</option>
-                                @foreach($employees as $employee)
-                                    <option value="{{ $employee->id }}">{{ $employee->name }}</option>
+                                @foreach($empleados as $empleado)
+                                    <option value="{{ $empleado->id }}">{{ $empleado->name }}</option>
                                 @endforeach
                             </select>
 
                             <select x-show="entityType === 'client'" x-model="form.client_id" class="w-full shadow-sm border rounded py-2 px-3 text-gray-700 focus:ring-emerald-500">
                                 <option value="" disabled>Seleccione un cliente...</option>
-                                @foreach($clients as $client)
-                                    <option value="{{ $client->id }}">{{ $client->name }}</option>
+                                @foreach($clientes as $cliente)
+                                    <option value="{{ $cliente->id }}">{{ $cliente->name }}</option>
                                 @endforeach
                             </select>
                         </div>

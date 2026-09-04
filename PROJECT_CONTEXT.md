@@ -111,7 +111,7 @@ storage/
 ### 6.1 Dashboard
 
 Ubicación:
-- [app/Http/Controllers/DashboardController.php](app/Http/Controllers/DashboardController.php)
+- [app/Http/Controllers/PanelController.php](app/Http/Controllers/PanelController.php)
 - [resources/views/dashboard.blade.php](resources/views/dashboard.blade.php)
 
 Funcionalidad:
@@ -126,7 +126,7 @@ Funcionalidad:
 ### 6.2 Agenda de citas
 
 Ubicación:
-- [app/Http/Controllers/AppointmentController.php](app/Http/Controllers/AppointmentController.php)
+- [app/Http/Controllers/CitaController.php](app/Http/Controllers/CitaController.php)
 - [app/Models/Appointment.php](app/Models/Appointment.php)
 - [resources/views/appointments/index.blade.php](resources/views/appointments/index.blade.php)
 
@@ -157,7 +157,7 @@ class Appointment extends Model
 ### 6.3 POS / Caja
 
 Ubicación:
-- [app/Http/Controllers/SaleController.php](app/Http/Controllers/SaleController.php)
+- [app/Http/Controllers/VentaController.php](app/Http/Controllers/VentaController.php)
 - [resources/views/sales/pos.blade.php](resources/views/sales/pos.blade.php)
 - [resources/views/sales/index.blade.php](resources/views/sales/index.blade.php)
 - [resources/views/sales/ticket.blade.php](resources/views/sales/ticket.blade.php)
@@ -181,7 +181,7 @@ Características técnicas:
 ### 6.4 Inventario
 
 Ubicación:
-- [app/Http/Controllers/InventoryController.php](app/Http/Controllers/InventoryController.php)
+- [app/Http/Controllers/InventarioController.php](app/Http/Controllers/InventarioController.php)
 - [app/Models/Item.php](app/Models/Item.php)
 - [resources/views/inventory/index.blade.php](resources/views/inventory/index.blade.php)
 
@@ -227,8 +227,8 @@ Nota importante:
 ### 6.5 Empleados y nómina
 
 Ubicación:
-- [app/Http/Controllers/EmployeeController.php](app/Http/Controllers/EmployeeController.php)
-- [app/Http/Controllers/PayrollController.php](app/Http/Controllers/PayrollController.php)
+- [app/Http/Controllers/EmpleadoController.php](app/Http/Controllers/EmpleadoController.php)
+- [app/Http/Controllers/NominaController.php](app/Http/Controllers/NominaController.php)
 - [app/Models/User.php](app/Models/User.php)
 - [app/Models/Payroll.php](app/Models/Payroll.php)
 - [resources/views/payrolls/index.blade.php](resources/views/payrolls/index.blade.php)
@@ -246,7 +246,7 @@ Funcionalidad:
 ### 6.6 Asistencia diaria
 
 Ubicación:
-- [app/Http/Controllers/AttendanceController.php](app/Http/Controllers/AttendanceController.php)
+- [app/Http/Controllers/AsistenciaController.php](app/Http/Controllers/AsistenciaController.php)
 - [app/Models/Attendance.php](app/Models/Attendance.php)
 - [resources/views/attendances/index.blade.php](resources/views/attendances/index.blade.php)
 
@@ -260,7 +260,7 @@ Funcionalidad:
 ### 6.7 Adelantos y cuentas por cobrar
 
 Ubicación:
-- [app/Http/Controllers/AdvanceController.php](app/Http/Controllers/AdvanceController.php)
+- [app/Http/Controllers/AdelantoController.php](app/Http/Controllers/AdelantoController.php)
 - [app/Models/Advance.php](app/Models/Advance.php)
 - [resources/views/advances/index.blade.php](resources/views/advances/index.blade.php)
 
@@ -274,8 +274,8 @@ Funcionalidad:
 ### 6.8 Clientes y servicios
 
 Ubicación:
-- [app/Http/Controllers/ClientController.php](app/Http/Controllers/ClientController.php)
-- [app/Http/Controllers/ServiceController.php](app/Http/Controllers/ServiceController.php)
+- [app/Http/Controllers/ClienteController.php](app/Http/Controllers/ClienteController.php)
+- [app/Http/Controllers/ServicioController.php](app/Http/Controllers/ServicioController.php)
 - [app/Models/Client.php](app/Models/Client.php)
 - [app/Models/Service.php](app/Models/Service.php)
 - [resources/views/clients/index.blade.php](resources/views/clients/index.blade.php)
@@ -316,7 +316,7 @@ Este módulo es importante porque conecta los servicios con el inventario físic
 ### 6.10 Proveedores
 
 Ubicación:
-- [app/Http/Controllers/ProviderController.php](app/Http/Controllers/ProviderController.php)
+- [app/Http/Controllers/ProveedorController.php](app/Http/Controllers/ProveedorController.php)
 - [app/Models/Provider.php](app/Models/Provider.php)
 - [resources/views/providers/index.blade.php](resources/views/providers/index.blade.php)
 
@@ -330,7 +330,7 @@ Funcionalidad:
 ### 6.11 Respaldos y restauración
 
 Ubicación:
-- [app/Http/Controllers/BackupController.php](app/Http/Controllers/BackupController.php)
+- [app/Http/Controllers/RespaldoController.php](app/Http/Controllers/RespaldoController.php)
 - [resources/views/backups/index.blade.php](resources/views/backups/index.blade.php)
 
 Funcionalidad:

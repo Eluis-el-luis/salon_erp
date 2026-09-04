@@ -13,9 +13,9 @@ class CuentaPorPagar extends Model
     ];
 
     
-    public function provider()
+    public function proveedor()
     {
-        return $this->belongsTo(Provider::class, 'provider_id');
+        return $this->belongsTo(Proveedor::class, 'provider_id');
     }
 
     

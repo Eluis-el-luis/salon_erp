@@ -3,7 +3,7 @@
 namespace Database\Seeders;
 
 use Illuminate\Database\Seeder;
-use App\Models\User;
+use App\Models\Usuario;
 use Illuminate\Support\Facades\Hash;
 
 class UserSeeder extends Seeder
@@ -11,7 +11,7 @@ class UserSeeder extends Seeder
     public function run()
     {
         // 1. Administrador (Dueño)
-        User::create([
+        Usuario::create([
             'name' => 'Álvaro Rugama',
             'email' => 'admin@salon.com',
             'password' => Hash::make('admin123'),
@@ -21,7 +21,7 @@ class UserSeeder extends Seeder
         ]);
 
         // 2. Recepcionista / Cajera
-        User::create([
+        Usuario::create([
             'name' => 'Ana Recepción',
             'email' => 'caja@salon.com',
             'password' => Hash::make('caja123'),
@@ -31,7 +31,7 @@ class UserSeeder extends Seeder
         ]);
 
         // 3. Estilista de Prueba
-        User::create([
+        Usuario::create([
             'name' => 'Carlos Estilista',
             'email' => 'estilista@salon.com',
             'password' => Hash::make('estilista123'),

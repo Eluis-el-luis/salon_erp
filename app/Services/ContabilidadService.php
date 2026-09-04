@@ -61,16 +61,66 @@ class ContabilidadService
         $monedaBase = $this->getMonedaBaseId();
         
         // Determinar factor de conversión bimonetaria
-        // Si la venta es en USD, los montos se normalizan a la moneda base (Córdoba) usando la tasa registrada de la venta
         $tasa = ($sale->currency === 'usd' || $sale->currency === 'dolar') ? $sale->exchange_rate : 1.00;
 
-        $montoTotalNormalizado = round($sale->total * $tasa, 2);
-        $montoDescuentoNormalizado = round($sale->discount * $tasa, 2);
+        // Calcular subtotales brutos por línea para partir correctamente el descuento
+        $subtotalBrutoServicios = 0;
+        $subtotalBrutoProductos = 0;
+        $costoInsumosConsumidos = 0;
+        $costoMercaderiaProductos = 0; // Costo de mercadería para productos físicos (cuenta 5.1)
 
-        // Iniciar transacción atómica para asegurar la integridad de los datos
+        foreach ($sale->details as $detail) {
+            $subtotalLinea = $detail->unit_price * $detail->quantity;
+            $subtotalLineaNormalizado = $subtotalLinea * $tasa;
+            
+            if ($detail->service_id != null) {
+                $subtotalBrutoServicios += $subtotalLineaNormalizado;
+                
+                // Costo de insumos del servicio (fórmulas)
+                $servicio = \App\Models\Servicio::with('formulas.articulo')->find($detail->service_id);
+                if ($servicio) {
+                    foreach ($servicio->formulas as $formula) {
+                        $item = $formula->articulo;
+                        if ($item && $item->total_volume > 0) {
+                            $precioPorUnidad = $item->precio_c / $item->total_volume; 
+                            $costoInsumosConsumidos += ($precioPorUnidad * $formula->quantity_used * $detail->quantity);
+                        }
+                    }
+                }
+            } else {
+                $subtotalBrutoProductos += $subtotalLineaNormalizado;
+                
+                // Costo de mercadería para productos físicos vendidos
+                $articulo = \App\Models\Articulo::find($detail->item_id);
+                if ($articulo && $articulo->precio_c > 0) {
+                    $costoMercaderiaProductos += ($articulo->precio_c * $detail->quantity) * $tasa;
+                }
+            }
+        }
+
+        $subtotalBrutoTotal = $subtotalBrutoServicios + $subtotalBrutoProductos;
+        
+        // Distribuir el descuento proporcionalmente entre servicios y productos
+        $montoDescuentoNormalizado = round($sale->discount * $tasa, 2);
+        $descuentoServicios = 0;
+        $descuentoProductos = 0;
+        
+        if ($subtotalBrutoTotal > 0 && $montoDescuentoNormalizado > 0) {
+            $descuentoServicios = round(($subtotalBrutoServicios / $subtotalBrutoTotal) * $montoDescuentoNormalizado, 2);
+            $descuentoProductos = $montoDescuentoNormalizado - $descuentoServicios;
+        }
+
+        // Montos netos por categoría
+        $totalServiciosNeto = $subtotalBrutoServicios - $descuentoServicios;
+        $totalProductosNeto = $subtotalBrutoProductos - $descuentoProductos;
+        
+        // Monto total neto que entra a caja/banco
+        $montoTotalNetoNormalizado = round($sale->total * $tasa, 2);
+
+        // Iniciar transacción atómica
         DB::beginTransaction();
         try {
-            // ASIENTO 1: RECONOCIMIENTO DE INGRESO
+            // ASIENTO 1: RECONOCIMIENTO DE INGRESO NETO
             $asientoIngreso = AsientoContable::create([
                 'numero_asiento' => 'ING-' . str_pad($sale->id, 5, '0', STR_PAD_LEFT),
                 'fecha' => Carbon::now(),
@@ -87,7 +137,6 @@ class ContabilidadService
             } elseif ($sale->payment_method === 'lafise') {
                 $cuentaDestinoFondos = $this->getCuentaIdByCodigo('1.1.2.1'); // Banco Lafise
             } else {
-                // Efectivo en base a divisa
                 if ($sale->currency === 'usd' || $sale->currency === 'dolar') {
                     $cuentaDestinoFondos = $this->getCuentaIdByCodigo('1.1.2'); // Cuenta Transitoria / Bancos USD
                 } else {
@@ -99,80 +148,62 @@ class ContabilidadService
                 'asiento_id' => $asientoIngreso->id,
                 'cuenta_id' => $cuentaDestinoFondos,
                 'moneda_id' => $monedaBase,
-                'debe' => $montoTotalNormalizado,
+                'debe' => $montoTotalNetoNormalizado,
                 'haber' => 0,
-                'descripcion' => 'Cobro de factura #' . $sale->id,
+                'descripcion' => 'Cobro neto de factura #' . $sale->id,
             ]);
 
-            // Registrar el Descuento en el DEBE (Contra-ingreso) si aplica
-            if ($montoDescuentoNormalizado > 0) {
-                $cuentaDescuento = $this->getCuentaIdByCodigo('4.5'); 
-
-                DetalleAsiento::create([
-                    'asiento_id' => $asientoIngreso->id,
-                    'cuenta_id' => $cuentaDescuento,
-                    'moneda_id' => $monedaBase,
-                    'debe' => $montoDescuentoNormalizado, 
-                    'haber' => 0,
-                    'descripcion' => 'Descuento otorgado en venta #' . $sale->id,
-                ]);
-            }
-
-            // HABER: Desglosar los ingresos entre Servicios y Productos
-            $totalServicios = 0;
-            $totalProductos = 0;
-            $costoInsumosConsumidos = 0;
-
-            foreach ($sale->details as $detail) {
-                $subtotalLineaNormalizado = ($detail->unit_price * $detail->quantity) * $tasa;
-                
-                if ($detail->service_id != null) {
-                    $totalServicios += $subtotalLineaNormalizado;
-                    
-                    // Lógica del cálculo de costo de insumos del servicio
-                    $service = \App\Models\Service::with('formulas.item')->find($detail->service_id);
-                    if ($service) {
-                        foreach ($service->formulas as $formula) {
-                            $item = $formula->item;
-                            if ($item && $item->total_volume > 0) {
-                                $precioPorUnidad = $item->precio_c / $item->total_volume; 
-                                $costoInsumosConsumidos += ($precioPorUnidad * $formula->quantity_used * $detail->quantity);
-                            }
-                        }
-                    }
-                } else {
-                    $totalProductos += $subtotalLineaNormalizado;
-                }
-            }
-
-            // Asentamiento del Haber de Servicios
-            if ($totalServicios > 0) {
+            // HABER: Ingreso por Servicios (neto de descuento)
+            if ($totalServiciosNeto > 0) {
                 DetalleAsiento::create([
                     'asiento_id' => $asientoIngreso->id,
                     'cuenta_id' => $this->getCuentaIdByCodigo('4.1'),
                     'moneda_id' => $monedaBase,
                     'debe' => 0,
-                    'haber' => round($totalServicios, 2),
-                    'descripcion' => 'Ingreso por servicios brindados',
+                    'haber' => round($totalServiciosNeto, 2),
+                    'descripcion' => 'Ingreso neto por servicios brindados',
                 ]);
             }
 
-            // Asentamiento del Haber de Productos
-            if ($totalProductos > 0) {
+            // HABER: Ingreso por Productos (neto de descuento)
+            if ($totalProductosNeto > 0) {
                 DetalleAsiento::create([
                     'asiento_id' => $asientoIngreso->id,
                     'cuenta_id' => $this->getCuentaIdByCodigo('4.4'),
                     'moneda_id' => $monedaBase,
                     'debe' => 0,
-                    'haber' => round($totalProductos, 2),
-                    'descripcion' => 'Ingreso por venta directa de productos',
+                    'haber' => round($totalProductosNeto, 2),
+                    'descripcion' => 'Ingreso neto por venta directa de productos',
                 ]);
             }
 
-            // Candado de seguridad y validación de doble partida
+            // DEBE: Descuento sobre Servicios (contra-ingreso 4.5)
+            if ($descuentoServicios > 0) {
+                DetalleAsiento::create([
+                    'asiento_id' => $asientoIngreso->id,
+                    'cuenta_id' => $this->getCuentaIdByCodigo('4.5'),
+                    'moneda_id' => $monedaBase,
+                    'debe' => $descuentoServicios,
+                    'haber' => 0,
+                    'descripcion' => 'Descuento otorgado en servicios - factura #' . $sale->id,
+                ]);
+            }
+
+            // DEBE: Descuento sobre Productos (contra-ingreso 4.5)
+            if ($descuentoProductos > 0) {
+                DetalleAsiento::create([
+                    'asiento_id' => $asientoIngreso->id,
+                    'cuenta_id' => $this->getCuentaIdByCodigo('4.5'),
+                    'moneda_id' => $monedaBase,
+                    'debe' => $descuentoProductos,
+                    'haber' => 0,
+                    'descripcion' => 'Descuento otorgado en productos - factura #' . $sale->id,
+                ]);
+            }
+
             $this->validarCuadre($asientoIngreso->id);
 
-            // ASIENTO 2: COSTO DE INSUMOS (Si aplica consumo interno)
+            // ASIENTO 2: COSTO DE INSUMOS (Servicios con fórmulas)
             if ($costoInsumosConsumidos > 0) {
                 $asientoCosto = AsientoContable::create([
                     'numero_asiento' => 'CST-' . str_pad($sale->id, 5, '0', STR_PAD_LEFT),
@@ -184,7 +215,6 @@ class ContabilidadService
                     'usuario_id' => auth()->id() ?? 1,
                 ]);
 
-                // DEBE: Aumento de Costos
                 DetalleAsiento::create([
                     'asiento_id' => $asientoCosto->id,
                     'cuenta_id' => $this->getCuentaIdByCodigo('5.2'),
@@ -194,7 +224,6 @@ class ContabilidadService
                     'descripcion' => 'Costo de insumos en servicio',
                 ]);
 
-                // HABER: Disminución de Activo por Inventario de Insumos
                 DetalleAsiento::create([
                     'asiento_id' => $asientoCosto->id,
                     'cuenta_id' => $this->getCuentaIdByCodigo('1.1.5'),
@@ -207,6 +236,39 @@ class ContabilidadService
                 $this->validarCuadre($asientoCosto->id);
             }
 
+            // ASIENTO 3: COSTO DE MERCADERÍA (Productos físicos vendidos)
+            if ($costoMercaderiaProductos > 0) {
+                $asientoCostoMercaderia = AsientoContable::create([
+                    'numero_asiento' => 'CMV-' . str_pad($sale->id, 5, '0', STR_PAD_LEFT),
+                    'fecha' => Carbon::now(),
+                    'concepto' => 'Costo de mercadería vendida en factura #' . $sale->id,
+                    'modulo_origen' => 'inventario',
+                    'referencia_id' => $sale->id,
+                    'periodo_id' => $periodo->id,
+                    'usuario_id' => auth()->id() ?? 1,
+                ]);
+
+                DetalleAsiento::create([
+                    'asiento_id' => $asientoCostoMercaderia->id,
+                    'cuenta_id' => $this->getCuentaIdByCodigo('5.1'),
+                    'moneda_id' => $monedaBase,
+                    'debe' => round($costoMercaderiaProductos, 2),
+                    'haber' => 0,
+                    'descripcion' => 'Costo de productos vendidos',
+                ]);
+
+                DetalleAsiento::create([
+                    'asiento_id' => $asientoCostoMercaderia->id,
+                    'cuenta_id' => $this->getCuentaIdByCodigo('1.1.4'),
+                    'moneda_id' => $monedaBase,
+                    'debe' => 0,
+                    'haber' => round($costoMercaderiaProductos, 2),
+                    'descripcion' => 'Baja de inventario de productos',
+                ]);
+
+                $this->validarCuadre($asientoCostoMercaderia->id);
+            }
+
             DB::commit();
         } catch (Exception $e) {
             DB::rollBack();
@@ -214,7 +276,7 @@ class ContabilidadService
         }
     }
     
-    public function contabilizarGasto($descripcion, $monto, $cuentaGastoId, $metodoPago)
+public function contabilizarGasto($descripcion, $monto, $cuentaGastoId, $metodoPago)
     {
         // 1. Identificar periodo
         $periodo = DB::table('periodos_contables')->where('estado', 'abierto')->first();
@@ -227,42 +289,49 @@ class ContabilidadService
 
         $cuentaOrigenFondos = ($metodoPago == 'efectivo') ? $cuentaCaja : $cuentaBanco;
 
-        // 3. Crear Asiento
-        $asiento = AsientoContable::create([
-            'numero_asiento' => 'GST-' . time(), // Genera un folio único
-            'fecha' => Carbon::now(),
-            'concepto' => $descripcion,
-            'modulo_origen' => 'gastos',
-            'periodo_id' => $periodo->id,
-            'usuario_id' => auth()->id() ?? 1,
-        ]);
+        DB::beginTransaction();
+        try {
+            // 3. Crear Asiento
+            $asiento = AsientoContable::create([
+                'numero_asiento' => 'GST-' . time(),
+                'fecha' => Carbon::now(),
+                'concepto' => $descripcion,
+                'modulo_origen' => 'gastos',
+                'periodo_id' => $periodo->id,
+                'usuario_id' => auth()->id() ?? 1,
+            ]);
 
-        // DEBE: El Gasto aumenta (Clase 6 o 7)
-        DetalleAsiento::create([
-            'asiento_id' => $asiento->id,
-            'cuenta_id' => $cuentaGastoId,
-            'moneda_id' => $monedaBase,
-            'debe' => $monto,
-            'haber' => 0,
-            'descripcion' => 'Registro de gasto/egreso',
-        ]);
+            // DEBE: El Gasto aumenta (Clase 6 o 7)
+            DetalleAsiento::create([
+                'asiento_id' => $asiento->id,
+                'cuenta_id' => $cuentaGastoId,
+                'moneda_id' => $monedaBase,
+                'debe' => $monto,
+                'haber' => 0,
+                'descripcion' => 'Registro de gasto/egreso',
+            ]);
 
-        // HABER: El Activo disminuye (Sale dinero de Caja o Banco)
-        DetalleAsiento::create([
-            'asiento_id' => $asiento->id,
-            'cuenta_id' => $cuentaOrigenFondos,
-            'moneda_id' => $monedaBase,
-            'debe' => 0,
-            'haber' => $monto,
-            'descripcion' => 'Pago del gasto',
-        ]);
+            // HABER: El Activo disminuye (Sale dinero de Caja o Banco)
+            DetalleAsiento::create([
+                'asiento_id' => $asiento->id,
+                'cuenta_id' => $cuentaOrigenFondos,
+                'moneda_id' => $monedaBase,
+                'debe' => 0,
+                'haber' => $monto,
+                'descripcion' => 'Pago del gasto',
+            ]);
 
-        $this->validarCuadre($asiento->id);
+            $this->validarCuadre($asiento->id);
+            DB::commit();
+        } catch (Exception $e) {
+            DB::rollBack();
+            throw $e;
+        }
     }
 
     public function contabilizarArqueo($cashSession)
     {
-        if ($cashSession->diferencia == 0) return; // Si cuadra exacto, no hay asiento de ajuste
+        if ($cashSession->diferencia == 0) return;
 
         $periodo = DB::table('periodos_contables')->where('estado', 'abierto')->first();
         if (!$periodo) return;
@@ -270,42 +339,47 @@ class ContabilidadService
         $cuentaCaja = CuentaContable::where('codigo', '1.1.1')->first()->id;
         $monedaBase = DB::table('monedas')->where('es_base', true)->first()->id;
 
-        $asiento = AsientoContable::create([
-            'numero_asiento' => 'ARQ-' . str_pad($cashSession->id, 5, '0', STR_PAD_LEFT),
-            'fecha' => Carbon::now(),
-            'concepto' => 'Ajuste por arqueo de caja (Sesión #' . $cashSession->id . ')',
-            'modulo_origen' => 'caja',
-            'referencia_id' => $cashSession->id,
-            'periodo_id' => $periodo->id,
-            'usuario_id' => $cashSession->user_id,
-        ]);
+        DB::beginTransaction();
+        try {
+            $asiento = AsientoContable::create([
+                'numero_asiento' => 'ARQ-' . str_pad($cashSession->id, 5, '0', STR_PAD_LEFT),
+                'fecha' => Carbon::now(),
+                'concepto' => 'Ajuste por arqueo de caja (Sesión #' . $cashSession->id . ')',
+                'modulo_origen' => 'caja',
+                'referencia_id' => $cashSession->id,
+                'periodo_id' => $periodo->id,
+                'usuario_id' => $cashSession->user_id,
+            ]);
 
-        if ($cashSession->diferencia < 0) {
-            // ES UN FALTANTE (Pérdida para el negocio)
-            $cuentaPerdida = CuentaContable::where('codigo', '7.4')->first()->id; // Pérdidas por Robo o Extravío
+            if ($cashSession->diferencia < 0) {
+                $cuentaPerdida = CuentaContable::where('codigo', '7.4')->first()->id;
 
-            DetalleAsiento::create([
-                'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaPerdida, 'moneda_id' => $monedaBase,
-                'debe' => abs($cashSession->diferencia), 'haber' => 0, 'descripcion' => 'Faltante de caja'
-            ]);
-            DetalleAsiento::create([
-                'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaCaja, 'moneda_id' => $monedaBase,
-                'debe' => 0, 'haber' => abs($cashSession->diferencia), 'descripcion' => 'Salida de caja para cuadre físico'
-            ]);
-        } else {
-            // ES UN SOBRANTE (Ingreso extra no justificado)
-            $cuentaSobrante = CuentaContable::where('codigo', '7.3')->first()->id; // Lo enviamos a Otros Ingresos/Gastos
+                DetalleAsiento::create([
+                    'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaPerdida, 'moneda_id' => $monedaBase,
+                    'debe' => abs($cashSession->diferencia), 'haber' => 0, 'descripcion' => 'Faltante de caja'
+                ]);
+                DetalleAsiento::create([
+                    'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaCaja, 'moneda_id' => $monedaBase,
+                    'debe' => 0, 'haber' => abs($cashSession->diferencia), 'descripcion' => 'Salida de caja para cuadre físico'
+                ]);
+            } else {
+                $cuentaSobrante = CuentaContable::where('codigo', '7.3')->first()->id;
 
-            DetalleAsiento::create([
-                'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaCaja, 'moneda_id' => $monedaBase,
-                'debe' => abs($cashSession->diferencia), 'haber' => 0, 'descripcion' => 'Entrada a caja por sobrante'
-            ]);
-            DetalleAsiento::create([
-                'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaSobrante, 'moneda_id' => $monedaBase,
-                'debe' => 0, 'haber' => abs($cashSession->diferencia), 'descripcion' => 'Sobrante de caja'
-            ]);
+                DetalleAsiento::create([
+                    'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaCaja, 'moneda_id' => $monedaBase,
+                    'debe' => abs($cashSession->diferencia), 'haber' => 0, 'descripcion' => 'Entrada a caja por sobrante'
+                ]);
+                DetalleAsiento::create([
+                    'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaSobrante, 'moneda_id' => $monedaBase,
+                    'debe' => 0, 'haber' => abs($cashSession->diferencia), 'descripcion' => 'Sobrante de caja'
+                ]);
+            }
+            $this->validarCuadre($asiento->id);
+            DB::commit();
+        } catch (Exception $e) {
+            DB::rollBack();
+            throw $e;
         }
-        $this->validarCuadre($asiento->id);
     }
     
     public function contabilizarCompraInventario($monto, $tipoPago, $referenciaId, $metodoPagoContado = 'efectivo')
@@ -313,11 +387,12 @@ class ContabilidadService
         $periodo = DB::table('periodos_contables')->where('estado', 'abierto')->first();
         if (!$periodo) return;
 
-        // Cuentas clave de tu catálogo
-        $cuentaInventario = CuentaContable::where('codigo', '1.1.5')->first()->id; // Inventario de Insumos
+        $cuentaInventario = CuentaContable::where('codigo', '1.1.5')->first()->id;
         $monedaBase = DB::table('monedas')->where('es_base', true)->first()->id;
 
-        $asiento = AsientoContable::create([
+        DB::beginTransaction();
+        try {
+            $asiento = AsientoContable::create([
             'numero_asiento' => 'COM-' . time(),
             'fecha' => Carbon::now(),
             'concepto' => 'Compra de mercadería a proveedor (Ref: ' . $referenciaId . ')',
@@ -360,6 +435,11 @@ class ContabilidadService
         }
 
         $this->validarCuadre($asiento->id);
+            DB::commit();
+        } catch (Exception $e) {
+            DB::rollBack();
+            throw $e;
+        }
     }
 
     public function contabilizarPagoProveedor($monto, $referenciaId, $metodoPago = 'efectivo')
@@ -367,38 +447,43 @@ class ContabilidadService
         $periodo = DB::table('periodos_contables')->where('estado', 'abierto')->first();
         if (!$periodo) return;
 
-        $cuentaPasivo = CuentaContable::where('codigo', '2.1.1')->first()->id; // Proveedores
+        $cuentaPasivo = CuentaContable::where('codigo', '2.1.1')->first()->id;
         $monedaBase = DB::table('monedas')->where('es_base', true)->first()->id;
 
         $cuentaCaja = CuentaContable::where('codigo', '1.1.1')->first()->id;
         $cuentaBanco = CuentaContable::where('codigo', '1.1.2.1')->first()->id;
         $cuentaOrigen = ($metodoPago == 'banco') ? $cuentaBanco : $cuentaCaja;
 
-        $asiento = AsientoContable::create([
-            'numero_asiento' => 'PXP-' . time(),
-            'fecha' => \Carbon\Carbon::now(),
-            'concepto' => 'Abono a proveedor (Recibo de Pago #' . $referenciaId . ')',
-            'modulo_origen' => 'pagos_proveedor',
-            'referencia_id' => $referenciaId,
-            'periodo_id' => $periodo->id,
-            'usuario_id' => auth()->id() ?? 1,
-        ]);
+        DB::beginTransaction();
+        try {
+            $asiento = AsientoContable::create([
+                'numero_asiento' => 'PXP-' . time(),
+                'fecha' => \Carbon\Carbon::now(),
+                'concepto' => 'Abono a proveedor (Recibo de Pago #' . $referenciaId . ')',
+                'modulo_origen' => 'pagos_proveedor',
+                'referencia_id' => $referenciaId,
+                'periodo_id' => $periodo->id,
+                'usuario_id' => auth()->id() ?? 1,
+            ]);
 
-        // DEBE: Disminuye nuestra deuda (Pasivo)
-        DetalleAsiento::create([
-            'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaPasivo,
-            'moneda_id' => $monedaBase, 'debe' => $monto, 'haber' => 0,
-            'descripcion' => 'Abono a cuenta por pagar'
-        ]);
+            DetalleAsiento::create([
+                'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaPasivo,
+                'moneda_id' => $monedaBase, 'debe' => $monto, 'haber' => 0,
+                'descripcion' => 'Abono a cuenta por pagar'
+            ]);
 
-        // HABER: Sale el dinero (Activo)
-        DetalleAsiento::create([
-            'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaOrigen,
-            'moneda_id' => $monedaBase, 'debe' => 0, 'haber' => $monto,
-            'descripcion' => 'Salida de fondos por pago a proveedor'
-        ]);
+            DetalleAsiento::create([
+                'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaOrigen,
+                'moneda_id' => $monedaBase, 'debe' => 0, 'haber' => $monto,
+                'descripcion' => 'Salida de fondos por pago a proveedor'
+            ]);
 
-        $this->validarCuadre($asiento->id);
+            $this->validarCuadre($asiento->id);
+            DB::commit();
+        } catch (Exception $e) {
+            DB::rollBack();
+            throw $e;
+        }
     }
 
     public function contabilizarGastoCajaChica($movimiento)
@@ -407,41 +492,44 @@ class ContabilidadService
         if (!$periodo) return;
 
         $monedaBase = DB::table('monedas')->where('es_base', true)->first()->id;
-        
-        // Asumimos que la Caja Chica usa la cuenta de Caja General (1.1.1) o una subcuenta
         $cuentaCaja = CuentaContable::where('codigo', '1.1.1')->first()->id; 
 
-        $asiento = AsientoContable::create([
-            'numero_asiento' => 'CCH-' . time(),
-            'fecha' => \Carbon\Carbon::now(),
-            'concepto' => 'Pago por Caja Chica: ' . $movimiento->descripcion,
-            'modulo_origen' => 'caja_chica',
-            'referencia_id' => $movimiento->id,
-            'periodo_id' => $periodo->id,
-            'usuario_id' => auth()->id() ?? 1,
-        ]);
+        DB::beginTransaction();
+        try {
+            $asiento = AsientoContable::create([
+                'numero_asiento' => 'CCH-' . time(),
+                'fecha' => \Carbon\Carbon::now(),
+                'concepto' => 'Pago por Caja Chica: ' . $movimiento->descripcion,
+                'modulo_origen' => 'caja_chica',
+                'referencia_id' => $movimiento->id,
+                'periodo_id' => $periodo->id,
+                'usuario_id' => auth()->id() ?? 1,
+            ]);
 
-        // DEBE: Aumenta el Gasto (La cuenta viene del Tipo de Gasto)
-        DetalleAsiento::create([
-            'asiento_id' => $asiento->id, 
-            'cuenta_id' => $movimiento->tipoGasto->cuenta_contable_id,
-            'moneda_id' => $monedaBase, 
-            'debe' => $movimiento->monto, 
-            'haber' => 0,
-            'descripcion' => $movimiento->descripcion
-        ]);
+            DetalleAsiento::create([
+                'asiento_id' => $asiento->id, 
+                'cuenta_id' => $movimiento->tipoGasto->cuenta_contable_id,
+                'moneda_id' => $monedaBase, 
+                'debe' => $movimiento->monto, 
+                'haber' => 0,
+                'descripcion' => $movimiento->descripcion
+            ]);
 
-        // HABER: Sale el dinero de la Caja (Activo disminuye)
-        DetalleAsiento::create([
-            'asiento_id' => $asiento->id, 
-            'cuenta_id' => $cuentaCaja,
-            'moneda_id' => $monedaBase, 
-            'debe' => 0, 
-            'haber' => $movimiento->monto,
-            'descripcion' => 'Salida de efectivo por gasto menor'
-        ]);
+            DetalleAsiento::create([
+                'asiento_id' => $asiento->id, 
+                'cuenta_id' => $cuentaCaja,
+                'moneda_id' => $monedaBase, 
+                'debe' => 0, 
+                'haber' => $movimiento->monto,
+                'descripcion' => 'Salida de efectivo por gasto menor'
+            ]);
 
-        $this->validarCuadre($asiento->id);
+            $this->validarCuadre($asiento->id);
+            DB::commit();
+        } catch (Exception $e) {
+            DB::rollBack();
+            throw $e;
+        }
     }
 
     public function contabilizarTransferencia($monto, $referenciaId)
@@ -450,11 +538,12 @@ class ContabilidadService
         if (!$periodo) return;
 
         $monedaBase = DB::table('monedas')->where('es_base', true)->first()->id;
-        
-        $cuentaCaja = CuentaContable::where('codigo', '1.1.1')->first()->id; // Origen (Sale el dinero)
-        $cuentaBanco = CuentaContable::where('codigo', '1.1.2.1')->first()->id; // Destino (Entra el dinero)
+        $cuentaCaja = CuentaContable::where('codigo', '1.1.1')->first()->id;
+        $cuentaBanco = CuentaContable::where('codigo', '1.1.2.1')->first()->id;
 
-        $asiento = AsientoContable::create([
+        DB::beginTransaction();
+        try {
+            $asiento = AsientoContable::create([
             'numero_asiento' => 'DEP-' . time(),
             'fecha' => \Carbon\Carbon::now(),
             'concepto' => 'Depósito / Transferencia de Caja a Banco (Ref #' . $referenciaId . ')',
@@ -478,6 +567,11 @@ class ContabilidadService
             'descripcion' => 'Salida de efectivo hacia el banco'
         ]);
         $this->validarCuadre($asiento->id);
+            DB::commit();
+        } catch (Exception $e) {
+            DB::rollBack();
+            throw $e;
+        }
     }
 
     
@@ -489,10 +583,11 @@ class ContabilidadService
 
         $monedaBase = \Illuminate\Support\Facades\DB::table('monedas')->where('es_base', true)->first()->id;
         
-        // Cuentas del catálogo adaptado[cite: 7]
-        $cuentaSueldos = \App\Models\CuentaContable::where('codigo', '6.11')->first()->id ?? 1; // Sueldos y Salarios
+        // Cuentas del catálogo adaptado
+        $cuentaSueldos = \App\Models\CuentaContable::where('codigo', '6.7')->first()->id ?? 1; // Sueldos y Salarios
         $cuentaComisiones = \App\Models\CuentaContable::where('codigo', '5.3')->first()->id ?? 1; // Comisiones Estilistas
-        $cuentaAnticipos = \App\Models\CuentaContable::where('codigo', '1.1.5')->first()->id ?? 1; // Anticipos a Empleados
+        // CORRECCIÓN: Usar 1.1.6 (Adelantos de Salario) en lugar de 1.1.5 (Inventario de Insumos)
+        $cuentaAnticipos = \App\Models\CuentaContable::where('codigo', '1.1.6')->first()->id ?? 1; // Adelantos de Salario
         
         $cuentaCaja = \App\Models\CuentaContable::where('codigo', '1.1.1')->first()->id ?? 1;
         $cuentaBanco = \App\Models\CuentaContable::where('codigo', '1.1.3')->first()->id ?? 1;
@@ -508,43 +603,53 @@ class ContabilidadService
             'usuario_id' => auth()->id() ?? 1,
         ]);
 
-        // 1. DEBE: Gasto por Salario Fijo (Si aplica)[cite: 7]
-        if ($payroll->active_salary > 0) {
-            \App\Models\DetalleAsiento::create([
-                'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaSueldos,
-                'moneda_id' => $monedaBase, 'debe' => $payroll->active_salary, 'haber' => 0,
-                'descripcion' => 'Sueldo base devengado'
-            ]);
-        }
+        DB::beginTransaction();
+        try {
+            // 1. DEBE: Gasto por Salario Fijo
+            if ($payroll->active_salary > 0) {
+                \App\Models\DetalleAsiento::create([
+                    'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaSueldos,
+                    'moneda_id' => $monedaBase, 'debe' => $payroll->active_salary, 'haber' => 0,
+                    'descripcion' => 'Sueldo base devengado'
+                ]);
+            }
 
-        // 2. DEBE: Gasto por Comisiones (Si aplica)[cite: 7]
-        $totalComisiones = $payroll->services_commission + $payroll->products_commission;
-        if ($totalComisiones > 0) {
-            \App\Models\DetalleAsiento::create([
-                'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaComisiones,
-                'moneda_id' => $monedaBase, 'debe' => $totalComisiones, 'haber' => 0,
-                'descripcion' => 'Comisiones por ventas devengadas'
-            ]);
-        }
+            // 2. DEBE: Gasto por Comisiones
+            $totalComisiones = $payroll->services_commission + $payroll->products_commission;
+            if ($totalComisiones > 0) {
+                \App\Models\DetalleAsiento::create([
+                    'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaComisiones,
+                    'moneda_id' => $monedaBase, 'debe' => $totalComisiones, 'haber' => 0,
+                    'descripcion' => 'Comisiones por ventas devengadas'
+                ]);
+            }
 
-        // 3. HABER: Recuperación de Anticipos (El Activo disminuye)
-        if ($payroll->salary_advances > 0) {
-            \App\Models\DetalleAsiento::create([
-                'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaAnticipos,
-                'moneda_id' => $monedaBase, 'debe' => 0, 'haber' => $payroll->salary_advances,
-                'descripcion' => 'Deducción por adelanto de salario'
-            ]);
-        }
+            // 3. HABER: Recuperación de Anticipos (El Activo 1.1.6 disminuye)
+            // Los anticipos ya están descontados en total_to_pay, aquí solo recuperamos el activo
+            if ($payroll->salary_advances > 0) {
+                \App\Models\DetalleAsiento::create([
+                    'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaAnticipos,
+                    'moneda_id' => $monedaBase, 'debe' => 0, 'haber' => $payroll->salary_advances,
+                    'descripcion' => 'Recuperación de adelantos de salario (activo 1.1.6)'
+                ]);
+            }
 
-        // 4. HABER: Salida del Dinero Neto[cite: 6]
-        if ($payroll->total_to_pay > 0) {
-            \App\Models\DetalleAsiento::create([
-                'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaOrigen,
-                'moneda_id' => $monedaBase, 'debe' => 0, 'haber' => $payroll->total_to_pay,
-                'descripcion' => 'Pago neto de nómina'
-            ]);
+            // 4. HABER: Salida del Dinero Neto (Caja/Banco)
+            // total_to_pay YA incluye la deducción de anticipos: (salario + comisiones) - anticipos
+            if ($payroll->total_to_pay > 0) {
+                \App\Models\DetalleAsiento::create([
+                    'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaOrigen,
+                    'moneda_id' => $monedaBase, 'debe' => 0, 'haber' => $payroll->total_to_pay,
+                    'descripcion' => 'Pago neto de nómina'
+                ]);
+            }
+
+            $this->validarCuadre($asiento->id);
+            DB::commit();
+        } catch (Exception $e) {
+            DB::rollBack();
+            throw $e;
         }
-        $this->validarCuadre($asiento->id);
     }
 
     
@@ -556,55 +661,59 @@ class ContabilidadService
 
         $monedaBase = \Illuminate\Support\Facades\DB::table('monedas')->where('es_base', true)->first()->id;
 
-        // 1. Detectar el tipo de Deudor usando el catálogo adaptado
+        // Detectar el tipo de Deudor usando el catálogo adaptado
         if ($advance->user_id) {
-            $cuentaDeuda = \App\Models\CuentaContable::where('codigo', '1.1.5')->first()->id ?? 1; // Anticipos a Empleados[cite: 7]
+            $cuentaDeuda = \App\Models\CuentaContable::where('codigo', '1.1.6')->first()->id ?? 1; // Anticipos a Empleados
         } else {
-            $cuentaDeuda = \App\Models\CuentaContable::where('codigo', '1.1.4')->first()->id ?? 1; // Cuentas por Cobrar Clientes[cite: 7]
+            $cuentaDeuda = \App\Models\CuentaContable::where('codigo', '1.1.4')->first()->id ?? 1; // Cuentas por Cobrar Clientes
         }
 
-        // 2. Origen/Destino de los fondos
         $cuentaCaja = \App\Models\CuentaContable::where('codigo', '1.1.1')->first()->id ?? 1;
         $cuentaBanco = \App\Models\CuentaContable::where('codigo', '1.1.3')->first()->id ?? 1;
         $cuentaFondos = ($metodoPago == 'banco') ? $cuentaBanco : $cuentaCaja;
 
-        $asiento = \App\Models\AsientoContable::create([
-            'numero_asiento' => 'CXC-' . time(),
-            'fecha' => \Carbon\Carbon::parse($advance->date),
-            'concepto' => 'Movimiento CXC: ' . $advance->description,
-            'modulo_origen' => 'adelantos',
-            'referencia_id' => $advance->id,
-            'periodo_id' => $periodo->id,
-            'usuario_id' => auth()->id() ?? 1,
-        ]);
+        DB::beginTransaction();
+        try {
+            $asiento = \App\Models\AsientoContable::create([
+                'numero_asiento' => 'CXC-' . time(),
+                'fecha' => \Carbon\Carbon::parse($advance->date),
+                'concepto' => 'Movimiento CXC: ' . $advance->description,
+                'modulo_origen' => 'adelantos',
+                'referencia_id' => $advance->id,
+                'periodo_id' => $periodo->id,
+                'usuario_id' => auth()->id() ?? 1,
+            ]);
 
-        if ($advance->type == 'debe') {
-            // EL NEGOCIO PRESTA DINERO: Aumenta la deuda (Activo sube), Sale el dinero (Activo baja)
-            \App\Models\DetalleAsiento::create([
-                'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaDeuda,
-                'moneda_id' => $monedaBase, 'debe' => $advance->amount, 'haber' => 0,
-                'descripcion' => 'Incremento de deuda por adelanto/crédito'
-            ]);
-            \App\Models\DetalleAsiento::create([
-                'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaFondos,
-                'moneda_id' => $monedaBase, 'debe' => 0, 'haber' => $advance->amount,
-                'descripcion' => 'Salida de fondos'
-            ]);
-        } else {
-            // EL DEUDOR PAGA: Entra el dinero (Activo sube), Disminuye la deuda (Activo baja)
-            \App\Models\DetalleAsiento::create([
-                'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaFondos,
-                'moneda_id' => $monedaBase, 'debe' => $advance->amount, 'haber' => 0,
-                'descripcion' => 'Ingreso de fondos por abono de deudor'
-            ]);
-            \App\Models\DetalleAsiento::create([
-                'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaDeuda,
-                'moneda_id' => $monedaBase, 'debe' => 0, 'haber' => $advance->amount,
-                'descripcion' => 'Disminución de saldo deudor'
-            ]);
+            if ($advance->type == 'debe') {
+                \App\Models\DetalleAsiento::create([
+                    'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaDeuda,
+                    'moneda_id' => $monedaBase, 'debe' => $advance->amount, 'haber' => 0,
+                    'descripcion' => 'Incremento de deuda por adelanto/crédito'
+                ]);
+                \App\Models\DetalleAsiento::create([
+                    'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaFondos,
+                    'moneda_id' => $monedaBase, 'debe' => 0, 'haber' => $advance->amount,
+                    'descripcion' => 'Salida de fondos'
+                ]);
+            } else {
+                \App\Models\DetalleAsiento::create([
+                    'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaFondos,
+                    'moneda_id' => $monedaBase, 'debe' => $advance->amount, 'haber' => 0,
+                    'descripcion' => 'Ingreso de fondos por abono de deudor'
+                ]);
+                \App\Models\DetalleAsiento::create([
+                    'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaDeuda,
+                    'moneda_id' => $monedaBase, 'debe' => 0, 'haber' => $advance->amount,
+                    'descripcion' => 'Disminución de saldo deudor'
+                ]);
+            }
+
+            $this->validarCuadre($asiento->id);
+            DB::commit();
+        } catch (Exception $e) {
+            DB::rollBack();
+            throw $e;
         }
-
-        $this->validarCuadre($asiento->id);
     }
 
 
@@ -623,65 +732,88 @@ class ContabilidadService
         $haber = round($totales->total_haber ?? 0, 2);
         $diferencia = round(abs($debe - $haber), 2);
 
-        if ($diferencia > 0.00) {
-            throw new Exception("Error Crítico de Partida Doble: Asiento contable ID [{$asientoId}] descuadrado por C$ {$diferencia}. (Debe: C$ {$debe} | Haber: C$ {$haber}).");
+        // Tolerancia de 0.02 para absorber diferencias de redondeo en cálculos intermedios
+        $tolerancia = 0.02;
+        
+        if ($diferencia > $tolerancia) {
+            throw new Exception("Error Crítico de Partida Doble: Asiento contable ID [{$asientoId}] descuadrado por C$ {$diferencia}. (Debe: C$ {$debe} | Haber: C$ {$haber}). Tolerancia permitida: C$ {$tolerancia}.");
         }
     }
 
    
 
-    public function contabilizarOperacionCambio($operacion)
+    public function contabilizarOperacionCambio($operacion, $diferencial = 0)
     {
         $periodo = \Illuminate\Support\Facades\DB::table('periodos_contables')->where('estado', 'abierto')->first();
         if (!$periodo) return;
 
-        // Por simplicidad en este paso, asumimos que el salón tiene una cuenta para "Caja NIO" (1.1.1.1) y "Caja USD" (1.1.1.2)
-        // Ajusta los códigos según tu catálogo exacto.
-        $cuentaCajaNio = \App\Models\CuentaContable::where('codigo', '1.1.1')->first()->id ?? 1; 
-        $cuentaCajaUsd = \App\Models\CuentaContable::where('codigo', '1.1.2')->first()->id ?? 1; // Asumiendo 1.1.2 para Caja USD
+        // CORRECCIÓN B9: cuentas de caja por divisa.
+        // Caja NIO (Córdobas): 1.1.1 — Caja USD: 1.1.1.2 (subcuenta de Caja) con fallback a 1.1.1.
+        $cuentaCajaNio = \App\Models\CuentaContable::where('codigo', '1.1.1')->first()->id ?? 1;
+        $cuentaCajaUsd = \App\Models\CuentaContable::where('codigo', '1.1.1.2')->first()->id
+            ?? \App\Models\CuentaContable::where('codigo', '1.1.1')->first()->id ?? 1;
 
         $monedaBase = \Illuminate\Support\Facades\DB::table('monedas')->where('es_base', true)->first()->id;
 
-        $asiento = \App\Models\AsientoContable::create([
-            'numero_asiento' => 'CAM-' . time(),
-            'fecha' => \Carbon\Carbon::parse($operacion->fecha),
-            'concepto' => 'Operación de Mesa de Cambio: ' . ucfirst($operacion->tipo) . ' de divisas',
-            'modulo_origen' => 'mesa_cambio',
-            'referencia_id' => $operacion->id,
-            'periodo_id' => $periodo->id,
-            'usuario_id' => auth()->id() ?? 1,
-        ]);
-
-        if ($operacion->tipo == 'compra') {
-            // El Salón COMPRA dólares: Entran USD, Salen NIO
-            // Ambos valores se registran en la contabilidad en moneda base (Córdobas) según tu ERD
-            $valorEnCordobas = $operacion->monto_destino; // Lo que pagamos en NIO
-
-            \App\Models\DetalleAsiento::create([
-                'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaCajaUsd, 'moneda_id' => $monedaBase,
-                'debe' => $valorEnCordobas, 'haber' => 0, 'descripcion' => 'Ingreso de divisas (USD ' . $operacion->monto_origen . ' a tasa ' . $operacion->tasa_aplicada . ')'
+        DB::beginTransaction();
+        try {
+            $asiento = \App\Models\AsientoContable::create([
+                'numero_asiento' => 'CAM-' . time(),
+                'fecha' => \Carbon\Carbon::parse($operacion->fecha),
+                'concepto' => 'Operación de Mesa de Cambio: ' . ucfirst($operacion->tipo) . ' de divisas',
+                'modulo_origen' => 'mesa_cambio',
+                'referencia_id' => $operacion->id,
+                'periodo_id' => $periodo->id,
+                'usuario_id' => auth()->id() ?? 1,
             ]);
 
-            \App\Models\DetalleAsiento::create([
-                'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaCajaNio, 'moneda_id' => $monedaBase,
-                'debe' => 0, 'haber' => $valorEnCordobas, 'descripcion' => 'Salida de efectivo (NIO) por compra de divisas'
-            ]);
-        } else {
-            // El Salón VENDE dólares: Entran NIO, Salen USD
-            $valorEnCordobas = $operacion->monto_origen; // Lo que recibimos en NIO
+            if ($operacion->tipo == 'compra') {
+                $valorEnCordobas = $operacion->monto_destino;
 
-            \App\Models\DetalleAsiento::create([
-                'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaCajaNio, 'moneda_id' => $monedaBase,
-                'debe' => $valorEnCordobas, 'haber' => 0, 'descripcion' => 'Ingreso de efectivo (NIO) por venta de divisas'
-            ]);
+                \App\Models\DetalleAsiento::create([
+                    'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaCajaUsd, 'moneda_id' => $monedaBase,
+                    'debe' => $valorEnCordobas, 'haber' => 0, 'descripcion' => 'Ingreso de divisas (USD ' . $operacion->monto_origen . ' a tasa ' . $operacion->tasa_aplicada . ')'
+                ]);
 
-            \App\Models\DetalleAsiento::create([
-                'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaCajaUsd, 'moneda_id' => $monedaBase,
-                'debe' => 0, 'haber' => $valorEnCordobas, 'descripcion' => 'Salida de divisas (USD ' . $operacion->monto_destino . ' a tasa ' . $operacion->tasa_aplicada . ')'
-            ]);
+                \App\Models\DetalleAsiento::create([
+                    'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaCajaNio, 'moneda_id' => $monedaBase,
+                    'debe' => 0, 'haber' => $valorEnCordobas, 'descripcion' => 'Salida de efectivo (NIO) por compra de divisas'
+                ]);
+            } else {
+                $valorEnCordobas = $operacion->monto_origen;
+
+                \App\Models\DetalleAsiento::create([
+                    'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaCajaNio, 'moneda_id' => $monedaBase,
+                    'debe' => $valorEnCordobas, 'haber' => 0, 'descripcion' => 'Ingreso de efectivo (NIO) por venta de divisas'
+                ]);
+
+                \App\Models\DetalleAsiento::create([
+                    'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaCajaUsd, 'moneda_id' => $monedaBase,
+                    'debe' => 0, 'haber' => $valorEnCordobas, 'descripcion' => 'Salida de divisas (USD ' . $operacion->monto_destino . ' a tasa ' . $operacion->tasa_aplicada . ')'
+                ]);
+            }
+
+            // ASIENTO ADICIONAL: Diferencial Cambiario (Ganancia o Pérdida al vender USD)
+            if ($diferencial != 0) {
+                $cuentaGananciaPerdida = $diferencial > 0 ? $this->getCuentaIdByCodigo('7.1') : $this->getCuentaIdByCodigo('7.3');
+                $signo = $diferencial > 0 ? 'debe' : 'haber';
+                $montoAbs = abs($diferencial);
+
+                DetalleAsiento::create([
+                    'asiento_id' => $asiento->id,
+                    'cuenta_id' => $cuentaGananciaPerdida,
+                    'moneda_id' => $monedaBase,
+                    'debe' => $diferencial > 0 ? $montoAbs : 0,
+                    'haber' => $diferencial > 0 ? 0 : $montoAbs,
+                    'descripcion' => $diferencial > 0 ? 'Diferencial cambiario Ganancia por venta de USD' : 'Diferencial cambiario Pérdida por venta de USD',
+                ]);
+            }
+
+            $this->validarCuadre($asiento->id);
+            DB::commit();
+        } catch (Exception $e) {
+            DB::rollBack();
+            throw $e;
         }
-
-        // CANDADO DE SEGURIDAD INQUEBRANTABLE
-        $this->validarCuadre($asiento->id);
     }
 }

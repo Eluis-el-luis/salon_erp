@@ -30,10 +30,10 @@
                 </tr>
             </thead>
             <tbody class="bg-white divide-y divide-gray-100">
-                @forelse ($employees as $employee)
+                @forelse ($empleados as $empleado)
                     @php
                         // Buscamos si ya tiene un registro guardado el día de hoy
-                        $attendance = $employee->attendances->first();
+                        $attendance = $empleado->attendances->first();
                         // Damos formato a la hora si existe, si no, lo dejamos en blanco
                         $timeIn = $attendance ? \Carbon\Carbon::parse($attendance->time_in)->format('H:i') : '';
                         $aseo = $attendance ? $attendance->aseo : 1; // Por defecto Sí (1)
@@ -42,7 +42,7 @@
 
                     <!-- Fila individual conectada a Alpine.js -->
                     <tr x-data="attendanceRow({ 
-                            userId: {{ $employee->id }}, 
+                            userId: {{ $empleado->id }}, 
                             timeIn: '{{ $timeIn }}', 
                             aseo: {{ $aseo ? 'true' : 'false' }}, 
                             uniforme: {{ $uniforme ? 'true' : 'false' }},
@@ -52,8 +52,8 @@
                         
                         <!-- Columna: Nombre y Rol -->
                         <td class="px-6 py-4 whitespace-nowrap">
-                            <div class="text-sm font-bold text-gray-900">{{ $employee->name }}</div>
-                            <div class="text-xs text-gray-500 uppercase">{{ $employee->role }}</div>
+                            <div class="text-sm font-bold text-gray-900">{{ $empleado->name }}</div>
+                            <div class="text-xs text-gray-500 uppercase">{{ $empleado->role }}</div>
                         </td>
 
                         <!-- Columna: Hora de Entrada -->

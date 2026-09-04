@@ -38,7 +38,7 @@
                         $colorFecha = $vencida ? 'text-red-600 font-black' : 'text-gray-600';
                     @endphp
                     <tr class="hover:bg-gray-50 transition">
-                        <td class="px-6 py-4 font-bold text-gray-900">{{ $cuenta->provider->name }}</td>
+                        <td class="px-6 py-4 font-bold text-gray-900">{{ $cuenta->proveedor->name }}</td>
                         <td class="px-6 py-4 text-center {{ $colorFecha }}">
                             {{ \Carbon\Carbon::parse($cuenta->fecha_vencimiento)->format('d/m/Y') }}
                             @if($vencida) <br><span class="text-xs bg-red-100 px-2 rounded text-red-800">Vencida</span> @endif
@@ -46,7 +46,7 @@
                         <td class="px-6 py-4 text-right text-gray-500">C$ {{ number_format($cuenta->monto_original, 2) }}</td>
                         <td class="px-6 py-4 text-right text-lg font-black text-emerald-600">C$ {{ number_format($cuenta->saldo_pendiente, 2) }}</td>
                         <td class="px-6 py-4 text-center">
-                            <button @click="modalAbono = true; cuentaId = {{ $cuenta->id }}; saldoMaximo = {{ $cuenta->saldo_pendiente }}; proveedorNombre = '{{ $cuenta->provider->name }}'" 
+                            <button @click="modalAbono = true; cuentaId = {{ $cuenta->id }}; saldoMaximo = {{ $cuenta->saldo_pendiente }}; proveedorNombre = '{{ $cuenta->proveedor->name }}'" 
                                     class="bg-gray-900 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded-lg shadow text-xs transition">
                                 Registrar Abono
                             </button>

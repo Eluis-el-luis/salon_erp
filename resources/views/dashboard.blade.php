@@ -116,7 +116,7 @@
                                 🕒 {{ $venta->created_at->format('h:i A') }}
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600 font-medium">
-                                {{ $venta->cashier ? $venta->cashier->name : 'Admin Salón' }}
+                                {{ $venta->cajero ? $venta->cajero->name : 'Admin Salón' }}
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap text-center">
                                 @if($venta->payment_method == 'efectivo')

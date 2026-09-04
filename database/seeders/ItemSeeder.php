@@ -3,14 +3,14 @@
 namespace Database\Seeders;
 
 use Illuminate\Database\Seeder;
-use App\Models\Item;
+use App\Models\Articulo;
 
 class ItemSeeder extends Seeder
 {
     public function run()
     {
         // Producto 1: Venta directa al cliente (Shampoo)
-        Item::create([
+        Articulo::create([
             'codigo' => '7898625794601',
             'producto' => 'Reconstructor Capilar Deluxe Prime 260ml',
             'categoria' => 'Cabello',
@@ -24,7 +24,7 @@ class ItemSeeder extends Seeder
         ]);
 
         // Producto 2: Uso interno fraccionable (Keratina)
-        Item::create([
+        Articulo::create([
             'codigo' => 'KER-001',
             'producto' => 'Keratina Brasileña Profesional',
             'categoria' => 'Químicos',

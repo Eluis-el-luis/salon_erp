@@ -23,13 +23,13 @@
                 Selecciona un Servicio
             </div>
             <div class="divide-y divide-gray-100 max-h-[600px] overflow-y-auto">
-                @foreach($services as $service)
-                    <div @click="selectService({{ $service }})" 
-                         :class="{'bg-emerald-50 border-l-4 border-emerald-500': selectedService && selectedService.id === {{ $service->id }}}"
+                @foreach($servicios as $servicio)
+                    <div @click="selectService({{ $servicio }})" 
+                         :class="{'bg-emerald-50 border-l-4 border-emerald-500': selectedService && selectedService.id === {{ $servicio->id }}}"
                          class="p-4 cursor-pointer hover:bg-gray-50 transition flex justify-between items-center">
                         <div>
-                            <div class="font-bold text-gray-900">{{ $service->name }}</div>
-                            <div class="text-xs text-gray-500">{{ $service->formulas->count() }} ingredientes configurados</div>
+                            <div class="font-bold text-gray-900">{{ $servicio->name }}</div>
+                            <div class="text-xs text-gray-500">{{ $servicio->formulas->count() }} ingredientes configurados</div>
                         </div>
                         <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
                     </div>
@@ -63,8 +63,8 @@
                             <label class="block text-xs font-bold text-gray-700 mb-1">Producto (Inventario)</label>
                             <select name="item_id" required class="w-full shadow-sm border border-gray-300 rounded py-2 px-3 text-gray-700 focus:ring-emerald-500">
                                 <option value="">Selecciona un producto...</option>
-                                @foreach($fractionableItems as $item)
-                                    <option value="{{ $item->id }}">{{ $item->producto }} (Medido en {{ $item->unit_measure }})</option>
+                                @foreach($articulosFraccionables as $articulo)
+                                    <option value="{{ $articulo->id }}">{{ $articulo->producto }} (Medido en {{ $articulo->unit_measure }})</option>
                                 @endforeach
                             </select>
                         </div>
@@ -94,11 +94,11 @@
                             <template x-for="formula in (selectedService ? selectedService.formulas : [])" :key="formula.id">
                                 <tr class="hover:bg-gray-50">
                                     <td class="px-6 py-4 whitespace-nowrap">
-                                        <div class="text-sm font-bold text-gray-900" x-text="formula.item.producto"></div>
-                                        <div class="text-xs text-gray-500" x-text="formula.item.marca"></div>
+                                        <div class="text-sm font-bold text-gray-900" x-text="formula.articulo.producto"></div>
+                                        <div class="text-xs text-gray-500" x-text="formula.articulo.marca"></div>
                                     </td>
                                     <td class="px-6 py-4 whitespace-nowrap text-center">
-                                        <span class="px-3 py-1 inline-flex text-sm leading-5 font-black rounded-full bg-blue-100 text-blue-800" x-text="formula.quantity_used + ' ' + formula.item.unit_measure">
+                                        <span class="px-3 py-1 inline-flex text-sm leading-5 font-black rounded-full bg-blue-100 text-blue-800" x-text="formula.quantity_used + ' ' + formula.articulo.unit_measure">
                                         </span>
                                     </td>
                                     <td class="px-6 py-4 whitespace-nowrap text-right">

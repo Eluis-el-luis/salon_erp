@@ -27,29 +27,29 @@
                 </tr>
             </thead>
             <tbody class="bg-white divide-y divide-gray-200">
-                @forelse ($services as $service)
-                    <tr class="hover:bg-gray-50 transition" :class="!{{ $service->is_active ? 'true' : 'false' }} ? 'opacity-60 bg-gray-50' : ''">
+                @forelse ($servicios as $servicio)
+                    <tr class="hover:bg-gray-50 transition" :class="!{{ $servicio->is_active ? 'true' : 'false' }} ? 'opacity-60 bg-gray-50' : ''">
                         <td class="px-6 py-4">
-                            <div class="text-sm font-bold text-gray-900">{{ $service->name }}</div>
-                            <div class="text-xs text-gray-500">{{ $service->description ?? 'Sin descripción' }}</div>
+                            <div class="text-sm font-bold text-gray-900">{{ $servicio->name }}</div>
+                            <div class="text-xs text-gray-500">{{ $servicio->description ?? 'Sin descripción' }}</div>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700 font-medium">
-                            ⏱️ {{ $service->duration }} min
+                            ⏱️ {{ $servicio->duration }} min
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm font-bold text-emerald-600">
-                            C$ {{ number_format($service->price, 2) }}
+                            C$ {{ number_format($servicio->price, 2) }}
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-center">
-                            @if($service->is_active)
+                            @if($servicio->is_active)
                                 <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">Activo</span>
                             @else
                                 <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">Inactivo</span>
                             @endif
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                            @if($service->is_active)
-                                <button @click="editService({{ $service }})" class="text-blue-600 hover:text-blue-900 mr-3 transition">Editar</button>
-                                <button @click="deleteService({{ $service->id }})" class="text-red-600 hover:text-red-900 transition">Dar de baja</button>
+                            @if($servicio->is_active)
+                                <button @click="editService({{ $servicio }})" class="text-blue-600 hover:text-blue-900 mr-3 transition">Editar</button>
+                                <button @click="deleteService({{ $servicio->id }})" class="text-red-600 hover:text-red-900 transition">Dar de baja</button>
                             @else
                                 <span class="text-gray-400 text-xs italic">No disponible</span>
                             @endif

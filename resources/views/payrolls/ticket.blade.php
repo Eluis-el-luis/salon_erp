@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Colilla de Pago - {{ $payroll->user->name }}</title>
+    <title>Colilla de Pago - {{ $nomina->usuario->name }}</title>
     @vite(['resources/css/app.css'])
     <style>
         @media print {
@@ -37,23 +37,23 @@
         <div class="text-xs mb-4 space-y-2">
             <div class="flex justify-between">
                 <span class="font-bold">Recibo #:</span>
-                <span>NOM-{{ str_pad($payroll->id, 5, '0', STR_PAD_LEFT) }}</span>
+                <span>NOM-{{ str_pad($nomina->id, 5, '0', STR_PAD_LEFT) }}</span>
             </div>
             <div class="flex justify-between">
                 <span class="font-bold">Colaborador:</span>
-                <span class="font-medium text-right">{{ $payroll->user->name }}</span>
+                <span class="font-medium text-right">{{ $nomina->usuario->name }}</span>
             </div>
             <div class="flex justify-between">
                 <span class="font-bold">Cargo:</span>
-                <span class="uppercase">{{ $payroll->user->role }}</span>
+                <span class="uppercase">{{ $nomina->usuario->role }}</span>
             </div>
             <div class="flex justify-between">
                 <span class="font-bold">Período:</span>
-                <span>{{ \Carbon\Carbon::parse($payroll->start_date)->format('d/m/y') }} al {{ \Carbon\Carbon::parse($payroll->end_date)->format('d/m/y') }}</span>
+                <span>{{ \Carbon\Carbon::parse($nomina->start_date)->format('d/m/y') }} al {{ \Carbon\Carbon::parse($nomina->end_date)->format('d/m/y') }}</span>
             </div>
             <div class="flex justify-between">
                 <span class="font-bold">Fecha de Emisión:</span>
-                <span>{{ $payroll->created_at->format('d/m/Y') }}</span>
+                <span>{{ $nomina->created_at->format('d/m/Y') }}</span>
             </div>
         </div>
 
@@ -65,13 +65,13 @@
             
             <div class="flex justify-between">
                 <span>Salario Base:</span>
-                <span>C$ {{ number_format($payroll->active_salary, 2) }}</span>
+                <span>C$ {{ number_format($nomina->active_salary, 2) }}</span>
             </div>
             
-            @if($payroll->services_commission > 0)
+            @if($nomina->services_commission > 0)
             <div class="flex justify-between">
                 <span>Comisiones Acumuladas:</span>
-                <span>C$ {{ number_format($payroll->services_commission, 2) }}</span>
+                <span>C$ {{ number_format($nomina->services_commission, 2) }}</span>
             </div>
             @endif
         </div>
@@ -82,7 +82,7 @@
             
             <div class="flex justify-between text-red-600">
                 <span>Adelantos de Salario:</span>
-                <span>- C$ {{ number_format($payroll->salary_advances, 2) }}</span>
+                <span>- C$ {{ number_format($nomina->salary_advances, 2) }}</span>
             </div>
         </div>
 
@@ -90,7 +90,7 @@
         <div class="border-t-2 border-gray-800 pt-2 mb-8 mt-4">
             <div class="flex justify-between font-black text-lg">
                 <span>NETO A RECIBIR:</span>
-                <span>C$ {{ number_format($payroll->total_to_pay, 2) }}</span>
+                <span>C$ {{ number_format($nomina->total_to_pay, 2) }}</span>
             </div>
         </div>
 

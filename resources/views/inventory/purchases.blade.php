@@ -23,8 +23,8 @@
                 <label class="block text-sm font-bold text-gray-700 mb-1">Proveedor *</label>
                 <select x-model="providerId" class="w-full border-gray-300 rounded-lg shadow-sm focus:ring-emerald-500 focus:border-emerald-500">
                     <option value="">Seleccione un proveedor...</option>
-                    @foreach($providers as $provider)
-                        <option value="{{ $provider->id }}">{{ $provider->name }}</option>
+                    @foreach($proveedores as $proveedor)
+                        <option value="{{ $proveedor->id }}">{{ $proveedor->name }}</option>
                     @endforeach
                 </select>
             </div>
@@ -67,9 +67,9 @@
                     <label class="block text-xs font-bold text-gray-600 mb-1">Producto</label>
                     <select x-model="selectedItem" class="w-full text-sm border-gray-300 rounded-md focus:ring-emerald-500">
                         <option value="">Buscar producto...</option>
-                        @foreach($items as $item)
-                            <option value="{{ $item->id }}" data-name="{{ $item->producto }}">
-                                {{ $item->codigo }} - {{ $item->producto }} (Stock: {{ $item->existencia_actual }})
+                        @foreach($articulos as $articulo)
+                            <option value="{{ $articulo->id }}" data-name="{{ $articulo->producto }}">
+                                {{ $articulo->codigo }} - {{ $articulo->producto }} (Stock: {{ $articulo->existencia_actual }})
                             </option>
                         @endforeach
                     </select>

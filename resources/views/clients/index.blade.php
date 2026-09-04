@@ -25,20 +25,20 @@
                 </tr>
             </thead>
             <tbody class="bg-white divide-y divide-gray-200">
-                @forelse ($clients as $client)
+                @forelse ($clientes as $cliente)
                     <tr class="hover:bg-gray-50 transition">
                         <td class="px-6 py-4 whitespace-nowrap text-sm font-bold text-gray-900">
-                            {{ $client->name }}
+                            {{ $cliente->name }}
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
-                            {{ $client->phone ?? 'N/A' }}
+                            {{ $cliente->phone ?? 'N/A' }}
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
-                            {{ $client->email ?? 'N/A' }}
+                            {{ $cliente->email ?? 'N/A' }}
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                            <button @click="editClient({{ $client }})" class="text-blue-600 hover:text-blue-900 mr-3">Editar</button>
-                            <button @click="deleteClient({{ $client->id }})" class="text-red-600 hover:text-red-900">Eliminar</button>
+                            <button @click="editClient({{ $cliente }})" class="text-blue-600 hover:text-blue-900 mr-3">Editar</button>
+                            <button @click="deleteClient({{ $cliente->id }})" class="text-red-600 hover:text-red-900">Eliminar</button>
                         </td>
                     </tr>
                 @empty

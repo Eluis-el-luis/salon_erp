@@ -28,32 +28,32 @@
                 </tr>
             </thead>
             <tbody class="bg-white divide-y divide-gray-200 text-sm">
-                @forelse ($employees as $employee)
+                @forelse ($empleados as $empleado)
                     @php
                         // Obtenemos la comisión real vigente
-                        $comisionServicioReal = $employee->esquemaActual ? $employee->esquemaActual->porcentaje_comision : $employee->comision_servicio;
+                        $comisionServicioReal = $empleado->esquemaActual ? $empleado->esquemaActual->porcentaje_comision : $empleado->comision_servicio;
                     @endphp
                     <tr class="hover:bg-gray-50 transition">
                         <td class="px-6 py-4 whitespace-nowrap">
-                            <div class="font-bold text-gray-900">{{ $employee->name }}</div>
-                            <div class="text-xs text-gray-500">{{ $employee->email }}</div>
+                            <div class="font-bold text-gray-900">{{ $empleado->name }}</div>
+                            <div class="text-xs text-gray-500">{{ $empleado->email }}</div>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap">
                             <span class="px-3 py-1 inline-flex text-xs leading-5 font-bold rounded-full 
-                                {{ $employee->role == 'admin' ? 'bg-purple-100 text-purple-800' : 
-                                  ($employee->role == 'estilista' ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-800') }}">
-                                {{ ucfirst($employee->role) }}
+                                {{ $empleado->role == 'admin' ? 'bg-purple-100 text-purple-800' : 
+                                  ($empleado->role == 'estilista' ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-800') }}">
+                                {{ ucfirst($empleado->role) }}
                             </span>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap font-black text-emerald-600">
-                            C$ {{ number_format($employee->salario_fijo, 2) }}
+                            C$ {{ number_format($empleado->salario_fijo, 2) }}
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-gray-600">
                             <span class="font-bold text-gray-900">{{ number_format($comisionServicioReal, 2) }}%</span> 
                             <span class="text-xs text-gray-400 ml-1">(Servicios)</span>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap">
-                            @if($employee->is_active)
+                            @if($empleado->is_active)
                                 <span class="text-emerald-500 font-bold text-xs bg-emerald-50 px-2 py-1 rounded">● Activo</span>
                             @else
                                 <span class="text-red-500 font-bold text-xs bg-red-50 px-2 py-1 rounded">● Inactivo</span>
@@ -61,9 +61,9 @@
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-right font-medium">
                             <!-- Pasamos el valor calculado a la función editEmployee -->
-                            <button @click="editEmployee({{ $employee }}, {{ $comisionServicioReal }})" class="text-blue-600 hover:text-blue-900 font-bold bg-blue-50 py-1 px-3 rounded transition mr-2">Editar</button>
-                            @if($employee->is_active)
-                                <button @click="deactivateEmployee({{ $employee->id }})" class="text-red-600 hover:text-red-900 font-bold bg-red-50 py-1 px-3 rounded transition">Baja</button>
+                            <button @click="editEmployee({{ $empleado }}, {{ $comisionServicioReal }})" class="text-blue-600 hover:text-blue-900 font-bold bg-blue-50 py-1 px-3 rounded transition mr-2">Editar</button>
+                            @if($empleado->is_active)
+                                <button @click="deactivateEmployee({{ $empleado->id }})" class="text-red-600 hover:text-red-900 font-bold bg-red-50 py-1 px-3 rounded transition">Baja</button>
                             @endif
                         </td>
                     </tr>

@@ -159,7 +159,7 @@ Contiene la definición de rutas públicas y protegidas.
 - `items`
 - `appointments`
 
-Estas rutas son manejadas por `ClientController`, `ItemController` y `AppointmentController` respectivamente.
+Estas rutas son manejadas por `ClienteController`, `ArticuloController` y `CitaController` respectivamente.
 
 ---
 
@@ -299,7 +299,7 @@ Relación:
 
 ## 8. Controllers y lógica de negocio clave
 
-### `App\Http\Controllers\SaleController.php`
+### `App\Http\Controllers\VentaController.php`
 
 Funcionalidad:
 - registra ventas en POS.
@@ -326,7 +326,7 @@ Funcionalidad:
 - marca cita como completada.
 - contabiliza la venta.
 
-### `App\Http\Controllers\InventoryController.php`
+### `App\Http\Controllers\InventarioController.php`
 
 Funcionalidad:
 - listados y CRUD de productos.
@@ -336,7 +336,7 @@ Funcionalidad:
 - invocar contabilidad de compra.
 - entrega formulario de compra con proveedores y productos.
 
-### `App\Http\Controllers\PayrollController.php`
+### `App\Http\Controllers\NominaController.php`
 
 Funcionalidad:
 - listar nóminas y empleados.
@@ -347,7 +347,7 @@ Funcionalidad:
 - guardar nómina como borrador.
 - generar ticket de colilla.
 
-### `App\Http\Controllers\BackupController.php`
+### `App\Http\Controllers\RespaldoController.php`
 
 Funcionalidad:
 - generar respaldo SQL con `ifsnop/mysqldump-php`.
@@ -355,7 +355,7 @@ Funcionalidad:
 - restaurar base de datos desde archivo `.sql`.
 - usa `DB::unprepared` para ejecutar el SQL.
 
-### `App\Http\Controllers\CashController.php`
+### `App\Http\Controllers\CajaController.php`
 
 Funcionalidad:
 - mostrar turno de caja actual y ventas en efectivo del turno.
@@ -369,9 +369,9 @@ Funcionalidad:
 
 ### 9.1 Flujo de venta POS
 
-- El cajero abre la caja con `CashController@open`.
+- El cajero abre la caja con `CajaController@open`.
 - En `/pos`, carga productos y servicios activos.
-- El carrito se envía a `SaleController@store`.
+- El carrito se envía a `VentaController@store`.
 - Se valida caja abierta y el request.
 - Se crean los registros de venta.
 - Se actualiza inventario físico o volumen fraccionado.
@@ -381,7 +381,7 @@ Funcionalidad:
 ### 9.2 Flujo de facturación de cita
 
 - Se selecciona una cita en la agenda.
-- Se invoca `SaleController@billAppointment`.
+- Se invoca `VentaController@billAppointment`.
 - Se crea venta con el servicio de la cita.
 - Se asocia el estilista.
 - Se marca la cita como `completada`.
@@ -389,7 +389,7 @@ Funcionalidad:
 
 ### 9.3 Flujo de gestión de inventario
 
-- `InventoryController@store` crea productos nuevos.
+- `InventarioController@store` crea productos nuevos.
 - `update` modifica precios, stock y atributos.
 - `destroy` elimina productos.
 - `registrarCompra` actualiza stock físico y volumen.
@@ -421,9 +421,9 @@ Funcionalidad:
 Este servicio centraliza la lógica contable del sistema.
 
 Se utiliza desde:
-- `SaleController` para ventas.
-- `InventoryController` para compras.
-- `CashController` para arqueos.
+- `VentaController` para ventas.
+- `InventarioController` para compras.
+- `CajaController` para arqueos.
 - posiblemente otros controladores de contabilidad.
 
 Permite desacoplar la generación de asientos contables de la lógica del flujo operacional.
@@ -487,11 +487,11 @@ Permite desacoplar la generación de asientos contables de la lógica del flujo 
 Este documento se generó a partir del código y los archivos existentes del proyecto en las rutas:
 - `routes/web.php`
 - `routes/api.php`
-- `app/Http/Controllers/SaleController.php`
-- `app/Http/Controllers/InventoryController.php`
-- `app/Http/Controllers/PayrollController.php`
-- `app/Http/Controllers/BackupController.php`
-- `app/Http/Controllers/CashController.php`
+- `app/Http/Controllers/VentaController.php`
+- `app/Http/Controllers/InventarioController.php`
+- `app/Http/Controllers/NominaController.php`
+- `app/Http/Controllers/RespaldoController.php`
+- `app/Http/Controllers/CajaController.php`
 - `app/Models/User.php`
 - `app/Models/Sale.php`
 - `app/Models/SaleDetail.php`

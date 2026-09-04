@@ -27,22 +27,22 @@
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-gray-100 bg-white">
-                    @forelse ($providers as $provider)
+                    @forelse ($proveedores as $proveedor)
                     <tr class="hover:bg-gray-50 transition">
                         <td class="px-6 py-4 whitespace-nowrap">
-                            <div class="text-sm font-bold text-gray-900">{{ $provider->name }}</div>
-                            <div class="text-xs text-gray-500 mt-1 truncate max-w-xs" title="{{ $provider->address }}">{{ $provider->address ?? 'Sin dirección registrada' }}</div>
+                            <div class="text-sm font-bold text-gray-900">{{ $proveedor->name }}</div>
+                            <div class="text-xs text-gray-500 mt-1 truncate max-w-xs" title="{{ $proveedor->address }}">{{ $proveedor->address ?? 'Sin dirección registrada' }}</div>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap">
-                            <div class="text-sm text-gray-700 font-medium">{{ $provider->contact_name ?? 'N/A' }}</div>
+                            <div class="text-sm text-gray-700 font-medium">{{ $proveedor->contact_name ?? 'N/A' }}</div>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap">
-                            <div class="text-sm font-medium text-gray-900">{{ $provider->phone ?? '-' }}</div>
-                            <div class="text-xs text-blue-600">{{ $provider->email ?? '-' }}</div>
+                            <div class="text-sm font-medium text-gray-900">{{ $proveedor->phone ?? '-' }}</div>
+                            <div class="text-xs text-blue-600">{{ $proveedor->email ?? '-' }}</div>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-center text-sm font-medium">
-                            <button @click="editProvider({{ $provider }})" class="text-blue-600 hover:text-blue-900 mr-3 font-bold transition">Editar</button>
-                            <button @click="deleteProvider({{ $provider->id }})" class="text-red-600 hover:text-red-900 font-bold transition">Eliminar</button>
+                            <button @click="editProvider({{ $proveedor }})" class="text-blue-600 hover:text-blue-900 mr-3 font-bold transition">Editar</button>
+                            <button @click="deleteProvider({{ $proveedor->id }})" class="text-red-600 hover:text-red-900 font-bold transition">Eliminar</button>
                         </td>
                     </tr>
                     @empty

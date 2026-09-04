@@ -1,34 +1,34 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
-use App\Models\Appointment;
-use App\Http\Controllers\InventoryController;
-use App\Http\Controllers\DashboardController;
-use App\Http\Controllers\EmployeeController;
-use App\Http\Controllers\AttendanceController;
-use App\Http\Controllers\AdvanceController;
-use App\Http\Controllers\ClientController;
-use App\Http\Controllers\ServiceController;
-use App\Http\Controllers\SaleController;
-use App\Http\Controllers\BackupController;
-use App\Http\Controllers\PayrollController;
+use App\Models\Cita;
+use App\Http\Controllers\InventarioController;
+use App\Http\Controllers\PanelController;
+use App\Http\Controllers\EmpleadoController;
+use App\Http\Controllers\AsistenciaController;
+use App\Http\Controllers\AdelantoController;
+use App\Http\Controllers\ClienteController;
+use App\Http\Controllers\ServicioController;
+use App\Http\Controllers\VentaController;
+use App\Http\Controllers\RespaldoController;
+use App\Http\Controllers\NominaController;
 use App\Http\Controllers\FormulaController;
-use App\Http\Controllers\ProviderController;
-use App\Http\Controllers\ReportController;
-use App\Http\Controllers\AuthController;
-use App\Http\Controllers\AccountingController;
-use App\Http\Controllers\CashController;
-use App\Http\Controllers\PayableController;
-use App\Http\Controllers\PettyCashController;
-use App\Http\Controllers\BankController;
-use App\Http\Controllers\ExchangeController;
+use App\Http\Controllers\ProveedorController;
+use App\Http\Controllers\ReporteController;
+use App\Http\Controllers\AutenticacionController;
+use App\Http\Controllers\ContabilidadController;
+use App\Http\Controllers\CajaController;
+use App\Http\Controllers\CuentaPorPagarController;
+use App\Http\Controllers\CajaChicaController;
+use App\Http\Controllers\BancoController;
+use App\Http\Controllers\MesaCambioController;
 
 // =================================================================
 // RUTAS PÚBLICAS (No requieren sesión)
 // =================================================================
-Route::get('/login', [AuthController::class, 'showLoginForm'])->name('login');
-Route::post('/login', [AuthController::class, 'login']);
-Route::post('/logout', [AuthController::class, 'logout'])->name('logout');
+Route::get('/login', [AutenticacionController::class, 'mostrarFormularioLogin'])->name('login');
+Route::post('/login', [AutenticacionController::class, 'login'])->middleware('throttle:5,1');
+Route::post('/logout', [AutenticacionController::class, 'logout'])->name('logout');
 
 // =================================================================
 // TODAS LAS RUTAS PROTEGIDAS (Requieren inicio de sesión)
@@ -41,28 +41,28 @@ Route::middleware(['auth'])->group(function () {
     // El dashboard, agendar citas, ver clientes y marcar asistencia 
     // son operaciones básicas que todo el equipo necesita hacer.
     
-    Route::get('/', [DashboardController::class, 'index']);
+    Route::get('/', [PanelController::class, 'index']);
     
     Route::get('/agenda', function () {
-        $appointments = Appointment::with(['client', 'service'])
+        $citas = Cita::with(['cliente', 'servicio'])
                             ->whereDate('appointment_date', today())
                             ->orderBy('appointment_date', 'asc')
                             ->get();
 
-        $clients = \App\Models\Client::orderBy('name', 'asc')->get();
-        $services = \App\Models\Service::where('is_active', true)->orderBy('name', 'asc')->get();
-        $stylists = \App\Models\User::where('role', 'estilista')->where('is_active', true)->get();
+        $clientes = \App\Models\Cliente::orderBy('name', 'asc')->get();
+        $servicios = \App\Models\Servicio::where('is_active', true)->orderBy('name', 'asc')->get();
+        $estilistas = \App\Models\Usuario::where('role', 'estilista')->where('is_active', true)->get();
 
-        return view('appointments.index', compact('appointments', 'clients', 'services', 'stylists'));
+        return view('appointments.index', compact('citas', 'clientes', 'servicios', 'estilistas'));
     });
 
-    Route::get('/asistencia', [AttendanceController::class, 'index']);
-    Route::post('/asistencia', [AttendanceController::class, 'store']);
+    Route::get('/asistencia', [AsistenciaController::class, 'index']);
+    Route::post('/asistencia', [AsistenciaController::class, 'store']);
 
-    Route::get('/clientes', [ClientController::class, 'index']);
-    Route::post('/clientes', [ClientController::class, 'store']);
-    Route::put('/clientes/{id}', [ClientController::class, 'update']);
-    Route::delete('/clientes/{id}', [ClientController::class, 'destroy']);
+    Route::get('/clientes', [ClienteController::class, 'index']);
+    Route::post('/clientes', [ClienteController::class, 'store']);
+    Route::put('/clientes/{id}', [ClienteController::class, 'update']);
+    Route::delete('/clientes/{id}', [ClienteController::class, 'destroy']);
 
 
     // -------------------------------------------------------------
@@ -73,32 +73,32 @@ Route::middleware(['auth'])->group(function () {
     Route::middleware(['role:recepcion'])->group(function () {
         
         Route::get('/pos', function () {
-            $services = \App\Models\Service::where('is_active', true)->orderBy('name', 'asc')->get();
-            $products = \App\Models\Item::where('type', '!=', 'servicio')->orderBy('producto', 'asc')->get();
-            $clients = \App\Models\Client::orderBy('name', 'asc')->get();
+            $servicios = \App\Models\Servicio::where('is_active', true)->orderBy('name', 'asc')->get();
+            $productos = \App\Models\Articulo::where('type', '!=', 'servicio')->orderBy('producto', 'asc')->get();
+            $clientes = \App\Models\Cliente::orderBy('name', 'asc')->get();
             
-            return view('sales.pos', compact('services', 'products', 'clients'));
+            return view('sales.pos', compact('servicios', 'productos', 'clientes'));
         });
 
-        Route::post('/sales', [SaleController::class, 'store']);
-        Route::post('/sales/bill-appointment/{appointment}', [SaleController::class, 'billAppointment']);
+        Route::post('/sales', [VentaController::class, 'store']);
+        Route::post('/sales/bill-appointment/{appointment}', [VentaController::class, 'facturarCita']);
 
-        Route::get('/historial-ventas', [SaleController::class, 'index']);
-        Route::get('/ventas/{id}/ticket', [SaleController::class, 'ticket']);
+        Route::get('/historial-ventas', [VentaController::class, 'index']);
+        Route::get('/ventas/{id}/ticket', [VentaController::class, 'ticket']);
 
-        Route::get('/adelantos', [AdvanceController::class, 'index']);
-        Route::post('/adelantos', [AdvanceController::class, 'store']);
-        Route::delete('/adelantos/{id}', [AdvanceController::class, 'destroy']);
+        Route::get('/adelantos', [AdelantoController::class, 'index']);
+        Route::post('/adelantos', [AdelantoController::class, 'store']);
+        Route::delete('/adelantos/{id}', [AdelantoController::class, 'destroy']);
 
-        Route::get('/caja/arqueo', [CashController::class, 'index']);
-        Route::post('/caja/abrir', [CashController::class, 'open']);
-        Route::post('/caja/cerrar', [CashController::class, 'close']);
+        Route::get('/caja/arqueo', [CajaController::class, 'index']);
+        Route::post('/caja/abrir', [CajaController::class, 'open']);
+        Route::post('/caja/cerrar', [CajaController::class, 'close']);
 
-        Route::get('/caja-chica', [PettyCashController::class, 'index']);
-        Route::post('/caja-chica/gasto', [PettyCashController::class, 'store']);
+        Route::get('/caja-chica', [CajaChicaController::class, 'index']);
+        Route::post('/caja-chica/gasto', [CajaChicaController::class, 'store']);
 
-        Route::get('/mesa-cambio', [ExchangeController::class, 'index']);
-        Route::post('/mesa-cambio/operar', [ExchangeController::class, 'store']);
+        Route::get('/mesa-cambio', [MesaCambioController::class, 'index']);
+        Route::post('/mesa-cambio/operar', [MesaCambioController::class, 'store']);
     });
 
 
@@ -110,59 +110,59 @@ Route::middleware(['auth'])->group(function () {
     Route::middleware(['role:admin'])->group(function () {
         
         // Reportes Financieros
-        Route::get('/reportes', [ReportController::class, 'index']);
-        Route::get('/reportes/excel', [ReportController::class, 'exportExcel']);
-        Route::get('/reportes/pdf', [ReportController::class, 'exportPdf']);
+        Route::get('/reportes', [ReporteController::class, 'index']);
+        Route::get('/reportes/excel', [ReporteController::class, 'exportExcel']);
+        Route::get('/reportes/pdf', [ReporteController::class, 'exportPdf']);
 
         // Recursos Humanos y Nómina
-        Route::get('/empleados', [EmployeeController::class, 'index']);
-        Route::post('/empleados', [EmployeeController::class, 'store']);
-        Route::put('/empleados/{id}', [EmployeeController::class, 'update']);
-        Route::delete('/empleados/{id}', [EmployeeController::class, 'destroy']);
+        Route::get('/empleados', [EmpleadoController::class, 'index']);
+        Route::post('/empleados', [EmpleadoController::class, 'store']);
+        Route::put('/empleados/{id}', [EmpleadoController::class, 'update']);
+        Route::delete('/empleados/{id}', [EmpleadoController::class, 'destroy']);
         
-        Route::get('/nomina', [PayrollController::class, 'index']);
-        Route::post('/nomina/generar', [PayrollController::class, 'store']);
-        Route::get('/nomina/{id}/ticket', [PayrollController::class, 'ticket']);
+        Route::get('/nomina', [NominaController::class, 'index']);
+        Route::post('/nomina/generar', [NominaController::class, 'store']);
+        Route::get('/nomina/{id}/ticket', [NominaController::class, 'ticket']);
 
         // Control de Inventario y Proveedores
-        Route::get('/inventario', [InventoryController::class, 'index']);
-        Route::post('/inventario', [InventoryController::class, 'store']);
-        Route::put('/inventario/{id}', [InventoryController::class, 'update']);
-        Route::delete('/inventario/{id}', [InventoryController::class, 'destroy']);
-        Route::get('/inventario/comprar', [InventoryController::class, 'createCompra']);
-        Route::post('/inventario/comprar', [InventoryController::class, 'registrarCompra']);
+        Route::get('/inventario', [InventarioController::class, 'index']);
+        Route::post('/inventario', [InventarioController::class, 'store']);
+        Route::put('/inventario/{id}', [InventarioController::class, 'update']);
+        Route::delete('/inventario/{id}', [InventarioController::class, 'destroy']);
+        Route::get('/inventario/comprar', [InventarioController::class, 'createCompra']);
+        Route::post('/inventario/comprar', [InventarioController::class, 'registrarCompra']);
         
-        Route::get('/proveedores', [ProviderController::class, 'index']);
-        Route::post('/proveedores', [ProviderController::class, 'store']);
-        Route::put('/proveedores/{id}', [ProviderController::class, 'update']);
-        Route::delete('/proveedores/{id}', [ProviderController::class, 'destroy']);
+        Route::get('/proveedores', [ProveedorController::class, 'index']);
+        Route::post('/proveedores', [ProveedorController::class, 'store']);
+        Route::put('/proveedores/{id}', [ProveedorController::class, 'update']);
+        Route::delete('/proveedores/{id}', [ProveedorController::class, 'destroy']);
 
         // Configuración de Catálogos y Fórmulas
-        Route::get('/servicios', [ServiceController::class, 'index']);
-        Route::post('/servicios', [ServiceController::class, 'store']);
-        Route::put('/servicios/{id}', [ServiceController::class, 'update']);
-        Route::delete('/servicios/{id}', [ServiceController::class, 'destroy']);
+        Route::get('/servicios', [ServicioController::class, 'index']);
+        Route::post('/servicios', [ServicioController::class, 'store']);
+        Route::put('/servicios/{id}', [ServicioController::class, 'update']);
+        Route::delete('/servicios/{id}', [ServicioController::class, 'destroy']);
         
         Route::get('/formulas', [FormulaController::class, 'index']);
         Route::post('/formulas', [FormulaController::class, 'store']);
         Route::delete('/formulas/{id}', [FormulaController::class, 'destroy']);
 
         // Seguridad del Sistema
-        Route::get('/backups', [BackupController::class, 'index']);
-        Route::get('/backups/descargar', [BackupController::class, 'download']);
-        Route::post('/backups/restaurar', [BackupController::class, 'restore']);
+        Route::get('/backups', [RespaldoController::class, 'index']);
+        Route::get('/backups/descargar', [RespaldoController::class, 'download']);
+        Route::post('/backups/restaurar', [RespaldoController::class, 'restore']);
 
         // Contabilidad
-        Route::get('/contabilidad', [AccountingController::class, 'diario']);
-        Route::post('/contabilidad/gasto', [AccountingController::class, 'storeGasto']);
-        Route::get('/contabilidad/mayor', [AccountingController::class, 'mayor']);
-        Route::get('/contabilidad/resultados', [AccountingController::class, 'resultados']);
+        Route::get('/contabilidad', [ContabilidadController::class, 'diario']);
+        Route::post('/contabilidad/gasto', [ContabilidadController::class, 'storeGasto']);
+        Route::get('/contabilidad/mayor', [ContabilidadController::class, 'mayor']);
+        Route::get('/contabilidad/resultados', [ContabilidadController::class, 'resultados']);
 
-        Route::get('/cuentas-por-pagar', [PayableController::class, 'index']);
-        Route::post('/cuentas-por-pagar/abonar', [PayableController::class, 'store']);
+        Route::get('/cuentas-por-pagar', [CuentaPorPagarController::class, 'index']);
+        Route::post('/cuentas-por-pagar/abonar', [CuentaPorPagarController::class, 'store']);
 
-        Route::get('/bancos', [BankController::class, 'index']);
-        Route::post('/bancos/depositar', [BankController::class, 'depositar']);
+        Route::get('/bancos', [BancoController::class, 'index']);
+        Route::post('/bancos/depositar', [BancoController::class, 'depositar']);
 
     });
 

@@ -11,6 +11,6 @@ class EsquemaComision extends Model
 
     public function empleado()
     {
-        return $this->belongsTo(User::class, 'empleado_id');
+        return $this->belongsTo(Usuario::class, 'empleado_id');
     }
 }

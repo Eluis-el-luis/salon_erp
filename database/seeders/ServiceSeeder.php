@@ -3,13 +3,13 @@
 namespace Database\Seeders;
 
 use Illuminate\Database\Seeder;
-use App\Models\Service;
+use App\Models\Servicio;
 
 class ServiceSeeder extends Seeder
 {
     public function run()
     {
-        Service::create([
+        Servicio::create([
             'name' => 'Corte de Cabello de Mujer',
             'description' => 'Lavado, corte y secado básico',
             'price' => 450.00,
@@ -17,7 +17,7 @@ class ServiceSeeder extends Seeder
             'is_active' => true,
         ]);
 
-        Service::create([
+        Servicio::create([
             'name' => 'Alisado de Keratina',
             'description' => 'Alisado permanente e hidratación profunda',
             'price' => 2500.00,

@@ -3,7 +3,7 @@
 @section('content')
 
 @php
-    $cajaAbierta = \App\Models\CashSession::where('user_id', auth()->id())
+    $cajaAbierta = \App\Models\SesionCaja::where('user_id', auth()->id())
                                           ->where('estado', 'abierta')
                                           ->exists();
 @endphp
@@ -50,23 +50,23 @@
         <div class="grid grid-cols-2 md:grid-cols-3 gap-4">
     
             <!-- Imprimir los Servicios -->
-            @foreach($services as $service)
-            <div @click="addItem({ id: {{ $service->id }}, producto: '{{ $service->name }}', precio_c: {{ $service->price }}, type: 'servicio' })" 
+            @foreach($servicios as $servicio)
+            <div @click="addItem({ id: {{ $servicio->id }}, producto: '{{ $servicio->name }}', precio_c: {{ $servicio->price }}, type: 'servicio' })" 
                 class="bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg p-4 cursor-pointer transition shadow-sm">
                 <span class="text-xs font-semibold text-emerald-600 uppercase">Servicio</span>
-                <h3 class="font-bold text-gray-800 mt-1">{{ $service->name }}</h3>
-                <p class="text-emerald-700 font-bold mt-2">C$ {{ number_format($service->price, 2) }}</p>
+                <h3 class="font-bold text-gray-800 mt-1">{{ $servicio->name }}</h3>
+                <p class="text-emerald-700 font-bold mt-2">C$ {{ number_format($servicio->price, 2) }}</p>
             </div>
             @endforeach
 
             <!-- Imprimir los Productos Físicos -->
-            @foreach($products as $product)
-            <div @click="addItem({ id: {{ $product->id }}, producto: '{{ $product->producto }}', precio_c: {{ $product->precio_c }}, type: 'producto' })" 
+            @foreach($productos as $producto)
+            <div @click="addItem({ id: {{ $producto->id }}, producto: '{{ $producto->producto }}', precio_c: {{ $producto->precio_c }}, type: 'producto' })" 
                 class="bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg p-4 cursor-pointer transition shadow-sm">
                 <span class="text-xs font-semibold text-blue-600 uppercase">Producto</span>
-                <h3 class="font-bold text-gray-800 mt-1">{{ $product->producto }}</h3>
-                <p class="text-blue-700 font-bold mt-2">C$ {{ number_format($product->precio_c, 2) }}</p>
-                <p class="text-xs text-gray-500 mt-1">Stock: {{ $product->existencia_actual }}</p>
+                <h3 class="font-bold text-gray-800 mt-1">{{ $producto->producto }}</h3>
+                <p class="text-blue-700 font-bold mt-2">C$ {{ number_format($producto->precio_c, 2) }}</p>
+                <p class="text-xs text-gray-500 mt-1">Stock: {{ $producto->existencia_actual }}</p>
             </div>
             @endforeach
 
@@ -104,8 +104,8 @@
                     <label class="block text-xs font-bold text-gray-700 mb-1">Asignar a Cliente (Opcional)</label>
                     <select x-model="clientId" class="w-full text-sm shadow-sm border border-gray-300 rounded py-1.5 px-2 text-gray-700 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500">
                         <option value="" selected>-- Público en General --</option>
-                        @foreach($clients as $client)
-                            <option value="{{ $client->id }}">{{ $client->name }}</option>
+                        @foreach($clientes as $cliente)
+                            <option value="{{ $cliente->id }}">{{ $cliente->name }}</option>
                         @endforeach
                     </select>
                 </div>

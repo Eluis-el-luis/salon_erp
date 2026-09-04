@@ -13,9 +13,9 @@ class OperacionCambio extends Model
         'origen_pago_tipo', 'origen_pago_id', 'cliente_id', 'usuario_id', 'estado'
     ];
 
-    // Polimórfico: De qué caja o cuenta bancaria se sacaron los córdobas para comprar los dólares[cite: 5]
+    // Polimórfico con prefijo explícito: la tabla usa origen_pago_tipo / origen_pago_id
     public function origenPago()
     {
-        return $this->morphTo();
+        return $this->morphTo(__FUNCTION__, 'origen_pago_tipo', 'origen_pago_id');
     }
 }
