@@ -9,6 +9,7 @@ use App\Models\Cliente;
 use Illuminate\Support\Facades\Validator;
 use App\Services\ContabilidadService;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class AdelantoController extends Controller
 {
@@ -60,7 +61,12 @@ class AdelantoController extends Controller
 
         } catch (\Exception $e) {
             DB::rollBack();
-            return response()->json(['errors' => ['general' => 'Error contable: ' . $e->getMessage()]], 500);
+            Log::error('Error contable al registrar movimiento CxC', [
+                'exception' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'request' => $request->all(),
+            ]);
+            return response()->json(['errors' => ['general' => 'Error contable al registrar el movimiento. Contacte al administrador.']], 500);
         }
     }
 
@@ -96,8 +102,13 @@ class AdelantoController extends Controller
 
         } catch (\Exception $e) {
             \Illuminate\Support\Facades\DB::rollBack();
+            Log::error('Error contable al revertir movimiento CxC', [
+                'advance_id' => $id,
+                'exception' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
             return response()->json([
-                'errors' => ['general' => 'Error contable al revertir: ' . $e->getMessage()]
+                'errors' => ['general' => 'Error contable al revertir el movimiento. Contacte al administrador.']
             ], 500);
         }
     }

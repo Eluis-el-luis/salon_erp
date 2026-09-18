@@ -11,6 +11,9 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
 use App\Models\ComisionGenerada;
 use App\Models\Usuario;
+use App\Models\SesionCaja;
+use App\Services\InventarioService;
+use App\Services\DivisaService;
 
 class VentaController extends Controller
 {
@@ -24,7 +27,14 @@ class VentaController extends Controller
         
         if (!$cajaAbierta) {
             return response()->json(['error' => 'ACCESO DENEGADO: Por seguridad, debes abrir tu turno de caja antes de facturar esta cita.'], 403);
-        }    
+        }
+
+        $request->validate([
+            'discount' => 'nullable|numeric|min:0',
+            'payment_method' => 'nullable|string|in:efectivo,bac,lafise',
+            'currency' => 'nullable|string|in:nio,usd',
+            'exchange_rate' => 'nullable|numeric|min:1',
+        ]);
 
         $cita = \App\Models\Cita::with(['servicio', 'estilistas'])->findOrFail($id);
         \Illuminate\Support\Facades\DB::beginTransaction();
@@ -41,9 +51,9 @@ class VentaController extends Controller
                 'discount' => $descuento,
                 'total' => $total > 0 ? $total : 0,
                 
-                // NUEVOS CAMPOS ADAPTADOS
+                // NUEVOS CAMPOS ADAPTADOS (sin tasa fija: se valida desde el request)
                 'currency' => $request->currency ?? 'nio',
-                'exchange_rate' => $request->exchange_rate ?? 36.50,
+                'exchange_rate' => $request->currency === 'usd' ? ($request->exchange_rate ?? 1.00) : 1.00,
                 'payment_method' => $request->payment_method ?? 'efectivo',
                 
                 'status' => 'completada'
@@ -81,6 +91,24 @@ class VentaController extends Controller
             $cita->update(['status' => 'completada']);
 
             $venta->load('detalles');
+
+            // Consumo de insumos fraccionados del servicio facturado (fórmulas)
+            (new InventarioService())->descontarPorVenta($venta);
+
+            // Multimoneda: factura de servicio cobrada en USD en efectivo aumenta el inventario de dólares
+            if (($venta->currency === 'usd' || $venta->currency === 'dolar') && $venta->payment_method === 'efectivo') {
+                $cajaActiva = SesionCaja::where('user_id', auth()->id())->where('estado', 'abierta')->first();
+                if ($cajaActiva) {
+                    (new DivisaService())->ingresarDivisas(
+                        'USD',
+                        'App\Models\SesionCaja',
+                        $cajaActiva->id,
+                        (float) $venta->total,
+                        (float) $venta->exchange_rate
+                    );
+                }
+            }
+
             $contabilidad = new \App\Services\ContabilidadService();
             $contabilidad->contabilizarVenta($venta);
             $this->registrarComisionesVenta($venta);
@@ -91,7 +119,12 @@ class VentaController extends Controller
 
         } catch (\Exception $e) {
             \Illuminate\Support\Facades\DB::rollBack();
-            return response()->json(['error' => 'Error al generar la factura: ' . $e->getMessage()], 500);
+            Log::error('Error al facturar cita', [
+                'appointment_id' => $id,
+                'exception' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            return response()->json(['error' => 'Error al generar la factura. Contacte al administrador.'], 500);
         }
     }
 
@@ -164,30 +197,21 @@ class VentaController extends Controller
 
             $venta->load('detalles');
 
-            foreach ($venta->detalles as $detalle) {
-                if ($detalle->service_id != null) {
-                    $servicio = \App\Models\Servicio::with('formulas.articulo')->find($detalle->service_id);
-                    foreach ($servicio->formulas as $formula) {
-                        $articulo = $formula->articulo;
-                        $cantidadADescontar = $formula->quantity_used * $detalle->quantity;
-                        $articulo->current_volume -= $cantidadADescontar;
+            // Descuento de inventario (insumos fraccionados por fórmulas + productos físicos)
+            $stockCritico = (new InventarioService())->descontarPorVenta($venta);
 
-                        while ($articulo->current_volume <= 0) {
-                            if ($articulo->existencia_actual > 0) {
-                                $articulo->existencia_actual -= 1; 
-                                $articulo->current_volume += $articulo->total_volume; 
-                            } else {
-                                break; 
-                            }
-                        }
-                        $articulo->save();
-                    }
-                }
-                
-                if ($detalle->item_id != null) {
-                    $articulo = \App\Models\Articulo::find($detalle->item_id);
-                    $articulo->existencia_actual -= $detalle->quantity;
-                    $articulo->save();
+            // Multimoneda: una venta cobrada en USD en efectivo aumenta el inventario físico
+            // de dólares de la caja, recalculando el costo promedio ponderado.
+            if (($venta->currency === 'usd' || $venta->currency === 'dolar') && $venta->payment_method === 'efectivo') {
+                $cajaActiva = SesionCaja::where('user_id', auth()->id())->where('estado', 'abierta')->first();
+                if ($cajaActiva) {
+                    (new DivisaService())->ingresarDivisas(
+                        'USD',
+                        'App\Models\SesionCaja',
+                        $cajaActiva->id,
+                        (float) $venta->total,
+                        (float) $venta->exchange_rate
+                    );
                 }
             }
 
@@ -204,7 +228,12 @@ class VentaController extends Controller
 
         } catch (\Exception $e) {
             \Illuminate\Support\Facades\DB::rollBack();
-            return response()->json(['error' => 'Error al guardar la venta: ' . $e->getMessage()], 500);
+            Log::error('Error al guardar la venta', [
+                'exception' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'request' => $request->all(),
+            ]);
+            return response()->json(['error' => 'Error al guardar la venta. Contacte al administrador.'], 500);
         }
     }
 

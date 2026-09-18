@@ -10,23 +10,14 @@ use App\Models\MovimientoBancario;
 use App\Models\SesionCaja;
 use App\Services\ContabilidadService;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
 
 class BancoController extends Controller
 {
     public function index()
     {
-        // 1. Truco: Crear BAC y LAFISE automáticamente si el catálogo está vacío
-        if (Banco::count() == 0) {
-            $bac = Banco::create(['codigo' => 'BAC', 'nombre' => 'BAC Credomatic']);
-            $lafise = Banco::create(['codigo' => 'LAFISE', 'nombre' => 'Banco LAFISE Bancentro']);
-            
-            $moneda = DB::table('monedas')->where('es_base', true)->first();
-            if ($moneda) {
-                CuentaBancaria::create(['banco_id' => $bac->id, 'numero_cuenta' => 'BAC-77889900', 'tipo_cuenta' => 'Corriente', 'moneda_id' => $moneda->id, 'saldo_actual' => 0]);
-                CuentaBancaria::create(['banco_id' => $lafise->id, 'numero_cuenta' => 'LAF-11223344', 'tipo_cuenta' => 'Ahorro', 'moneda_id' => $moneda->id, 'saldo_actual' => 0]);
-            }
-        }
+        $this->asegurarCatalogoBancario();
 
         $cuentas = CuentaBancaria::with('banco')->get();
         
@@ -34,6 +25,43 @@ class BancoController extends Controller
         $cajaActiva = SesionCaja::where('user_id', auth()->id())->where('estado', 'abierta')->first();
 
         return view('banks.index', compact('cuentas', 'cajaActiva'));
+    }
+
+    /**
+     * Asegura que exista el catálogo bancario base (BAC y LAFISE) de forma
+     * IDEMPOTENTE, sin depender del conteo global ni duplicar registros.
+     */
+    protected function asegurarCatalogoBancario(): void
+    {
+        $moneda = DB::table('monedas')->where('es_base', true)->first();
+        if (!$moneda) {
+            return;
+        }
+
+        $bancosBase = [
+            ['codigo' => 'BAC', 'nombre' => 'BAC Credomatic'],
+            ['codigo' => 'LAFISE', 'nombre' => 'Banco LAFISE Bancentro'],
+        ];
+
+        foreach ($bancosBase as $bancoBase) {
+            $banco = Banco::firstOrCreate(
+                ['codigo' => $bancoBase['codigo']],
+                ['nombre' => $bancoBase['nombre'], 'activo' => true]
+            );
+
+            $existeCuenta = CuentaBancaria::where('banco_id', $banco->id)->exists();
+            if (!$existeCuenta) {
+                CuentaBancaria::create([
+                    'banco_id' => $banco->id,
+                    'numero_cuenta' => strtoupper($banco->codigo) . '-00000000',
+                    'tipo_cuenta' => 'Corriente',
+                    'moneda_id' => $moneda->id,
+                    'saldo_actual' => 0,
+                    'activa' => true,
+                ]);
+                Log::info('Cuenta bancaria base creada', ['banco' => $banco->codigo]);
+            }
+        }
     }
 
     public function depositar(Request $request)
@@ -77,7 +105,7 @@ class BancoController extends Controller
 
             // 4. Disparar Motor Contable
             $contabilidad = new ContabilidadService();
-            $contabilidad->contabilizarTransferencia($request->monto, $transferencia->id);
+            $contabilidad->contabilizarTransferencia($transferencia);
 
             DB::commit();
 
@@ -85,7 +113,12 @@ class BancoController extends Controller
 
         } catch (\Exception $e) {
             DB::rollBack();
-            return back()->withErrors(['error' => 'Error al procesar el depósito: ' . $e->getMessage()]);
+            Log::error('Error al procesar depósito bancario', [
+                'exception' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'request' => $request->all(),
+            ]);
+            return back()->withErrors(['error' => 'Error al procesar el depósito. Contacte al administrador.']);
         }
     }
 }

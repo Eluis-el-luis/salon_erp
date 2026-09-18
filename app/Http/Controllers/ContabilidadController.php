@@ -7,6 +7,7 @@ use App\Models\AsientoContable;
 use App\Models\CuentaContable;
 use App\Services\ContabilidadService;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class ContabilidadController extends Controller
 {
@@ -32,7 +33,7 @@ class ContabilidadController extends Controller
             'descripcion' => 'required|string|max:255',
             'monto' => 'required|numeric|min:1',
             'cuenta_id' => 'required|exists:cuentas_contables,id',
-            'metodo_pago' => 'required|in:efectivo,banco'
+            'metodo_pago' => 'required|in:efectivo,banco,bac,lafise'
         ]);
 
         DB::beginTransaction(); // INICIA LA PROTECCIÓN
@@ -51,7 +52,12 @@ class ContabilidadController extends Controller
 
         } catch (\Exception $e) {
             DB::rollBack(); // REVERTIMOS TODO SI HAY DESCUADRE
-            return back()->withErrors(['error' => 'Error contable: ' . $e->getMessage()]);
+            Log::error('Error contable al registrar gasto', [
+                'exception' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'request' => $request->all(),
+            ]);
+            return back()->withErrors(['error' => 'Error contable al registrar el gasto. Contacte al administrador.']);
         }
     }
 

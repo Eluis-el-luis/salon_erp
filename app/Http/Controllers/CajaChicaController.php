@@ -9,6 +9,7 @@ use App\Models\MovimientoCajaChica;
 use App\Models\CuentaContable;
 use App\Services\ContabilidadService;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
 
 class CajaChicaController extends Controller
@@ -88,7 +89,12 @@ class CajaChicaController extends Controller
 
         } catch (\Exception $e) {
             DB::rollBack();
-            return back()->withErrors(['error' => 'Error al registrar el gasto: ' . $e->getMessage()]);
+            Log::error('Error al registrar gasto de caja chica', [
+                'exception' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'request' => $request->all(),
+            ]);
+            return back()->withErrors(['error' => 'Error al registrar el gasto. Contacte al administrador.']);
         }
     }
 }

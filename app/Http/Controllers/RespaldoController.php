@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Response;
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
 use Ifsnop\Mysqldump as IMysqldump;
 
@@ -50,7 +51,11 @@ class RespaldoController extends Controller
             return Response::download($rutaArchivo)->deleteFileAfterSend(true);
             
         } catch (\Exception $e) {
-            return redirect()->back()->with('error', 'Error al generar el respaldo: ' . $e->getMessage());
+            Log::error('Error al generar respaldo SQL', [
+                'exception' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            return redirect()->back()->with('error', 'Error al generar el respaldo. Contacte al administrador.');
         }
     }
 
@@ -79,8 +84,11 @@ class RespaldoController extends Controller
             return redirect()->back()->with('success', '¡Base de datos restaurada con éxito!');
 
         } catch (\Exception $e) {
-            // Si el archivo está corrupto o hay un error de sintaxis SQL, lo capturamos
-            return redirect()->back()->with('error', 'Error crítico al restaurar: ' . $e->getMessage());
+            Log::error('Error crítico al restaurar base de datos', [
+                'exception' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            return redirect()->back()->with('error', 'Error crítico al restaurar la base de datos. El archivo pudo estar corrupto.');
         }
     }
 }

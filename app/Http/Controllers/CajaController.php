@@ -6,6 +6,8 @@ use Illuminate\Http\Request;
 use App\Models\SesionCaja;
 use App\Models\Venta;
 use App\Services\ContabilidadService;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
 
 class CajaController extends Controller
@@ -58,25 +60,48 @@ class CajaController extends Controller
     {
         $request->validate([
             'monto_fisico' => 'required|numeric|min:0',
-            'monto_teorico' => 'required|numeric',
         ]);
 
-        $sesion = SesionCaja::where('user_id', auth()->id())->where('estado', 'abierta')->firstOrFail();
-        
-        $diferencia = $request->monto_fisico - $request->monto_teorico;
+        DB::beginTransaction();
 
-        $sesion->update([
-            'fecha_cierre' => Carbon::now(),
-            'monto_teorico' => $request->monto_teorico,
-            'monto_fisico' => $request->monto_fisico,
-            'diferencia' => $diferencia,
-            'estado' => 'cerrada'
-        ]);
+        try {
+            $sesion = SesionCaja::where('user_id', auth()->id())->where('estado', 'abierta')->firstOrFail();
 
-        // Disparamos la contabilidad automática
-        $contabilidad = new ContabilidadService();
-        $contabilidad->contabilizarArqueo($sesion);
+            // MANDAMIENTO: El monto teórico SIEMPRE lo calcula el backend.
+            // Nunca se confía en el valor que envía el frontend.
+            $ventasEfectivoTurno = Venta::where('payment_method', 'efectivo')
+                ->where('cashier_id', auth()->id())
+                ->where('created_at', '>=', $sesion->fecha_apertura)
+                ->sum('total');
 
-        return back()->with('success', 'Arqueo realizado. Turno cerrado.');
+            $montoTeorico = round((float) $sesion->monto_apertura + (float) $ventasEfectivoTurno, 2);
+            $montoFisico = round((float) $request->monto_fisico, 2);
+            $diferencia = round($montoFisico - $montoTeorico, 2);
+
+            $sesion->update([
+                'fecha_cierre' => Carbon::now(),
+                'monto_teorico' => $montoTeorico,
+                'monto_fisico' => $montoFisico,
+                'diferencia' => $diferencia,
+                'estado' => 'cerrada'
+            ]);
+
+            // Disparamos la contabilidad automática (el arqueo valida su propio cuadre)
+            $contabilidad = new ContabilidadService();
+            $contabilidad->contabilizarArqueo($sesion);
+
+            DB::commit();
+
+            return back()->with('success', 'Arqueo realizado. Turno cerrado. Diferencia: C$ ' . number_format($diferencia, 2));
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Error al cerrar arqueo de caja', [
+                'exception' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'request' => $request->all(),
+            ]);
+            return back()->withErrors(['error' => 'Error al realizar el arqueo. Contacte al administrador.']);
+        }
     }
 }

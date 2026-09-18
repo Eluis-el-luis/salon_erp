@@ -9,6 +9,7 @@ use App\Models\ComisionGenerada;
 use App\Models\Adelanto;
 use App\Services\ContabilidadService;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
 
 class NominaController extends Controller
@@ -94,7 +95,13 @@ class NominaController extends Controller
 
         } catch (\Exception $e) {
             DB::rollBack();
-            return redirect()->back()->withErrors(['error' => 'Error al generar la nómina: ' . $e->getMessage()]);
+            Log::error('Error al generar nómina', [
+                'user_id' => $request->user_id,
+                'exception' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'request' => $request->all(),
+            ]);
+            return redirect()->back()->withErrors(['error' => 'Error al generar la nómina. Contacte al administrador.']);
         }
     }
 

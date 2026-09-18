@@ -45,6 +45,34 @@ class ContabilidadService
         return $this->monedaBaseId;
     }
 
+    /**
+     * MANDAMIENTO CATÁLOGO ADAPTADO: resuelve la subcuenta de banco específica
+     * (BAC -> 1.1.2.2, LAFISE -> 1.1.2.1). "banco" genérico apunta a Lafise.
+     */
+    protected function getBancoIdPorMetodo(string $metodoPago): int
+    {
+        if ($metodoPago === 'bac') {
+            return $this->getCuentaIdByCodigo('1.1.2.2');
+        }
+        return $this->getCuentaIdByCodigo('1.1.2.1'); // lafise / banco genérico
+    }
+
+    /**
+     * MANDAMIENTO CATÁLOGO ADAPTADO: deduce la subcuenta de banco a partir de la
+     * CuentaBancaria de destino de una transferencia (BAC/LAFISE).
+     */
+    protected function getCuentaBancoDestino($transferencia): int
+    {
+        $codigoBanco = '1.1.2.1'; // Lafise por defecto
+        if ($transferencia->destino_tipo === \App\Models\CuentaBancaria::class) {
+            $cuenta = \App\Models\CuentaBancaria::with('banco')->find($transferencia->destino_id);
+            if ($cuenta && $cuenta->banco && strtoupper($cuenta->banco->codigo) === 'BAC') {
+                $codigoBanco = '1.1.2.2';
+            }
+        }
+        return $this->getCuentaIdByCodigo($codigoBanco);
+    }
+
     public function contabilizarVenta($sale)
     {
         // 1. Identificar el periodo actual
@@ -283,11 +311,11 @@ public function contabilizarGasto($descripcion, $monto, $cuentaGastoId, $metodoP
         if (!$periodo) return;
 
         // 2. Extraer Cuentas
-        $cuentaCaja = CuentaContable::where('codigo', '1.1.1')->first()->id;
-        $cuentaBanco = CuentaContable::where('codigo', '1.1.2.1')->first()->id;
-        $monedaBase = DB::table('monedas')->where('es_base', true)->first()->id;
+        $cuentaCaja = $this->getCuentaIdByCodigo('1.1.1');
+        $monedaBase = $this->getMonedaBaseId();
 
-        $cuentaOrigenFondos = ($metodoPago == 'efectivo') ? $cuentaCaja : $cuentaBanco;
+        // MANDAMIENTO CATÁLOGO ADAPTADO: subcuenta de banco específica (BAC/LAFISE)
+        $cuentaOrigenFondos = ($metodoPago == 'efectivo') ? $cuentaCaja : $this->getBancoIdPorMetodo($metodoPago);
 
         DB::beginTransaction();
         try {
@@ -532,23 +560,26 @@ public function contabilizarGasto($descripcion, $monto, $cuentaGastoId, $metodoP
         }
     }
 
-    public function contabilizarTransferencia($monto, $referenciaId)
+    public function contabilizarTransferencia($transferencia)
     {
         $periodo = DB::table('periodos_contables')->where('estado', 'abierto')->first();
         if (!$periodo) return;
 
-        $monedaBase = DB::table('monedas')->where('es_base', true)->first()->id;
-        $cuentaCaja = CuentaContable::where('codigo', '1.1.1')->first()->id;
-        $cuentaBanco = CuentaContable::where('codigo', '1.1.2.1')->first()->id;
+        $monedaBase = $this->getMonedaBaseId();
+        $cuentaCaja = $this->getCuentaIdByCodigo('1.1.1');
+        // MANDAMIENTO CATÁLOGO ADAPTADO: subcuenta específica del banco de destino (BAC/LAFISE)
+        $cuentaBanco = $this->getCuentaBancoDestino($transferencia);
+
+        $monto = round((float) $transferencia->monto, 2);
 
         DB::beginTransaction();
         try {
             $asiento = AsientoContable::create([
-            'numero_asiento' => 'DEP-' . time(),
+            'numero_asiento' => 'DEP-' . str_pad($transferencia->id, 5, '0', STR_PAD_LEFT),
             'fecha' => \Carbon\Carbon::now(),
-            'concepto' => 'Depósito / Transferencia de Caja a Banco (Ref #' . $referenciaId . ')',
+            'concepto' => 'Depósito / Transferencia de Caja a Banco (Ref #' . $transferencia->id . ')',
             'modulo_origen' => 'transferencias',
-            'referencia_id' => $referenciaId,
+            'referencia_id' => $transferencia->id,
             'periodo_id' => $periodo->id,
             'usuario_id' => auth()->id() ?? 1,
         ]);
@@ -584,13 +615,13 @@ public function contabilizarGasto($descripcion, $monto, $cuentaGastoId, $metodoP
         $monedaBase = \Illuminate\Support\Facades\DB::table('monedas')->where('es_base', true)->first()->id;
         
         // Cuentas del catálogo adaptado
-        $cuentaSueldos = \App\Models\CuentaContable::where('codigo', '6.7')->first()->id ?? 1; // Sueldos y Salarios
-        $cuentaComisiones = \App\Models\CuentaContable::where('codigo', '5.3')->first()->id ?? 1; // Comisiones Estilistas
-        // CORRECCIÓN: Usar 1.1.6 (Adelantos de Salario) en lugar de 1.1.5 (Inventario de Insumos)
-        $cuentaAnticipos = \App\Models\CuentaContable::where('codigo', '1.1.6')->first()->id ?? 1; // Adelantos de Salario
-        
-        $cuentaCaja = \App\Models\CuentaContable::where('codigo', '1.1.1')->first()->id ?? 1;
-        $cuentaBanco = \App\Models\CuentaContable::where('codigo', '1.1.3')->first()->id ?? 1;
+        $cuentaSueldos = $this->getCuentaIdByCodigo('6.7'); // Sueldos y Salarios
+        $cuentaComisiones = $this->getCuentaIdByCodigo('5.3'); // Comisiones Estilistas
+        $cuentaAnticipos = $this->getCuentaIdByCodigo('1.1.6'); // Adelantos de Salario
+
+        $cuentaCaja = $this->getCuentaIdByCodigo('1.1.1');
+        // CORRECCIÓN: 1.1.3 era "Cuentas por Cobrar". El banco por defecto es una subcuenta específica (Lafise).
+        $cuentaBanco = $this->getCuentaIdByCodigo('1.1.2.1');
         $cuentaOrigen = ($metodoPago == 'banco') ? $cuentaBanco : $cuentaCaja;
 
         $asiento = \App\Models\AsientoContable::create([
@@ -663,13 +694,15 @@ public function contabilizarGasto($descripcion, $monto, $cuentaGastoId, $metodoP
 
         // Detectar el tipo de Deudor usando el catálogo adaptado
         if ($advance->user_id) {
-            $cuentaDeuda = \App\Models\CuentaContable::where('codigo', '1.1.6')->first()->id ?? 1; // Anticipos a Empleados
+            $cuentaDeuda = $this->getCuentaIdByCodigo('1.1.6'); // Anticipos a Empleados
         } else {
-            $cuentaDeuda = \App\Models\CuentaContable::where('codigo', '1.1.4')->first()->id ?? 1; // Cuentas por Cobrar Clientes
+            // CORRECCIÓN: 1.1.3 es "Cuentas por Cobrar". Antes apuntaba a 1.1.4 (Inventario).
+            $cuentaDeuda = $this->getCuentaIdByCodigo('1.1.3'); // Cuentas por Cobrar Clientes
         }
 
-        $cuentaCaja = \App\Models\CuentaContable::where('codigo', '1.1.1')->first()->id ?? 1;
-        $cuentaBanco = \App\Models\CuentaContable::where('codigo', '1.1.3')->first()->id ?? 1;
+        $cuentaCaja = $this->getCuentaIdByCodigo('1.1.1');
+        // CORRECCIÓN: banco por subcuenta específica (Lafise), no 1.1.3 (CxC).
+        $cuentaBanco = $this->getCuentaIdByCodigo('1.1.2.1');
         $cuentaFondos = ($metodoPago == 'banco') ? $cuentaBanco : $cuentaCaja;
 
         DB::beginTransaction();
@@ -728,30 +761,98 @@ public function contabilizarGasto($descripcion, $monto, $cuentaGastoId, $metodoP
             ->selectRaw('SUM(debe) as total_debe, SUM(haber) as total_haber')
             ->first();
 
-        $debe = round($totales->total_debe ?? 0, 2);
-        $haber = round($totales->total_haber ?? 0, 2);
-        $diferencia = round(abs($debe - $haber), 2);
+        // VALIDACIÓN ESTRICTA DE PARTIDA DOBLE a 2 decimales.
+        // Se comparan los valores redondeados al centavo (enteros) para evitar
+        // diferencias por precisión de punto flotante. NO se admite tolerancia:
+        // el DEBE debe ser EXACTAMENTE igual al HABER.
+        $debeCents = (int) round(((float) ($totales->total_debe ?? 0)) * 100);
+        $haberCents = (int) round(((float) ($totales->total_haber ?? 0)) * 100);
 
-        // Tolerancia de 0.02 para absorber diferencias de redondeo en cálculos intermedios
-        $tolerancia = 0.02;
-        
-        if ($diferencia > $tolerancia) {
-            throw new Exception("Error Crítico de Partida Doble: Asiento contable ID [{$asientoId}] descuadrado por C$ {$diferencia}. (Debe: C$ {$debe} | Haber: C$ {$haber}). Tolerancia permitida: C$ {$tolerancia}.");
+        if ($debeCents !== $haberCents) {
+            $diferencia = abs($debeCents - $haberCents) / 100;
+            throw new Exception(
+                "Error Crítico de Partida Doble: Asiento contable ID [{$asientoId}] descuadrado por C$ " .
+                number_format($diferencia, 2, '.', '') .
+                ". (Debe: C$ " . number_format($debeCents / 100, 2, '.', '') .
+                " | Haber: C$ " . number_format($haberCents / 100, 2, '.', '') . ")."
+            );
         }
     }
 
-   
+    /**
+     * MANDAMIENTO: Los retiros del propietario NUNCA son gastos operativos.
+     * Se registran contra la contra-cuenta de Patrimonio 3.3 "Retiros del Propietario".
+     *
+     * DEBE  -> 3.3 Retiros del Propietario (incrementa el contra-capital, reduce el patrimonio)
+     * HABER -> Caja (1.1.1) o Banco (1.1.2.1) según el método de pago
+     */
+    public function contabilizarRetiroPropietario($retiro, $metodoPago = 'efectivo')
+    {
+        $periodo = DB::table('periodos_contables')
+            ->where('estado', 'abierto')
+            ->whereDate('fecha_inicio', '<=', $retiro->fecha)
+            ->whereDate('fecha_fin', '>=', $retiro->fecha)
+            ->first();
+
+        if (!$periodo) {
+            throw new Exception("Operación Cancelada: No existe un periodo contable abierto para la fecha del retiro.");
+        }
+
+        $monedaBase = $this->getMonedaBaseId();
+        $cuentaRetiros = $this->getCuentaIdByCodigo('3.3');
+        $cuentaCaja = $this->getCuentaIdByCodigo('1.1.1');
+        $cuentaBanco = $this->getCuentaIdByCodigo('1.1.2.1');
+        $cuentaOrigen = ($metodoPago == 'banco') ? $cuentaBanco : $cuentaCaja;
+
+        $monto = round((float) $retiro->monto, 2);
+
+        DB::beginTransaction();
+        try {
+            $asiento = AsientoContable::create([
+                'numero_asiento' => 'RET-' . str_pad($retiro->id, 5, '0', STR_PAD_LEFT),
+                'fecha' => $retiro->fecha,
+                'concepto' => 'Retiro de propietario: ' . $retiro->concepto,
+                'modulo_origen' => 'retiros',
+                'referencia_id' => $retiro->id,
+                'periodo_id' => $periodo->id,
+                'usuario_id' => auth()->id() ?? 1,
+            ]);
+
+            DetalleAsiento::create([
+                'asiento_id' => $asiento->id,
+                'cuenta_id' => $cuentaRetiros,
+                'moneda_id' => $monedaBase,
+                'debe' => $monto,
+                'haber' => 0,
+                'descripcion' => 'Retiro de propietario (contra patrimonio)',
+            ]);
+
+            DetalleAsiento::create([
+                'asiento_id' => $asiento->id,
+                'cuenta_id' => $cuentaOrigen,
+                'moneda_id' => $monedaBase,
+                'debe' => 0,
+                'haber' => $monto,
+                'descripcion' => 'Salida de fondos por retiro del propietario',
+            ]);
+
+            $this->validarCuadre($asiento->id);
+            DB::commit();
+        } catch (Exception $e) {
+            DB::rollBack();
+            throw $e;
+        }
+    }
 
     public function contabilizarOperacionCambio($operacion, $diferencial = 0)
     {
         $periodo = \Illuminate\Support\Facades\DB::table('periodos_contables')->where('estado', 'abierto')->first();
         if (!$periodo) return;
 
-        // CORRECCIÓN B9: cuentas de caja por divisa.
-        // Caja NIO (Córdobas): 1.1.1 — Caja USD: 1.1.1.2 (subcuenta de Caja) con fallback a 1.1.1.
-        $cuentaCajaNio = \App\Models\CuentaContable::where('codigo', '1.1.1')->first()->id ?? 1;
-        $cuentaCajaUsd = \App\Models\CuentaContable::where('codigo', '1.1.1.2')->first()->id
-            ?? \App\Models\CuentaContable::where('codigo', '1.1.1')->first()->id ?? 1;
+        // CORRECCIÓN B9: cuentas de caja por divisa (subcuentas específicas del catálogo).
+        // Caja NIO (Córdobas): 1.1.1.1 — Caja USD: 1.1.1.2 (subcuenta de Caja).
+        $cuentaCajaNio = $this->getCuentaIdByCodigo('1.1.1.1');
+        $cuentaCajaUsd = $this->getCuentaIdByCodigo('1.1.1.2');
 
         $monedaBase = \Illuminate\Support\Facades\DB::table('monedas')->where('es_base', true)->first()->id;
 

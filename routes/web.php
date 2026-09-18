@@ -22,6 +22,7 @@ use App\Http\Controllers\CuentaPorPagarController;
 use App\Http\Controllers\CajaChicaController;
 use App\Http\Controllers\BancoController;
 use App\Http\Controllers\MesaCambioController;
+use App\Http\Controllers\RetiroController;
 
 // =================================================================
 // RUTAS PÚBLICAS (No requieren sesión)
@@ -163,6 +164,9 @@ Route::middleware(['auth'])->group(function () {
 
         Route::get('/bancos', [BancoController::class, 'index']);
         Route::post('/bancos/depositar', [BancoController::class, 'depositar']);
+
+        Route::get('/retiros', [RetiroController::class, 'index']);
+        Route::post('/retiros', [RetiroController::class, 'store']);
 
     });
 

@@ -8,6 +8,7 @@ use App\Models\Proveedor;
 use App\Models\CuentaPorPagar;
 use App\Services\ContabilidadService;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
 
 class InventarioController extends Controller
@@ -123,7 +124,12 @@ class InventarioController extends Controller
 
         } catch (\Exception $e) {
             DB::rollBack();
-            return response()->json(['error' => 'Error al procesar la compra: ' . $e->getMessage()], 500);
+            Log::error('Error al procesar compra de inventario', [
+                'exception' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'request' => $request->all(),
+            ]);
+            return response()->json(['error' => 'Error al procesar la compra. Contacte al administrador.'], 500);
         }
     }
 

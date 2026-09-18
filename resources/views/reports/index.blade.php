@@ -51,6 +51,9 @@
         <button @click="tab = 'inventario'" :class="tab === 'inventario' ? 'bg-purple-50 text-purple-700 shadow-sm border-purple-200' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50 border-transparent'" class="flex-1 py-3 px-4 rounded-lg font-bold text-sm border transition">
             📦 Valoración de Inventario
         </button>
+        <button @click="tab = 'cambio'" :class="tab === 'cambio' ? 'bg-amber-50 text-amber-700 shadow-sm border-amber-200' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50 border-transparent'" class="flex-1 py-3 px-4 rounded-lg font-bold text-sm border transition">
+            💱 Diferencial Cambiario
+        </button>
     </div>
 
     <!-- CONTENIDO DE LAS PESTAÑAS -->
@@ -163,6 +166,70 @@
             </table>
         </div>
         @endif
+    </div>
+
+    <!-- TAB 4: DIFERENCIAL CAMBIARIO -->
+    <div x-show="tab === 'cambio'" class="space-y-6" style="display: none;" x-transition>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 border-l-4 border-l-emerald-500">
+                <p class="text-xs font-bold text-gray-500 uppercase tracking-widest mb-1">Ganancias Cambiarias</p>
+                <h3 class="text-3xl font-black text-emerald-600">C$ {{ number_format($totalGananciaCambiaria, 2) }}</h3>
+                <p class="text-xs text-gray-400 mt-2">Venta de USD por encima del costo promedio</p>
+            </div>
+            <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 border-l-4 border-l-red-500">
+                <p class="text-xs font-bold text-gray-500 uppercase tracking-widest mb-1">Pérdidas Cambiarias</p>
+                <h3 class="text-3xl font-black text-red-500">C$ {{ number_format($totalPerdidaCambiaria, 2) }}</h3>
+                <p class="text-xs text-gray-400 mt-2">Venta de USD por debajo del costo promedio</p>
+            </div>
+            <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 border-l-4 border-l-blue-500">
+                <p class="text-xs font-bold text-gray-500 uppercase tracking-widest mb-1">Diferencial Neto</p>
+                <h3 class="text-3xl font-black {{ $diferencialNeto >= 0 ? 'text-gray-900' : 'text-red-500' }}">C$ {{ number_format($diferencialNeto, 2) }}</h3>
+                <p class="text-xs text-gray-400 mt-2">Resultado del período en mesa de cambio</p>
+            </div>
+        </div>
+
+        <div class="bg-white shadow-sm border border-gray-200 rounded-xl overflow-hidden">
+            <div class="px-6 py-4 border-b border-gray-200 bg-gray-50 flex justify-between items-center">
+                <h3 class="text-lg font-bold text-gray-900">Operaciones de Mesa de Cambio</h3>
+                <span class="text-xs font-bold text-gray-500">{{ $diferenciales->count() }} registros</span>
+            </div>
+            <table class="min-w-full divide-y divide-gray-200 text-sm">
+                <thead class="bg-white">
+                    <tr>
+                        <th class="px-6 py-3 text-left font-bold tracking-wider uppercase text-xs text-gray-500">Fecha</th>
+                        <th class="px-6 py-3 text-right font-bold tracking-wider uppercase text-xs text-gray-500">USD Vendidos</th>
+                        <th class="px-6 py-3 text-right font-bold tracking-wider uppercase text-xs text-gray-500">Costo Promedio</th>
+                        <th class="px-6 py-3 text-right font-bold tracking-wider uppercase text-xs text-gray-500">Tasa de Venta</th>
+                        <th class="px-6 py-3 text-right font-bold tracking-wider uppercase text-xs text-gray-500">Diferencial</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100 bg-white">
+                    @forelse($diferenciales as $dif)
+                        <tr class="hover:bg-amber-50 transition">
+                            <td class="px-6 py-3 text-gray-900 font-semibold whitespace-nowrap">
+                                {{ \Carbon\Carbon::parse($dif->fecha)->format('d/m/Y h:i A') }}
+                            </td>
+                            <td class="px-6 py-3 text-right text-gray-900 font-bold">US$ {{ number_format($dif->monto_moneda_extranjera, 2) }}</td>
+                            <td class="px-6 py-3 text-right text-gray-600">C$ {{ number_format($dif->tasa_costo_promedio, 4) }}</td>
+                            <td class="px-6 py-3 text-right text-gray-600">C$ {{ number_format($dif->tasa_revaluacion, 2) }}</td>
+                            <td class="px-6 py-3 text-right">
+                                @if($dif->tipo == 'ganancia')
+                                    <span class="bg-emerald-100 text-emerald-800 px-2 py-1 rounded text-xs font-bold">+ C$ {{ number_format($dif->diferencia_calculada, 2) }}</span>
+                                @else
+                                    <span class="bg-red-100 text-red-800 px-2 py-1 rounded text-xs font-bold">- C$ {{ number_format($dif->diferencia_calculada, 2) }}</span>
+                                @endif
+                            </td>
+                        </tr>
+                    @empty
+                        <tr>
+                            <td colspan="5" class="px-6 py-8 text-center text-gray-500 font-medium">
+                                No hay operaciones de mesa de cambio con diferencial en este rango de fechas.
+                            </td>
+                        </tr>
+                    @endforelse
+                </tbody>
+            </table>
+        </div>
     </div>
 
 </div>

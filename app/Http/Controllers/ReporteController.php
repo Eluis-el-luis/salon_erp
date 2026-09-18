@@ -7,6 +7,7 @@ use App\Models\Venta;
 use App\Models\Usuario;
 use App\Models\Articulo;
 use App\Models\ComisionGenerada;
+use App\Models\DiferencialCambiario;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 
@@ -66,11 +67,21 @@ class ReporteController extends Controller
         
         $articulosCriticos = $inventario->where('existencia_actual', '<=', 'stock_min');
 
+        // ==========================================
+        // REPORTE 4: DIFERENCIAL CAMBIARIO (Mesa de Cambio)
+        // ==========================================
+        $diferenciales = DiferencialCambiario::whereBetween('fecha', [$fechaInicio, $fechaFin])->get();
+
+        $totalGananciaCambiaria = round($diferenciales->where('tipo', 'ganancia')->sum('diferencia_calculada'), 2);
+        $totalPerdidaCambiaria = round($diferenciales->where('tipo', 'perdida')->sum('diferencia_calculada'), 2);
+        $diferencialNeto = round($totalGananciaCambiaria - $totalPerdidaCambiaria, 2);
+
         return view('reports.index', compact(
             'fechaInicio', 'fechaFin', 
             'totalVentas', 'totalDescuentos', 'cantidadFacturas', 'ventasPorMetodo',
             'estilistas',
-            'inventario', 'valorInventario', 'articulosCriticos'
+            'inventario', 'valorInventario', 'articulosCriticos',
+            'diferenciales', 'totalGananciaCambiaria', 'totalPerdidaCambiaria', 'diferencialNeto'
         ));
     }
 

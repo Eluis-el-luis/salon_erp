@@ -7,6 +7,7 @@ use App\Models\CuentaPorPagar;
 use App\Models\PagoProveedor;
 use App\Services\ContabilidadService;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
 
 class CuentaPorPagarController extends Controller
@@ -64,7 +65,12 @@ class CuentaPorPagarController extends Controller
 
         } catch (\Exception $e) {
             DB::rollBack();
-            return back()->withErrors(['error' => 'Error al procesar el pago: ' . $e->getMessage()]);
+            Log::error('Error al procesar pago a proveedor', [
+                'exception' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'request' => $request->all(),
+            ]);
+            return back()->withErrors(['error' => 'Error al procesar el pago. Contacte al administrador.']);
         }
     }
 }

@@ -71,6 +71,7 @@
                             <a href="{{ url('/bancos') }}" class="block px-4 py-2 text-sm text-gray-700 hover:bg-emerald-50 hover:text-emerald-700">🏦 Bancos y Depósitos</a>
                             <a href="{{ url('/mesa-cambio') }}" class="block px-4 py-2 text-sm text-gray-700 hover:bg-emerald-50 hover:text-emerald-700">💱 Mesa de Cambio</a>
                             <a href="{{ url('/caja-chica') }}" class="block px-4 py-2 text-sm text-gray-700 hover:bg-emerald-50 hover:text-emerald-700">💵 Caja Chica</a>
+                            <a href="{{ url('/retiros') }}" class="block px-4 py-2 text-sm text-gray-700 hover:bg-emerald-50 hover:text-emerald-700">👤 Retiros del Propietario</a>
                             <a href="{{ url('/contabilidad/gasto') }}" class="block px-4 py-2 text-sm text-gray-700 hover:bg-emerald-50 hover:text-emerald-700">💵 Gasto</a>
                             <div class="border-t border-gray-100 my-1"></div>
                             <a href="{{ url('/adelantos') }}" class="block px-4 py-2 text-sm text-gray-700 hover:bg-emerald-50 hover:text-emerald-700">🤝 Cuentas por Cobrar</a>

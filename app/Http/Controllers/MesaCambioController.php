@@ -9,32 +9,33 @@ use App\Models\SesionCaja;
 use App\Models\Moneda;
 use App\Models\DiferencialCambiario;
 use App\Services\ContabilidadService;
+use App\Services\DivisaService;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
 
 class MesaCambioController extends Controller
 {
+    protected DivisaService $divisas;
+
+    public function __construct()
+    {
+        $this->divisas = new DivisaService();
+    }
+
     public function index()
     {
-        // Traemos las operaciones recientes
         $operaciones = OperacionCambio::orderBy('fecha', 'desc')->orderBy('id', 'desc')->take(50)->get();
-        
-        // Traemos el saldo actual de la moneda extranjera en la caja
+
         $cajaActiva = SesionCaja::where('user_id', auth()->id())->where('estado', 'abierta')->first();
-        
+
         $saldoUsd = 0;
         $costoPromedio = 0;
 
         if ($cajaActiva) {
-            $idUsd = Moneda::idPorCodigo('USD');
-            $saldoFisico = SaldoMoneda::where('ubicacion_tipo', 'App\Models\SesionCaja')
-                                      ->where('ubicacion_id', $cajaActiva->id)
-                                      ->where('moneda_id', $idUsd)
-                                      ->first();
-            if ($saldoFisico) {
-                $saldoUsd = $saldoFisico->saldo_actual;
-                $costoPromedio = $saldoFisico->costo_promedio_ponderado;
-            }
+            $datos = $this->divisas->saldoDivisas('USD', 'App\Models\SesionCaja', $cajaActiva->id);
+            $saldoUsd = $datos['saldo'];
+            $costoPromedio = $datos['costo_promedio'];
         }
 
         return view('exchange.index', compact('operaciones', 'cajaActiva', 'saldoUsd', 'costoPromedio'));
@@ -52,70 +53,43 @@ class MesaCambioController extends Controller
         DB::beginTransaction();
 
         try {
-            // Resolver IDs de moneda por código (evita hardcodear 1 y 2)
+            $ubicacionTipo = 'App\Models\SesionCaja';
+            $ubicacionId = (int) $request->caja_origen_id;
+            $montoUsd = (float) $request->monto_usd;
+            $tasa = (float) $request->tasa_aplicada;
+
             $idNio = Moneda::idPorCodigo('NIO');
             $idUsd = Moneda::idPorCodigo('USD');
+            $montoCordobas = round($montoUsd * $tasa, 2);
 
-            $montoCordobas = round($request->monto_usd * $request->tasa_aplicada, 2);
-            
-            // 1. Encontrar o crear el registro de Saldo de la Moneda Extranjera (USD)
-            $saldoFisico = SaldoMoneda::firstOrCreate(
-                [
-                    'moneda_id' => $idUsd, 
-                    'ubicacion_tipo' => 'App\Models\SesionCaja', 
-                    'ubicacion_id' => $request->caja_origen_id
-                ],
-                [
-                    'saldo_actual' => 0, 
-                    'costo_promedio_ponderado' => 0
-                ]
-            );
+            $diferencial = 0;
+            $saldoFisico = null;
 
-            $diferencial = 0; // Ganancia (+) o pérdida (-) en Córdobas al vender USD
-
-            // 2. Lógica matemática del Costo Promedio Ponderado
             if ($request->tipo == 'compra') {
-                // EL SALÓN COMPRA USD (Recibimos USD, Entregamos NIO)
-                $valorTotalAntiguo = $saldoFisico->saldo_actual * $saldoFisico->costo_promedio_ponderado;
-                $valorNuevoAgregado = $request->monto_usd * $request->tasa_aplicada;
-                
-                $nuevoSaldoUsd = $saldoFisico->saldo_actual + $request->monto_usd;
-                
-                // Calculamos el nuevo promedio a 6 decimales para evitar el error de centavos
-                $nuevoCostoPromedio = round(($valorTotalAntiguo + $valorNuevoAgregado) / $nuevoSaldoUsd, 6);
-
-                $saldoFisico->saldo_actual = $nuevoSaldoUsd;
-                $saldoFisico->costo_promedio_ponderado = $nuevoCostoPromedio;
-
+                // EL SALÓN COMPRA USD (Recibe USD, Entrega NIO) -> recalcula promedio ponderado
+                $saldoFisico = $this->divisas->ingresarDivisas('USD', $ubicacionTipo, $ubicacionId, $montoUsd, $tasa);
                 $monedaOrigen = $idUsd;
                 $monedaDestino = $idNio;
-                $montoOrigen = $request->monto_usd;
+                $montoOrigen = $montoUsd;
                 $montoDestino = $montoCordobas;
-
             } else {
-                // EL SALÓN VENDE USD (Entregamos USD, Recibimos NIO)
-                if ($saldoFisico->saldo_actual < $request->monto_usd) {
-                    throw new \Exception('No hay suficientes Dólares físicos en caja para realizar la venta.');
-                }
+                // EL SALÓN VENDE USD (Entrega USD, Recibe NIO). El promedio no cambia.
+                $saldoFisico = SaldoMoneda::where('moneda_id', $idUsd)
+                    ->where('ubicacion_tipo', $ubicacionTipo)
+                    ->where('ubicacion_id', $ubicacionId)
+                    ->first();
 
-                // Al vender, el costo promedio NO cambia, solo se restan los billetes.
-                $saldoFisico->saldo_actual -= $request->monto_usd;
-
-                // DIFERENCIAL CAMBIARIO: (tasa de venta - costo promedio) * USD vendidos
-                // Si positivo, ganancia; si negativo, pérdida.
-                $diferencial = round(($request->tasa_aplicada - $saldoFisico->costo_promedio_ponderado) * $request->monto_usd, 2);
+                $diferencial = $this->divisas->egresarDivisas('USD', $ubicacionTipo, $ubicacionId, $montoUsd, $tasa);
 
                 $monedaOrigen = $idNio;
                 $monedaDestino = $idUsd;
                 $montoOrigen = $montoCordobas;
-                $montoDestino = $request->monto_usd;
+                $montoDestino = $montoUsd;
             }
 
-            // Actualizamos la fecha de modificación
-            $saldoFisico->fecha_actualizacion = Carbon::now();
-            $saldoFisico->save();
+            $costoPromedio = $saldoFisico ? (float) $saldoFisico->costo_promedio_ponderado : 0;
 
-            // 3. Crear el registro histórico de la transacción de cambio
+            // Registro histórico de la operación de cambio
             $operacion = OperacionCambio::create([
                 'fecha' => Carbon::now(),
                 'tipo' => $request->tipo,
@@ -123,27 +97,27 @@ class MesaCambioController extends Controller
                 'moneda_destino_id' => $monedaDestino,
                 'monto_origen' => $montoOrigen,
                 'monto_destino' => $montoDestino,
-                'tasa_aplicada' => $request->tasa_aplicada,
-                'origen_pago_tipo' => 'App\Models\SesionCaja',
-                'origen_pago_id' => $request->caja_origen_id,
+                'tasa_aplicada' => $tasa,
+                'origen_pago_tipo' => $ubicacionTipo,
+                'origen_pago_id' => $ubicacionId,
                 'usuario_id' => auth()->id() ?? 1,
             ]);
 
-            // 4. Registrar el diferencial cambiario si hay ganancia o pérdida (solo al vender)
-            if ($diferencial != 0) {
+            // Registrar el diferencial cambiario (ganancia o pérdida) al vender
+            if ($diferencial != 0 && $saldoFisico) {
                 DiferencialCambiario::create([
                     'saldo_moneda_id' => $saldoFisico->id,
                     'fecha' => Carbon::now(),
-                    'monto_moneda_extranjera' => $request->monto_usd,
-                    'tasa_costo_promedio' => $saldoFisico->costo_promedio_ponderado,
-                    'tasa_revaluacion' => $request->tasa_aplicada,
+                    'monto_moneda_extranjera' => $montoUsd,
+                    'tasa_costo_promedio' => $costoPromedio,
+                    'tasa_revaluacion' => $tasa,
                     'diferencia_calculada' => abs($diferencial),
                     'tipo' => $diferencial > 0 ? 'ganancia' : 'perdida',
                     'estado' => 'contabilizado',
                 ]);
             }
 
-            // 5. Disparar el Motor Contable
+            // Disparar el Motor Contable
             $contabilidad = new ContabilidadService();
             $contabilidad->contabilizarOperacionCambio($operacion, $diferencial);
 
@@ -153,7 +127,12 @@ class MesaCambioController extends Controller
 
         } catch (\Exception $e) {
             DB::rollBack();
-            return back()->withErrors(['error' => 'Error al procesar el cambio de divisas: ' . $e->getMessage()]);
+            Log::error('Error al procesar cambio de divisas', [
+                'exception' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'request' => $request->all(),
+            ]);
+            return back()->withErrors(['error' => 'Error al procesar el cambio de divisas. Contacte al administrador.']);
         }
     }
 }
