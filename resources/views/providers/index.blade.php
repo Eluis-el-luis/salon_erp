@@ -4,26 +4,27 @@
 <div x-data="providerManager()" class="space-y-6 max-w-7xl mx-auto">
     
     <!-- Encabezado -->
-    <div class="flex justify-between items-center mb-6">
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
         <div>
-            <h2 class="text-2xl font-extrabold text-gray-900">Directorio de Proveedores</h2>
-            <p class="text-sm text-gray-500 mt-1">Administra las marcas, distribuidoras y contactos comerciales.</p>
+            <h2 class="page-title">Directorio de Proveedores</h2>
+            <p class="page-subtitle">Administra las marcas, distribuidoras y contactos comerciales.</p>
         </div>
-        <button @click="openCreateModal()" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 px-4 rounded-lg shadow transition ease-in-out duration-150">
-            + Nuevo Proveedor
+        <button @click="openCreateModal()" class="btn btn-primary">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+            Nuevo Proveedor
         </button>
     </div>
 
     <!-- Tabla de Proveedores -->
-    <div class="bg-white rounded-xl shadow-md border border-gray-200 overflow-hidden">
+    <div class="card overflow-hidden">
         <div class="overflow-x-auto">
             <table class="min-w-full divide-y divide-gray-200">
                 <thead class="bg-gray-50">
                     <tr>
-                        <th class="px-6 py-3 text-left text-xs font-black text-gray-500 uppercase tracking-wider">Empresa / Marca</th>
-                        <th class="px-6 py-3 text-left text-xs font-black text-gray-500 uppercase tracking-wider">Contacto</th>
-                        <th class="px-6 py-3 text-left text-xs font-black text-gray-500 uppercase tracking-wider">Teléfono / Correo</th>
-                        <th class="px-6 py-3 text-center text-xs font-black text-gray-500 uppercase tracking-wider">Acciones</th>
+                        <th class="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Empresa / Marca</th>
+                        <th class="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Contacto</th>
+                        <th class="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Teléfono / Correo</th>
+                        <th class="px-6 py-3 text-center text-xs font-bold text-gray-500 uppercase tracking-wider">Acciones</th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-gray-100 bg-white">
@@ -71,38 +72,34 @@
                     
                     <form class="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div class="col-span-2 md:col-span-1">
-                            <label class="block text-xs font-bold text-gray-700 mb-1">Nombre de la Empresa / Marca *</label>
-                            <input type="text" x-model="form.name" class="w-full shadow-sm border rounded py-2 px-3 text-gray-700 focus:ring-emerald-500" required>
+                            <label class="label">Nombre de la Empresa / Marca *</label>
+                            <input type="text" x-model="form.name" class="input" required>
                         </div>
                         <div class="col-span-2 md:col-span-1">
-                            <label class="block text-xs font-bold text-gray-700 mb-1">Nombre del Contacto (Vendedor)</label>
-                            <input type="text" x-model="form.contact_name" placeholder="Ej. Juan Pérez" class="w-full shadow-sm border rounded py-2 px-3 text-gray-700 focus:ring-emerald-500">
+                            <label class="label">Nombre del Contacto (Vendedor)</label>
+                            <input type="text" x-model="form.contact_name" placeholder="Ej. Juan Pérez" class="input">
                         </div>
                         <div class="col-span-2 md:col-span-1">
-                            <label class="block text-xs font-bold text-gray-700 mb-1">Teléfono</label>
-                            <input type="text" x-model="form.phone" class="w-full shadow-sm border rounded py-2 px-3 text-gray-700 focus:ring-emerald-500">
+                            <label class="label">Teléfono</label>
+                            <input type="text" x-model="form.phone" class="input">
                         </div>
                         <div class="col-span-2 md:col-span-1">
-                            <label class="block text-xs font-bold text-gray-700 mb-1">Correo Electrónico</label>
-                            <input type="email" x-model="form.email" class="w-full shadow-sm border rounded py-2 px-3 text-gray-700 focus:ring-emerald-500">
+                            <label class="label">Correo Electrónico</label>
+                            <input type="email" x-model="form.email" class="input">
                         </div>
                         <div class="col-span-2">
-                            <label class="block text-xs font-bold text-gray-700 mb-1">Dirección</label>
-                            <input type="text" x-model="form.address" class="w-full shadow-sm border rounded py-2 px-3 text-gray-700 focus:ring-emerald-500">
+                            <label class="label">Dirección</label>
+                            <input type="text" x-model="form.address" class="input">
                         </div>
                         <div class="col-span-2">
-                            <label class="block text-xs font-bold text-gray-700 mb-1">Notas Adicionales</label>
-                            <textarea x-model="form.notes" rows="2" class="w-full shadow-sm border rounded py-2 px-3 text-gray-700 focus:ring-emerald-500" placeholder="Condiciones de crédito, días de entrega..."></textarea>
+                            <label class="label">Notas Adicionales</label>
+                            <textarea x-model="form.notes" rows="2" class="input" placeholder="Condiciones de crédito, días de entrega..."></textarea>
                         </div>
                     </form>
                 </div>
-                <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
-                    <button @click="saveProvider()" type="button" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-emerald-600 text-base font-medium text-white hover:bg-emerald-700 sm:ml-3 sm:w-auto sm:text-sm">
-                        Guardar
-                    </button>
-                    <button @click="openModal = false" type="button" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">
-                        Cancelar
-                    </button>
+                <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse gap-2">
+                    <button @click="saveProvider()" type="button" class="btn btn-primary">Guardar</button>
+                    <button @click="openModal = false" type="button" class="btn btn-secondary">Cancelar</button>
                 </div>
             </div>
         </div>

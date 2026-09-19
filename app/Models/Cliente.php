@@ -22,6 +22,6 @@ class Cliente extends Model
     // Un cliente puede tener muchas citas a lo largo del tiempo
     public function citas()
     {
-        return $this->hasMany(Cita::class);
+        return $this->hasMany(Cita::class, 'client_id');
     }
 }

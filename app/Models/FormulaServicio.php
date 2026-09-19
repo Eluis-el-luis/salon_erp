@@ -15,12 +15,12 @@ class FormulaServicio extends Model
     // Una fórmula pertenece a un Servicio
     public function servicio()
     {
-        return $this->belongsTo(Servicio::class);
+        return $this->belongsTo(Servicio::class, 'service_id');
     }
 
     // Una fórmula usa un Producto (Articulo)
     public function articulo()
     {
-        return $this->belongsTo(Articulo::class);
+        return $this->belongsTo(Articulo::class, 'item_id');
     }
 }

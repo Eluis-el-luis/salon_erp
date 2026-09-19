@@ -5,7 +5,7 @@
 
     <div class="flex justify-between items-center bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
         <div>
-            <h2 class="text-3xl font-extrabold text-gray-900">Libro Mayor</h2>
+            <h2 class="page-title">Libro Mayor</h2>
             <p class="text-gray-500 text-sm mt-1">Saldos consolidados por cuenta contable.</p>
         </div>
         <a href="{{ url('/contabilidad') }}" class="text-emerald-600 hover:text-emerald-800 font-bold text-sm transition">

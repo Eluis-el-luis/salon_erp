@@ -21,6 +21,6 @@ class Servicio extends Model
 
     public function formulas()
     {
-        return $this->hasMany(FormulaServicio::class);
+        return $this->hasMany(FormulaServicio::class, 'service_id');
     }
 }

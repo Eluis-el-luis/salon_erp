@@ -25,7 +25,7 @@ class Proveedor extends Model
     // Relación opcional: Un proveedor tiene muchos productos
     public function articulos()
     {
-        return $this->hasMany(Articulo::class);
+        return $this->hasMany(Articulo::class, 'provider_id');
     }
 
     // Relación: Un proveedor tiene muchas cuentas por pagar (facturas pendientes)

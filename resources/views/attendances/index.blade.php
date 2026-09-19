@@ -4,21 +4,19 @@
 <div class="space-y-6">
     
     <!-- Encabezado -->
-    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-6">
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-            <h2 class="text-2xl font-bold text-gray-800">Control de Asistencia y Evaluación</h2>
-            <p class="text-sm text-gray-500">Registra la hora de llegada y evalúa la presentación del personal.</p>
+            <h2 class="page-title">Control de Asistencia y Evaluación</h2>
+            <p class="page-subtitle">Registra la hora de llegada y evalúa la presentación del personal.</p>
         </div>
-        <div class="mt-4 sm:mt-0">
-            
-            <span class="text-sm font-bold text-emerald-800 bg-emerald-100 border border-emerald-200 px-5 py-2.5 rounded-full shadow-sm capitalize">
-                📅 {{ \Carbon\Carbon::now()->locale('es')->isoFormat('dddd, D [de] MMMM [de] YYYY') }}
-            </span>
-        </div>
+        <span class="inline-flex items-center gap-2 text-sm font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 px-4 py-2 rounded-full capitalize">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+            {{ \Carbon\Carbon::now()->locale('es')->isoFormat('dddd, D [de] MMMM [de] YYYY') }}
+        </span>
     </div>
 
     <!-- Tabla Dinámica de Asistencia -->
-    <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+    <div class="card overflow-hidden">
         <table class="min-w-full divide-y divide-gray-200">
             <thead class="bg-gray-50">
                 <tr>
@@ -33,7 +31,7 @@
                 @forelse ($empleados as $empleado)
                     @php
                         // Buscamos si ya tiene un registro guardado el día de hoy
-                        $attendance = $empleado->attendances->first();
+                        $attendance = $empleado->asistencias->first();
                         // Damos formato a la hora si existe, si no, lo dejamos en blanco
                         $timeIn = $attendance ? \Carbon\Carbon::parse($attendance->time_in)->format('H:i') : '';
                         $aseo = $attendance ? $attendance->aseo : 1; // Por defecto Sí (1)

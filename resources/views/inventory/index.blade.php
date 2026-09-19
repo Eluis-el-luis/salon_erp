@@ -7,7 +7,7 @@
     <!-- Encabezado -->
     <div class="flex justify-between items-center mb-6">
         <div>
-            <h2 class="text-2xl font-extrabold text-gray-900">Control de Inventario</h2>
+            <h2 class="page-title">Control de Inventario</h2>
             <p class="text-sm text-gray-500 mt-1">Gestión detallada de productos, existencias y ubicaciones.</p>
         </div>
         <button @click="openCreateModal()" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 px-4 rounded-lg shadow transition ease-in-out duration-150">

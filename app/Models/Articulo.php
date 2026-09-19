@@ -38,11 +38,11 @@ class Articulo extends Model
 
     public function detallesVenta()
     {
-        return $this->hasMany(DetalleVenta::class);
+        return $this->hasMany(DetalleVenta::class, 'item_id');
     }
 
     public function proveedor()
     {
-        return $this->belongsTo(Proveedor::class);
+        return $this->belongsTo(Proveedor::class, 'provider_id');
     }
 }

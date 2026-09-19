@@ -13,7 +13,7 @@ class RoleMiddleware
      *
      * @param  Closure(Request): (Response)  $next
      */
-    public function handle(Request $request, \Closure $next, string $role)
+    public function handle(Request $request, \Closure $next, string $roles)
     {
         // 1. Si no ha iniciado sesión, lo mandamos al login
         if (!auth()->check()) {
@@ -27,12 +27,14 @@ class RoleMiddleware
             return $next($request);
         }
 
-        // 3. Verificamos si el usuario tiene el rol exacto que pide la ruta
-        if ($user->role === $role) {
+        // 3. Se permiten varios roles separados por coma: role:recepcion,contador
+        $rolesPermitidos = array_map('trim', explode(',', $roles));
+
+        if (in_array($user->role, $rolesPermitidos)) {
             return $next($request);
         }
 
-        // 4. Si es Recepción intentando entrar a Admin, o Estilista intentando entrar a Recepción, ¡BLOQUEADO!
+        // 4. Si no coincide ningún rol permitido, BLOQUEADO
         abort(403, 'ACCESO RESTRINGIDO: Tu perfil de ' . strtoupper($user->role) . ' no tiene autorización para entrar aquí.');
     }
 }

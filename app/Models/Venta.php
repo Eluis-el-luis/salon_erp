@@ -31,11 +31,11 @@ class Venta extends Model
 
     public function cliente()
     {
-        return $this->belongsTo(Cliente::class);
+        return $this->belongsTo(Cliente::class, 'client_id');
     }
 
     public function detalles()
     {
-        return $this->hasMany(DetalleVenta::class);
+        return $this->hasMany(DetalleVenta::class, 'sale_id');
     }
 }

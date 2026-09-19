@@ -6,7 +6,7 @@
     <!-- Encabezado -->
     <div class="flex justify-between items-center mb-6">
         <div>
-            <h2 class="text-2xl font-bold text-gray-800">Cuentas por Cobrar (CXC)</h2>
+            <h2 class="page-title">Cuentas por Cobrar (CXC)</h2>
             <p class="text-sm text-gray-500">Libro mayor de adelantos a colaboradores y créditos a clientes.</p>
         </div>
         <button @click="openCreateModal()" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2 px-4 rounded shadow transition">

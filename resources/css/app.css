@@ -1,11 +1,53 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Playfair+Display:wght@500;600;700&display=swap');
 @import 'tailwindcss';
 
 @source '../../vendor/laravel/framework/src/Illuminate/Pagination/resources/views/*.blade.php';
 @source '../../storage/framework/views/*.php';
 
 @theme {
-    --font-sans: 'Instrument Sans', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji',
+    --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji',
         'Segoe UI Symbol', 'Noto Color Emoji';
+    --font-display: 'Playfair Display', ui-serif, Georgia, serif;
+}
+
+@layer components {
+    /* Botones */
+    .btn {
+        @apply inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-semibold text-sm transition-colors duration-200 cursor-pointer focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed;
+    }
+    .btn-primary {
+        @apply bg-emerald-700 text-white hover:bg-emerald-800 focus:ring-emerald-500;
+    }
+    .btn-secondary {
+        @apply bg-white text-gray-700 border border-gray-300 hover:bg-gray-50 focus:ring-gray-300;
+    }
+    .btn-danger {
+        @apply bg-red-600 text-white hover:bg-red-700 focus:ring-red-500;
+    }
+
+    /* Tarjetas */
+    .card {
+        @apply bg-white rounded-xl shadow-sm border border-gray-200;
+    }
+    .card-header {
+        @apply px-6 py-5 border-b border-gray-100 flex items-center justify-between;
+    }
+
+    /* Inputs y selects */
+    .input {
+        @apply w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-800 shadow-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition;
+    }
+    .label {
+        @apply block text-sm font-semibold text-gray-700 mb-1.5;
+    }
+
+    /* Encabezados de página */
+    .page-title {
+        @apply text-2xl font-extrabold tracking-tight text-gray-900;
+    }
+    .page-subtitle {
+        @apply text-sm text-gray-500 mt-1;
+    }
 }
 
 @tailwind base;

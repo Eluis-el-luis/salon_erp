@@ -5,7 +5,7 @@
 
     <div class="flex justify-between items-center bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
         <div>
-            <h2 class="text-3xl font-extrabold text-gray-900">Control de Caja Chica</h2>
+            <h2 class="page-title">Control de Caja Chica</h2>
             <p class="text-gray-500 text-sm mt-1">Fondo para gastos menores, cafetería y transporte.</p>
         </div>
     </div>

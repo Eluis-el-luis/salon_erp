@@ -4,18 +4,19 @@
 <div x-data="employeeManager()">
     
     <!-- Encabezado -->
-    <div class="flex justify-between items-center mb-6">
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
         <div>
-            <h2 class="text-3xl font-extrabold text-gray-900">Gestión de Personal</h2>
-            <p class="text-sm text-gray-500 mt-1">Administra roles, salarios fijos y esquemas de comisiones históricas.</p>
+            <h2 class="page-title">Gestión de Personal</h2>
+            <p class="page-subtitle">Administra roles, salarios fijos y esquemas de comisiones históricas.</p>
         </div>
-        <button @click="openCreateModal()" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2 px-4 rounded-lg shadow transition">
-            + Nuevo Empleado
+        <button @click="openCreateModal()" class="btn btn-primary">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zm3 8a6 6 0 01-1 3.333A6 6 0 016 21h3"></path></svg>
+            Nuevo Empleado
         </button>
     </div>
 
     <!-- Tabla de Empleados -->
-    <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+    <div class="card overflow-hidden">
         <table class="min-w-full divide-y divide-gray-200">
             <thead class="bg-gray-800 text-white">
                 <tr>
@@ -121,6 +122,7 @@
                         <select x-model="form.role" class="w-full shadow-sm border-gray-300 rounded-lg py-2 px-3 text-gray-700 focus:ring-emerald-500 focus:border-emerald-500">
                             <option value="estilista">Estilista / Especialista</option>
                             <option value="recepcion">Recepción / Caja</option>
+                            <option value="contador">Contador / Finanzas</option>
                             <option value="admin">Administrador</option>
                         </select>
                     </div>
@@ -139,13 +141,9 @@
                     </div>
                 </form>
                 
-                <div class="mt-6 flex justify-end space-x-3 pt-4 border-t">
-                    <button @click="openModal = false" type="button" class="bg-gray-100 text-gray-700 font-bold py-2 px-4 rounded-lg hover:bg-gray-200 transition">
-                        Cancelar
-                    </button>
-                    <button @click="saveEmployee()" type="button" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2 px-6 rounded-lg shadow transition">
-                        Guardar
-                    </button>
+                <div class="mt-6 flex justify-end gap-3 pt-4 border-t">
+                    <button @click="openModal = false" type="button" class="btn btn-secondary">Cancelar</button>
+                    <button @click="saveEmployee()" type="button" class="btn btn-primary">Guardar</button>
                 </div>
             </div>
         </div>

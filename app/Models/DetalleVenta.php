@@ -22,18 +22,18 @@ class DetalleVenta extends Model
 
     public function venta()
     {
-        return $this->belongsTo(Venta::class);
+        return $this->belongsTo(Venta::class, 'sale_id');
     }
 
     public function articulo()
     {
-        return $this->belongsTo(Articulo::class);
+        return $this->belongsTo(Articulo::class, 'item_id');
     }
 
     
     public function servicio()
     {
-        return $this->belongsTo(Servicio::class);
+        return $this->belongsTo(Servicio::class, 'service_id');
     }
 
     public function estilista()

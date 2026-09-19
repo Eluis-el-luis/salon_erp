@@ -3,11 +3,9 @@
 @section('content')
 <div x-data="{ modalAbono: false, cuentaId: '', saldoMaximo: 0, proveedorNombre: '' }" class="max-w-7xl mx-auto space-y-6">
 
-    <div class="flex justify-between items-center bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-        <div>
-            <h2 class="text-3xl font-extrabold text-gray-900">Cuentas por Pagar (CxP)</h2>
-            <p class="text-gray-500 text-sm mt-1">Control de facturas y deudas pendientes con proveedores.</p>
-        </div>
+    <div class="card p-6">
+        <h2 class="page-title">Cuentas por Pagar (CxP)</h2>
+        <p class="page-subtitle">Control de facturas y deudas pendientes con proveedores.</p>
     </div>
 
     <!-- Mensajes de Error de Validación -->

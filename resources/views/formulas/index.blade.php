@@ -5,13 +5,14 @@
     
     <!-- Encabezado -->
     <div class="mb-6">
-        <h2 class="text-2xl font-extrabold text-gray-900">Recetas de Servicios</h2>
-        <p class="text-sm text-gray-500 mt-1">Configura cuánto producto (ml/oz/gr) se consume automáticamente en cada servicio.</p>
+        <h2 class="page-title">Recetas de Servicios</h2>
+        <p class="page-subtitle">Configura cuánto producto (ml/oz/gr) se consume automáticamente en cada servicio.</p>
     </div>
 
     @if(session('success'))
-        <div class="bg-emerald-100 border-l-4 border-emerald-500 text-emerald-700 p-4 rounded shadow-sm mb-6 font-bold">
-            ✓ {{ session('success') }}
+        <div class="flex items-center gap-3 bg-emerald-50 border-l-4 border-emerald-500 text-emerald-800 p-4 rounded-lg shadow-sm mb-6 font-bold">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+            {{ session('success') }}
         </div>
     @endif
 

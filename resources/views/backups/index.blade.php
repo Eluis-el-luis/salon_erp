@@ -5,7 +5,7 @@
     
     <!-- Encabezado -->
     <div class="mb-8">
-        <h2 class="text-2xl font-extrabold text-gray-900">Seguridad y Respaldos</h2>
+        <h2 class="page-title">Seguridad y Respaldos</h2>
         <p class="text-sm text-gray-500 mt-1">Exporta e importa la información completa de tu sistema.</p>
     </div>
 

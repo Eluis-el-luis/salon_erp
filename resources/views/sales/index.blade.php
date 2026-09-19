@@ -2,17 +2,18 @@
 
 @section('content')
 <div class="space-y-6">
-    <div class="flex justify-between items-center mb-6">
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
         <div>
-            <h2 class="text-2xl font-bold text-gray-800">Historial de Ventas</h2>
-            <p class="text-sm text-gray-500">Registro completo de todas las facturas y cobros realizados.</p>
+            <h2 class="page-title">Historial de Ventas</h2>
+            <p class="page-subtitle">Registro completo de todas las facturas y cobros realizados.</p>
         </div>
-        <a href="{{ url('/pos') }}" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2 px-4 rounded shadow transition">
+        <a href="{{ url('/pos') }}" class="btn btn-primary">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"></path></svg>
             Ir a Caja (POS)
         </a>
     </div>
 
-    <div class="bg-white rounded-lg shadow overflow-hidden">
+    <div class="card overflow-hidden">
         <table class="min-w-full divide-y divide-gray-200">
             <thead class="bg-gray-50">
                 <tr>

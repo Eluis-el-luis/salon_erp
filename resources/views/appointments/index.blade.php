@@ -4,16 +4,19 @@
 <!-- El contenedor principal define el "estado" de Alpine con x-data -->
 <div x-data="appointmentManager()">
     
-    <div class="flex justify-between items-center mb-6">
-        <h2 class="text-2xl font-semibold text-gray-800">Agenda del Día</h2>
-        <!-- Al hacer clic, cambiamos la variable openModal a true -->
-        <button @click="openModal = true" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2 px-4 rounded shadow transition ease-in-out duration-150">
-            + Nueva Cita
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+        <div>
+            <h2 class="page-title">Agenda del Día</h2>
+            <p class="page-subtitle">Citas programadas y atención del equipo.</p>
+        </div>
+        <button @click="openModal = true" class="btn btn-primary">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+            Nueva Cita
         </button>
     </div>
 
     <!-- Tabla de Citas -->
-    <div class="bg-white rounded-lg shadow overflow-hidden">
+    <div class="card overflow-hidden">
         <table class="min-w-full divide-y divide-gray-200">
             <thead class="bg-gray-50">
                 <tr>

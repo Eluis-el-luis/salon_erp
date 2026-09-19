@@ -28,6 +28,6 @@ class Nomina extends Model
 
     public function usuario()
     {
-        return $this->belongsTo(Usuario::class);
+        return $this->belongsTo(Usuario::class, 'user_id');
     }
 }

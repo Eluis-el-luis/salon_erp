@@ -23,7 +23,7 @@ class Cita extends Model
     // La cita pertenece a un cliente
     public function cliente()
     {
-        return $this->belongsTo(Cliente::class);
+        return $this->belongsTo(Cliente::class, 'client_id');
     }
 
     // La cita es atendida por UNO O VARIOS estilistas

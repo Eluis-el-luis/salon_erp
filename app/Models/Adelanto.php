@@ -23,12 +23,12 @@ class Adelanto extends Model
     // Relación con el Empleado
     public function usuario()
     {
-        return $this->belongsTo(Usuario::class);
+        return $this->belongsTo(Usuario::class, 'user_id');
     }
 
     // Relación con el Cliente
     public function cliente()
     {
-        return $this->belongsTo(Cliente::class);
+        return $this->belongsTo(Cliente::class, 'client_id');
     }
 }

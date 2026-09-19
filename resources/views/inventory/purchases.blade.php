@@ -5,7 +5,7 @@
 
     <div class="flex justify-between items-center bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
         <div>
-            <h2 class="text-3xl font-extrabold text-gray-900">Ingreso de Mercadería</h2>
+            <h2 class="page-title">Ingreso de Mercadería</h2>
             <p class="text-gray-500 text-sm mt-1">Registra compras, alimenta el inventario y genera CxP automáticamente.</p>
         </div>
         <a href="{{ url('/inventario') }}" class="text-emerald-600 hover:text-emerald-800 font-bold text-sm transition">

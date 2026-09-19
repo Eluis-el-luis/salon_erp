@@ -4,11 +4,9 @@
 <div x-data="exchangeManager()" class="max-w-7xl mx-auto space-y-6">
 
     <!-- Encabezado -->
-    <div class="flex justify-between items-center bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-        <div>
-            <h2 class="text-3xl font-extrabold text-gray-900">Mesa de Cambio (Divisas)</h2>
-            <p class="text-gray-500 text-sm mt-1">Compra y venta de Dólares (USD) y cálculo de costo promedio.</p>
-        </div>
+    <div class="card p-6">
+        <h2 class="page-title">Mesa de Cambio (Divisas)</h2>
+        <p class="page-subtitle">Compra y venta de Dólares (USD) y cálculo de costo promedio ponderado.</p>
     </div>
 
     <!-- Alertas -->

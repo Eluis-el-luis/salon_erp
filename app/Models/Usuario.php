@@ -63,12 +63,12 @@ class Usuario extends Authenticatable
 
     public function gastos()
     {
-        return $this->hasMany(Gasto::class);
+        return $this->hasMany(Gasto::class, 'user_id');
     }
 
     public function nominas()
     {
-        return $this->hasMany(Nomina::class);
+        return $this->hasMany(Nomina::class, 'user_id');
     }
 
     // Las citas que el estilista tiene agendadas
@@ -79,13 +79,13 @@ class Usuario extends Authenticatable
 
     public function asistencias()
     {
-        return $this->hasMany(Asistencia::class);
+        return $this->hasMany(Asistencia::class, 'user_id');
     }
 
     // Relación: Un empleado puede tener muchos adelantos
     public function adelantos()
     {
-        return $this->hasMany(Adelanto::class);
+        return $this->hasMany(Adelanto::class, 'user_id');
     }
 
     public function esquemasComision()

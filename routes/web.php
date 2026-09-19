@@ -71,7 +71,7 @@ Route::middleware(['auth'])->group(function () {
     // -------------------------------------------------------------
     // Manejo de dinero, punto de venta y cuentas por cobrar.
     
-    Route::middleware(['role:recepcion'])->group(function () {
+    Route::middleware(['role:recepcion,contador'])->group(function () {
         
         Route::get('/pos', function () {
             $servicios = \App\Models\Servicio::where('is_active', true)->orderBy('name', 'asc')->get();

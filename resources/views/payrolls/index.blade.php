@@ -5,7 +5,7 @@
     
     <div class="flex justify-between items-center mb-6">
         <div>
-            <h2 class="text-2xl font-extrabold text-gray-900">Nómina Maestra</h2>
+            <h2 class="page-title">Nómina Maestra</h2>
             <p class="text-sm text-gray-500 mt-1">Cálculo automático de salarios, comisiones y deducciones.</p>
         </div>
     </div>

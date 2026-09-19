@@ -4,13 +4,14 @@
 <div x-data="{ modalGasto: false }" class="max-w-7xl mx-auto space-y-6">
 
     <!-- Cabecera y Botón de Gastos -->
-    <div class="flex justify-between items-center bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+    <div class="card p-6 flex justify-between items-center">
         <div>
-            <h2 class="text-3xl font-extrabold text-gray-900">Libro Diario</h2>
-            <p class="text-gray-500 text-sm mt-1">Registro cronológico de operaciones contables.</p>
+            <h2 class="page-title">Libro Diario</h2>
+            <p class="page-subtitle">Registro cronológico de operaciones contables.</p>
         </div>
-        <button @click="modalGasto = true" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2.5 px-5 rounded-lg shadow transition">
-            + Registrar Egreso / Gasto
+        <button @click="modalGasto = true" class="btn btn-danger">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+            Registrar Egreso / Gasto
         </button>
     </div>
 
@@ -45,7 +46,8 @@
                         <label class="block text-sm font-bold text-gray-700">Método de Pago</label>
                         <select name="metodo_pago" required class="mt-1 w-full border-gray-300 rounded-lg shadow-sm focus:border-emerald-500 focus:ring-emerald-500">
                             <option value="efectivo">Caja (Efectivo)</option>
-                            <option value="banco">Transferencia / Banco</option>
+                            <option value="lafise">Banco LAFISE</option>
+                            <option value="bac">Banco BAC</option>
                         </select>
                     </div>
                 </div>

@@ -4,18 +4,19 @@
 <div x-data="serviceManager()" class="space-y-6">
     
     <!-- Encabezado -->
-    <div class="flex justify-between items-center mb-6">
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
         <div>
-            <h2 class="text-2xl font-bold text-gray-800">Catálogo de Servicios</h2>
-            <p class="text-sm text-gray-500">Administra los servicios que ofrece el salón, sus precios y duración.</p>
+            <h2 class="page-title">Catálogo de Servicios</h2>
+            <p class="page-subtitle">Administra los servicios que ofrece el salón, sus precios y duración.</p>
         </div>
-        <button @click="openCreateModal()" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2 px-4 rounded shadow transition">
-            + Nuevo Servicio
+        <button @click="openCreateModal()" class="btn btn-primary">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+            Nuevo Servicio
         </button>
     </div>
 
     <!-- Tabla de Servicios -->
-    <div class="bg-white rounded-lg shadow overflow-hidden">
+    <div class="card overflow-hidden">
         <table class="min-w-full divide-y divide-gray-200">
             <thead class="bg-gray-50">
                 <tr>
@@ -34,7 +35,10 @@
                             <div class="text-xs text-gray-500">{{ $servicio->description ?? 'Sin descripción' }}</div>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700 font-medium">
-                            ⏱️ {{ $servicio->duration }} min
+                            <span class="inline-flex items-center gap-1.5">
+                                <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                                {{ $servicio->duration }} min
+                            </span>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm font-bold text-emerald-600">
                             C$ {{ number_format($servicio->price, 2) }}
@@ -70,27 +74,27 @@
     <div x-show="openModal" class="fixed inset-0 z-50 overflow-y-auto" style="display: none;">
         <div class="flex items-center justify-center min-h-screen px-4 text-center">
             
-            <div x-show="openModal" @click="openModal = false" class="fixed inset-0 bg-gray-900 bg-opacity-75 transition-opacity"></div>
+            <div x-show="openModal" @click="openModal = false" class="fixed inset-0 bg-gray-900/60 backdrop-blur-sm"></div>
             
-            <div x-show="openModal" class="relative bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:max-w-lg sm:w-full z-10">
-                <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+            <div x-show="openModal" class="relative bg-white rounded-2xl text-left overflow-hidden shadow-xl transform transition-all sm:max-w-lg sm:w-full z-10">
+                <div class="bg-white px-6 pt-5 pb-4 sm:p-6">
                     <h3 class="text-lg font-bold text-gray-900 border-b pb-2 mb-4" x-text="editMode ? 'Editar Servicio' : 'Nuevo Servicio'"></h3>
                     
                     <form class="space-y-4">
                         
                         <div>
-                            <label class="block text-xs font-bold text-gray-700 mb-1">Nombre del Servicio <span class="text-red-500">*</span></label>
-                            <input type="text" x-model="form.name" class="w-full shadow-sm border rounded py-2 px-3 text-gray-700 focus:ring-emerald-500" placeholder="Ej. Corte de Cabello Mujer">
+                            <label class="label">Nombre del Servicio <span class="text-red-500">*</span></label>
+                            <input type="text" x-model="form.name" class="input" placeholder="Ej. Corte de Cabello Mujer">
                         </div>
 
                         <div class="grid grid-cols-2 gap-4">
                             <div>
-                                <label class="block text-xs font-bold text-gray-700 mb-1">Precio Base (C$) <span class="text-red-500">*</span></label>
-                                <input type="number" step="0.01" min="0" x-model.number="form.price" class="w-full shadow-sm border rounded py-2 px-3 text-gray-700 focus:ring-emerald-500" placeholder="0.00">
+                                <label class="label">Precio Base (C$) <span class="text-red-500">*</span></label>
+                                <input type="number" step="0.01" min="0" x-model.number="form.price" class="input" placeholder="0.00">
                             </div>
                             <div>
-                                <label class="block text-xs font-bold text-gray-700 mb-1">Duración (Minutos) <span class="text-red-500">*</span></label>
-                                <select x-model.number="form.duration" class="w-full shadow-sm border rounded py-2 px-3 text-gray-700 focus:ring-emerald-500">
+                                <label class="label">Duración (Minutos) <span class="text-red-500">*</span></label>
+                                <select x-model.number="form.duration" class="input">
                                     <option value="15">15 min</option>
                                     <option value="30">30 min</option>
                                     <option value="45">45 min</option>
@@ -104,20 +108,16 @@
                         </div>
 
                         <div>
-                            <label class="block text-xs font-bold text-gray-700 mb-1">Descripción / Notas</label>
-                            <textarea x-model="form.description" rows="2" class="w-full shadow-sm border rounded py-2 px-3 text-gray-700 focus:ring-emerald-500" placeholder="Ej. Incluye lavado y secado express..."></textarea>
+                            <label class="label">Descripción / Notas</label>
+                            <textarea x-model="form.description" rows="2" class="input" placeholder="Ej. Incluye lavado y secado express..."></textarea>
                         </div>
 
                     </form>
                 </div>
                 
-                <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
-                    <button @click="saveService()" type="button" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-emerald-600 text-base font-bold text-white hover:bg-emerald-700 sm:ml-3 sm:w-auto sm:text-sm transition">
-                        Guardar
-                    </button>
-                    <button @click="openModal = false" type="button" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-bold text-gray-700 hover:bg-gray-50 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm transition">
-                        Cancelar
-                    </button>
+                <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse gap-2">
+                    <button @click="saveService()" type="button" class="btn btn-primary">Guardar</button>
+                    <button @click="openModal = false" type="button" class="btn btn-secondary">Cancelar</button>
                 </div>
             </div>
         </div>

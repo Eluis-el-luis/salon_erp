@@ -3,18 +3,19 @@
 @section('content')
 <div x-data="clientManager()">
     <!-- Encabezado -->
-    <div class="flex justify-between items-center mb-6">
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
         <div>
-            <h2 class="text-2xl font-bold text-gray-800">Directorio de Clientes</h2>
-            <p class="text-sm text-gray-500">Gestiona los datos de contacto para agenda y cuentas por cobrar.</p>
+            <h2 class="page-title">Directorio de Clientes</h2>
+            <p class="page-subtitle">Gestiona los datos de contacto para agenda y cuentas por cobrar.</p>
         </div>
-        <button @click="openCreateModal()" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2 px-4 rounded shadow transition">
-            + Nuevo Cliente
+        <button @click="openCreateModal()" class="btn btn-primary">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+            Nuevo Cliente
         </button>
     </div>
 
     <!-- Tabla de Clientes -->
-    <div class="bg-white rounded-lg shadow overflow-hidden">
+    <div class="card overflow-hidden">
         <table class="min-w-full divide-y divide-gray-200">
             <thead class="bg-gray-50">
                 <tr>
@@ -55,37 +56,33 @@
     <!-- MODAL DE CLIENTE -->
     <div x-show="openModal" class="fixed inset-0 z-50 overflow-y-auto" style="display: none;">
         <div class="flex items-center justify-center min-h-screen px-4 text-center">
-            <div x-show="openModal" @click="openModal = false" class="fixed inset-0 bg-gray-900 bg-opacity-75 transition-opacity"></div>
+            <div x-show="openModal" @click="openModal = false" class="fixed inset-0 bg-gray-900/60 backdrop-blur-sm"></div>
             
-            <div x-show="openModal" class="relative bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:max-w-lg sm:w-full z-10">
-                <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+            <div x-show="openModal" class="relative bg-white rounded-2xl text-left overflow-hidden shadow-xl transform transition-all sm:max-w-lg sm:w-full z-10">
+                <div class="bg-white px-6 pt-5 pb-4 sm:p-6">
                     <h3 class="text-lg font-bold text-gray-900 border-b pb-2 mb-4" x-text="editMode ? 'Editar Cliente' : 'Registrar Nuevo Cliente'"></h3>
                     
                     <form class="space-y-4">
                         <div>
-                            <label class="block text-xs font-bold text-gray-700 mb-1">Nombre Completo <span class="text-red-500">*</span></label>
-                            <input type="text" x-model="form.name" class="w-full shadow-sm border rounded py-2 px-3 text-gray-700 focus:ring-emerald-500">
+                            <label class="label">Nombre Completo <span class="text-red-500">*</span></label>
+                            <input type="text" x-model="form.name" class="input">
                         </div>
                         <div class="grid grid-cols-2 gap-4">
                             <div>
-                                <label class="block text-xs font-bold text-gray-700 mb-1">Teléfono</label>
-                                <input type="text" x-model="form.phone" class="w-full shadow-sm border rounded py-2 px-3 text-gray-700 focus:ring-emerald-500">
+                                <label class="label">Teléfono</label>
+                                <input type="text" x-model="form.phone" class="input">
                             </div>
                             <div>
-                                <label class="block text-xs font-bold text-gray-700 mb-1">Correo Electrónico</label>
-                                <input type="email" x-model="form.email" class="w-full shadow-sm border rounded py-2 px-3 text-gray-700 focus:ring-emerald-500">
+                                <label class="label">Correo Electrónico</label>
+                                <input type="email" x-model="form.email" class="input">
                             </div>
                         </div>
                     </form>
                 </div>
                 
-                <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
-                    <button @click="saveClient()" type="button" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-emerald-600 text-base font-bold text-white hover:bg-emerald-700 sm:ml-3 sm:w-auto sm:text-sm">
-                        Guardar
-                    </button>
-                    <button @click="openModal = false" type="button" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-bold text-gray-700 hover:bg-gray-50 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">
-                        Cancelar
-                    </button>
+                <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse gap-2">
+                    <button @click="saveClient()" type="button" class="btn btn-primary">Guardar</button>
+                    <button @click="openModal = false" type="button" class="btn btn-secondary">Cancelar</button>
                 </div>
             </div>
         </div>

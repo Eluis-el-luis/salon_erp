@@ -5,7 +5,7 @@
 
     <div class="flex justify-between items-center bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
         <div>
-            <h2 class="text-3xl font-extrabold text-gray-900">Gestión Bancaria</h2>
+            <h2 class="page-title">Gestión Bancaria</h2>
             <p class="text-gray-500 text-sm mt-1">Control de cuentas en BAC, LAFISE y depósitos del día.</p>
         </div>
     </div>
