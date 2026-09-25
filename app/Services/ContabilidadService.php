@@ -97,7 +97,7 @@ class ContabilidadService
         $costoInsumosConsumidos = 0;
         $costoMercaderiaProductos = 0; // Costo de mercadería para productos físicos (cuenta 5.1)
 
-        foreach ($sale->details as $detail) {
+        foreach ($sale->detalles as $detail) {
             $subtotalLinea = $detail->unit_price * $detail->quantity;
             $subtotalLineaNormalizado = $subtotalLinea * $tasa;
             
@@ -159,27 +159,63 @@ class ContabilidadService
                 'usuario_id' => auth()->id() ?? 1,
             ]);
 
-            // DEBE: Mapeo exacto de la cuenta de destino según el método de pago
-            if ($sale->payment_method === 'bac') {
-                $cuentaDestinoFondos = $this->getCuentaIdByCodigo('1.1.2.2'); // Banco BAC
-            } elseif ($sale->payment_method === 'lafise') {
-                $cuentaDestinoFondos = $this->getCuentaIdByCodigo('1.1.2.1'); // Banco Lafise
-            } else {
-                if ($sale->currency === 'usd' || $sale->currency === 'dolar') {
-                    $cuentaDestinoFondos = $this->getCuentaIdByCodigo('1.1.2'); // Cuenta Transitoria / Bancos USD
-                } else {
-                    $cuentaDestinoFondos = $this->getCuentaIdByCodigo('1.1.1'); // Caja General
+            // DEBE: Desglose por pagos mixtos (si existen) o pago único legacy
+            if ($sale->pagos && $sale->pagos->count() > 0) {
+                foreach ($sale->pagos as $pago) {
+                    if ($pago->tipo !== 'pago') {
+                        continue;
+                    }
+
+                    $cuenta = match (true) {
+                        $pago->metodo === 'bac' => $this->getCuentaIdByCodigo('1.1.2.2'),
+                        $pago->metodo === 'lafise' => $this->getCuentaIdByCodigo('1.1.2.1'),
+                        $pago->moneda === 'usd' => $this->getCuentaIdByCodigo('1.1.1.2'),
+                        default => $this->getCuentaIdByCodigo('1.1.1'),
+                    };
+
+                    DetalleAsiento::create([
+                        'asiento_id' => $asientoIngreso->id,
+                        'cuenta_id' => $cuenta,
+                        'moneda_id' => $monedaBase,
+                        'debe' => round((float) $pago->valor_nio, 2),
+                        'haber' => 0,
+                        'descripcion' => 'Cobro ' . strtoupper($pago->metodo) . ' (' . strtoupper($pago->moneda) . ') factura #' . $sale->id,
+                    ]);
                 }
+
+                // Vuelto entregado al cliente (reduce la caja)
+                $vuelto = round((float) $sale->pagos->where('tipo', 'vuelto')->sum('valor_nio'), 2);
+                if ($vuelto > 0) {
+                    DetalleAsiento::create([
+                        'asiento_id' => $asientoIngreso->id,
+                        'cuenta_id' => $this->getCuentaIdByCodigo('1.1.1'),
+                        'moneda_id' => $monedaBase,
+                        'debe' => 0,
+                        'haber' => $vuelto,
+                        'descripcion' => 'Vuelto/cambio entregado al cliente factura #' . $sale->id,
+                    ]);
+                }
+            } else {
+                // Pago único legacy
+                if ($sale->payment_method === 'bac') {
+                    $cuentaDestinoFondos = $this->getCuentaIdByCodigo('1.1.2.2');
+                } elseif ($sale->payment_method === 'lafise') {
+                    $cuentaDestinoFondos = $this->getCuentaIdByCodigo('1.1.2.1');
+                } else {
+                    $cuentaDestinoFondos = ($sale->currency === 'usd' || $sale->currency === 'dolar')
+                        ? $this->getCuentaIdByCodigo('1.1.2')
+                        : $this->getCuentaIdByCodigo('1.1.1');
+                }
+
+                DetalleAsiento::create([
+                    'asiento_id' => $asientoIngreso->id,
+                    'cuenta_id' => $cuentaDestinoFondos,
+                    'moneda_id' => $monedaBase,
+                    'debe' => $montoTotalNetoNormalizado,
+                    'haber' => 0,
+                    'descripcion' => 'Cobro neto de factura #' . $sale->id,
+                ]);
             }
-            
-            DetalleAsiento::create([
-                'asiento_id' => $asientoIngreso->id,
-                'cuenta_id' => $cuentaDestinoFondos,
-                'moneda_id' => $monedaBase,
-                'debe' => $montoTotalNetoNormalizado,
-                'haber' => 0,
-                'descripcion' => 'Cobro neto de factura #' . $sale->id,
-            ]);
 
             // HABER: Ingreso por Servicios (neto de descuento)
             if ($totalServiciosNeto > 0) {
@@ -618,6 +654,7 @@ public function contabilizarGasto($descripcion, $monto, $cuentaGastoId, $metodoP
         $cuentaSueldos = $this->getCuentaIdByCodigo('6.7'); // Sueldos y Salarios
         $cuentaComisiones = $this->getCuentaIdByCodigo('5.3'); // Comisiones Estilistas
         $cuentaAnticipos = $this->getCuentaIdByCodigo('1.1.6'); // Adelantos de Salario
+        $cuentaRetenciones = $this->getCuentaIdByCodigo('2.1.5'); // Retenciones por Pagar (INSS/IR)
 
         $cuentaCaja = $this->getCuentaIdByCodigo('1.1.1');
         // CORRECCIÓN: 1.1.3 era "Cuentas por Cobrar". El banco por defecto es una subcuenta específica (Lafise).
@@ -655,8 +692,17 @@ public function contabilizarGasto($descripcion, $monto, $cuentaGastoId, $metodoP
                 ]);
             }
 
-            // 3. HABER: Recuperación de Anticipos (El Activo 1.1.6 disminuye)
-            // Los anticipos ya están descontados en total_to_pay, aquí solo recuperamos el activo
+            // 3. HABER: Retenciones por pagar (INSS + IR) - Pasivo 2.1.5
+            $retenciones = $payroll->inss_empleado + $payroll->impuesto_renta;
+            if ($retenciones > 0) {
+                \App\Models\DetalleAsiento::create([
+                    'asiento_id' => $asiento->id, 'cuenta_id' => $this->getCuentaIdByCodigo('2.1.5'),
+                    'moneda_id' => $monedaBase, 'debe' => 0, 'haber' => $retenciones,
+                    'descripcion' => 'Retenciones INSS/IR nómina ' . $payroll->user->name
+                ]);
+            }
+
+            // 4. HABER: Recuperación de Anticipos (El Activo 1.1.6 disminuye)
             if ($payroll->salary_advances > 0) {
                 \App\Models\DetalleAsiento::create([
                     'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaAnticipos,
@@ -665,8 +711,7 @@ public function contabilizarGasto($descripcion, $monto, $cuentaGastoId, $metodoP
                 ]);
             }
 
-            // 4. HABER: Salida del Dinero Neto (Caja/Banco)
-            // total_to_pay YA incluye la deducción de anticipos: (salario + comisiones) - anticipos
+            // 5. HABER: Salida del Dinero Neto (Caja/Banco) = total_to_pay (neto a pagar)
             if ($payroll->total_to_pay > 0) {
                 \App\Models\DetalleAsiento::create([
                     'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaOrigen,
@@ -834,6 +879,66 @@ public function contabilizarGasto($descripcion, $monto, $cuentaGastoId, $metodoP
                 'debe' => 0,
                 'haber' => $monto,
                 'descripcion' => 'Salida de fondos por retiro del propietario',
+            ]);
+
+            $this->validarCuadre($asiento->id);
+            DB::commit();
+        } catch (Exception $e) {
+            DB::rollBack();
+            throw $e;
+        }
+    }
+
+    /**
+     * MANDAMIENTO DE MERMAS:
+     * DEBE -> 6.8 Mermas y Desperdicios de Inventario
+     * HABER -> Inventario de Insumos (1.1.5) o Productos (1.1.4) según el artículo
+     */
+    public function contabilizarMerma($merma, string $codigoInventario)
+    {
+        $periodo = DB::table('periodos_contables')
+            ->where('estado', 'abierto')
+            ->whereDate('fecha_inicio', '<=', $merma->fecha)
+            ->whereDate('fecha_fin', '>=', $merma->fecha)
+            ->first();
+
+        if (!$periodo) {
+            throw new Exception("Operación Cancelada: No existe un periodo contable abierto para la fecha de la merma.");
+        }
+
+        $monedaBase = $this->getMonedaBaseId();
+        $cuentaMerma = $this->getCuentaIdByCodigo('6.8');
+        $cuentaInventario = $this->getCuentaIdByCodigo($codigoInventario);
+        $monto = round((float) $merma->valor, 2);
+
+        DB::beginTransaction();
+        try {
+            $asiento = AsientoContable::create([
+                'numero_asiento' => 'MER-' . str_pad($merma->id, 5, '0', STR_PAD_LEFT),
+                'fecha' => $merma->fecha,
+                'concepto' => 'Merma de inventario: ' . $merma->motivo,
+                'modulo_origen' => 'mermas',
+                'referencia_id' => $merma->id,
+                'periodo_id' => $periodo->id,
+                'usuario_id' => auth()->id() ?? 1,
+            ]);
+
+            DetalleAsiento::create([
+                'asiento_id' => $asiento->id,
+                'cuenta_id' => $cuentaMerma,
+                'moneda_id' => $monedaBase,
+                'debe' => $monto,
+                'haber' => 0,
+                'descripcion' => 'Gasto por merma / desperdicio de inventario',
+            ]);
+
+            DetalleAsiento::create([
+                'asiento_id' => $asiento->id,
+                'cuenta_id' => $cuentaInventario,
+                'moneda_id' => $monedaBase,
+                'debe' => 0,
+                'haber' => $monto,
+                'descripcion' => 'Baja física de inventario por merma',
             ]);
 
             $this->validarCuadre($asiento->id);

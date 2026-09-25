@@ -7,6 +7,7 @@ use App\Models\Usuario;
 use App\Models\Nomina;
 use App\Models\ComisionGenerada;
 use App\Models\Adelanto;
+use App\Models\AdelantoCuota;
 use App\Services\ContabilidadService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -50,15 +51,58 @@ class NominaController extends Controller
             // Sumamos el total (ahora unificado en una sola bolsa de comisiones)
             $totalComisiones = $comisionesPendientes->sum('monto_comision');
 
-            // 2. Buscar si pidió adelantos de salario (Deducciones)
+            // 2. Buscar adelantos y sus cuotas vencidas en el período
             $adelantosQuery = Adelanto::where('user_id', $usuario->id)
                 ->whereBetween('date', [$fechaInicio->toDateString(), $fechaFin->toDateString()]);
             
             $totalAdelantos = $adelantosQuery->sum('amount');
 
-            // 3. Salario Base y Total Neto a Pagar
+            // FASE 5 AVANZADA: Amortización de adelantos por cuotas
+            // Solo descontar las cuotas vencidas en este período
+            $adelantosConCuotas = Adelanto::where('user_id', $usuario->id)
+                ->whereHas('cuotas', function ($q) use ($fechaInicio, $fechaFin) {
+                    $q->whereBetween('fecha_vencimiento', [$fechaInicio->toDateString(), $fechaFin->toDateString()])
+                      ->whereIn('estado', ['pendiente', 'parcial']);
+                })->with(['cuotas' => function ($q) use ($fechaInicio, $fechaFin) {
+                    $q->whereBetween('fecha_vencimiento', [$fechaInicio->toDateString(), $fechaFin->toDateString()])
+                      ->whereIn('estado', ['pendiente', 'parcial']);
+                }])->get();
+
+            $totalCuotasVencidas = $adelantosConCuotas->flatMap->cuotas
+                ->whereIn('estado', ['pendiente', 'parcial'])
+                ->whereBetween('fecha_vencimiento', [$fechaInicio->toDateString(), $fechaFin->toDateString()])
+                ->sum('monto');
+
+            // Si hay cuotas vencidas, usar esas en lugar del total de adelantos
+            $totalAdelantosEfectivo = $totalCuotasVencidas > 0 ? $totalCuotasVencidas : $totalAdelantos;
+
+            // Marcar cuotas como pagadas al generar la nómina
+            foreach ($adelantosConCuotas as $adelanto) {
+                foreach ($adelanto->cuotas as $cuota) {
+                    if ($cuota->estado !== 'pagada' && 
+                        $cuota->fecha_vencimiento >= $fechaInicio->toDateString() && 
+                        $cuota->fecha_vencimiento <= $fechaFin->toDateString()) {
+                        $cuota->update([
+                            'estado' => 'pagada',
+                            'monto_pagado' => $cuota->monto,
+                            'fecha_pago' => now()->toDateString(),
+                        ]);
+                    }
+                }
+            }
+
+            // 3. Salario Base, Deducciones de Ley y Total Neto a Pagar
             $salarioActivo = $usuario->salario_fijo;
-            $totalAPagar = ($salarioActivo + $totalComisiones) - $totalAdelantos;
+            $totalDevengado = $salarioActivo + $totalComisiones;
+
+            // FASE 5: Deducciones legales (INSS/IR) configurables
+            $cfg = config('salon.nomina');
+            $inssEmpleado = round($totalDevengado * (float) $cfg['inss_empleado'], 2);
+            $baseIR = max(0, $totalDevengado - (float) $cfg['ir_exento']);
+            $impuestoRenta = round($baseIR * (float) $cfg['ir_tasa'], 2);
+            $retenciones = round($inssEmpleado + $impuestoRenta, 2);
+
+            $totalAPagar = ($totalDevengado - $totalAdelantosEfectivo) - $retenciones;
 
             // 4. Crear la Planilla directamente como PAGADA para disparar la contabilidad
             $nomina = Nomina::create([
@@ -70,8 +114,11 @@ class NominaController extends Controller
                 'products_commission' => 0, // Ya no necesitamos separarlo, la comision generada lo hizo por nosotros
                 'extra_bonus' => 0,
                 'sunday_bonus' => 0,
-                'salary_advances' => $totalAdelantos,
+                'salary_advances' => $totalAdelantosEfectivo,
                 'loan_payments' => 0,
+                'inss_empleado' => $inssEmpleado,
+                'impuesto_renta' => $impuestoRenta,
+                'retenciones_totales' => $retenciones,
                 'total_to_pay' => $totalAPagar > 0 ? $totalAPagar : 0,
                 'status' => 'pagada'
             ]);

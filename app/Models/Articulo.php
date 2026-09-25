@@ -45,4 +45,9 @@ class Articulo extends Model
     {
         return $this->belongsTo(Proveedor::class, 'provider_id');
     }
+
+    public function lotes()
+    {
+        return $this->hasMany(Lote::class, 'item_id');
+    }
 }

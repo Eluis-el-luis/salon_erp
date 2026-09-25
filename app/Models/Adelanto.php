@@ -31,4 +31,9 @@ class Adelanto extends Model
     {
         return $this->belongsTo(Cliente::class, 'client_id');
     }
+
+    public function cuotas()
+    {
+        return $this->hasMany(AdelantoCuota::class, 'adelanto_id')->orderBy('numero_cuota');
+    }
 }

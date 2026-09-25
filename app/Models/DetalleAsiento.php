@@ -13,4 +13,19 @@ class DetalleAsiento extends Model
     {
         return $this->belongsTo(CuentaContable::class, 'cuenta_id');
     }
+
+    public function asiento()
+    {
+        return $this->belongsTo(AsientoContable::class, 'asiento_id');
+    }
+
+    public function centroCosto()
+    {
+        return $this->belongsTo(CentroCosto::class, 'centro_costo_id');
+    }
+
+    public function moneda()
+    {
+        return $this->belongsTo(Moneda::class, 'moneda_id');
+    }
 }

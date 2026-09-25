@@ -8,7 +8,7 @@
         <h1 class="text-3xl font-black text-gray-900 uppercase tracking-widest">Álvaro Rugama</h1>
         <h2 class="text-xl font-bold text-gray-600 uppercase mt-1">Make Up Studio</h2>
         <h3 class="text-lg font-bold text-emerald-600 uppercase mt-4">Estado de Resultados</h3>
-        <p class="text-gray-500 text-sm mt-1">Periodo actual (Agosto 2026)</p>
+        <p class="text-gray-500 text-sm mt-1">{{ $periodo->nombre ?? 'Periodo actual' }}</p>
         <p class="text-gray-400 text-xs mt-1">Expresado en Córdobas (C$)</p>
     </div>
 
@@ -66,20 +66,28 @@
             </div>
         </div>
 
-        <!-- 3. GASTOS OPERATIVOS -->
-        <div class="mb-6">
-            <h4 class="text-lg font-black text-gray-800 border-b-2 border-gray-800 mb-3">GASTOS DE OPERACIÓN</h4>
-            @foreach($cuentasResultados->filter(fn($c) => str_starts_with($c->codigo, '6') && $c->saldo_final != 0) as $cuenta)
-                <div class="flex justify-between text-sm py-1">
-                    <span class="text-gray-700">{{ $cuenta->nombre }}</span>
-                    <span class="font-medium text-gray-900">C$ {{ number_format($cuenta->saldo_final, 2) }}</span>
-                </div>
-            @endforeach
-            <div class="flex justify-between text-sm py-2 mt-2 bg-gray-50 font-bold border-t border-gray-200 px-2 rounded">
-                <span>TOTAL GASTOS DE OPERACIÓN</span>
-                <span class="text-red-700">(C$ {{ number_format($gastosOperativos, 2) }})</span>
-            </div>
+        <!-- UTILIDAD OPERATIVA -->
+        <div class="flex justify-between text-lg py-3 mb-8 bg-emerald-700 text-white font-black px-4 rounded-lg shadow-inner">
+            <span>UTILIDAD OPERATIVA</span>
+            <span>C$ {{ number_format($utilidadOperativa, 2) }}</span>
         </div>
+
+        <!-- 4. OTROS EGRESOS (Clase 7) -->
+        @if($cuentasResultados->contains(fn($c) => str_starts_with($c->codigo, '7') && $c->saldo_final != 0))
+            <div class="mb-6">
+                <h4 class="text-lg font-black text-gray-800 border-b-2 border-gray-800 mb-3">OTROS EGRESOS</h4>
+                @foreach($cuentasResultados->filter(fn($c) => str_starts_with($c->codigo, '7') && $c->saldo_final != 0) as $cuenta)
+                    <div class="flex justify-between text-sm py-1">
+                        <span class="text-gray-700">{{ $cuenta->nombre }}</span>
+                        <span class="font-medium text-gray-900">C$ {{ number_format($cuenta->saldo_final, 2) }}</span>
+                    </div>
+                @endforeach
+                <div class="flex justify-between text-sm py-2 mt-2 bg-gray-50 font-bold border-t border-gray-200 px-2 rounded">
+                    <span>TOTAL OTROS EGRESOS</span>
+                    <span class="text-red-700">(C$ {{ number_format($otrosEgresos, 2) }})</span>
+                </div>
+            </div>
+        @endif
 
         <!-- UTILIDAD NETA -->
         @php

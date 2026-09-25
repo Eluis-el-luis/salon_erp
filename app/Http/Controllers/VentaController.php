@@ -147,11 +147,32 @@ class VentaController extends Controller
         $request->validate([
             'cart' => 'required|array',
             'discount' => 'numeric|min:0',
-            // VALIDAMOS LAS NUEVAS OPCIONES
-            'payment_method' => 'required|string|in:efectivo,bac,lafise',
-            'currency' => 'required|string|in:nio,usd',
-            'exchange_rate' => 'required|numeric|min:1',
+            // PAGOS MIXTOS: arreglo de pagos. Si no viene, se usa el pago único legacy.
+            'payments' => 'nullable|array',
+            'payments.*.metodo' => 'required|in:efectivo,bac,lafise',
+            'payments.*.moneda' => 'required|in:nio,usd',
+            'payments.*.monto' => 'required|numeric|min:0.01',
+            'payments.*.tasa' => 'required|numeric|min:1',
+            // Legacy (un solo pago)
+            'payment_method' => 'nullable|string|in:efectivo,bac,lafise',
+            'currency' => 'nullable|string|in:nio,usd',
+            'exchange_rate' => 'nullable|numeric|min:1',
         ]);
+
+        // PAGOS MIXTOS: normalizamos el arreglo de pagos (compatibilidad con pago único legacy)
+        $pagosRaw = ($request->has('payments') && is_array($request->payments) && count($request->payments) > 0)
+            ? $request->payments
+            : [[
+                'metodo' => $request->payment_method ?? 'efectivo',
+                'moneda' => $request->currency ?? 'nio',
+                'monto' => 0, // se completa tras calcular el total
+                'tasa' => $request->exchange_rate ?? 1,
+            ]];
+
+        $primario = $pagosRaw[0];
+        $paymentMethod = $primario['metodo'];
+        $currency = $primario['moneda'];
+        $exchangeRate = (float) $primario['tasa'];
 
         \Illuminate\Support\Facades\DB::beginTransaction();
 
@@ -168,12 +189,12 @@ class VentaController extends Controller
                 'subtotal' => $subtotal,
                 'discount' => $request->discount,
                 'total' => $total > 0 ? $total : 0,
-                
-                // GUARDAMOS LAS OPCIONES SELECCIONADAS
-                'currency' => $request->currency,
-                'exchange_rate' => $request->exchange_rate,
-                'payment_method' => $request->payment_method,
-                
+
+                // Método principal derivado del primer pago
+                'currency' => $currency,
+                'exchange_rate' => $exchangeRate,
+                'payment_method' => $paymentMethod,
+
                 'status' => 'completada'
             ]);
 
@@ -200,20 +221,65 @@ class VentaController extends Controller
             // Descuento de inventario (insumos fraccionados por fórmulas + productos físicos)
             $stockCritico = (new InventarioService())->descontarPorVenta($venta);
 
-            // Multimoneda: una venta cobrada en USD en efectivo aumenta el inventario físico
-            // de dólares de la caja, recalculando el costo promedio ponderado.
-            if (($venta->currency === 'usd' || $venta->currency === 'dolar') && $venta->payment_method === 'efectivo') {
-                $cajaActiva = SesionCaja::where('user_id', auth()->id())->where('estado', 'abierta')->first();
-                if ($cajaActiva) {
+            // PAGOS MIXTOS: registrar cada pago y calcular el vuelto multimoneda
+            $totalRecibidoNio = 0;
+            $pagosAInsertar = [];
+
+            foreach ($pagosRaw as $p) {
+                $moneda = $p['moneda'];
+                $tasa = (float) $p['tasa'];
+                $monto = (float) $p['monto'];
+
+                // Legacy: un único pago sin monto -> se cubre el total
+                if ($monto <= 0) {
+                    $monto = (float) $total;
+                }
+
+                $valorNio = $moneda === 'usd' ? round($monto * $tasa, 2) : round($monto, 2);
+                $totalRecibidoNio += $valorNio;
+
+                $pagosAInsertar[] = [
+                    'metodo' => $p['metodo'],
+                    'moneda' => $moneda,
+                    'monto' => $monto,
+                    'tasa' => $tasa,
+                    'valor_nio' => $valorNio,
+                    'tipo' => 'pago',
+                ];
+            }
+
+            // Vuelto multimoneda: si el cliente pagó de más, se devuelve en efectivo NIO
+            $vueltoNio = round(max(0, $totalRecibidoNio - $total), 2);
+            if ($vueltoNio > 0) {
+                $pagosAInsertar[] = [
+                    'metodo' => 'efectivo',
+                    'moneda' => 'nio',
+                    'monto' => $vueltoNio,
+                    'tasa' => 1,
+                    'valor_nio' => $vueltoNio,
+                    'tipo' => 'vuelto',
+                ];
+            }
+
+            foreach ($pagosAInsertar as $pp) {
+                \App\Models\Pago::create(['venta_id' => $venta->id] + $pp);
+            }
+
+            // Multimoneda: todo pago en USD en efectivo aumenta el inventario físico de dólares
+            $cajaActiva = SesionCaja::where('user_id', auth()->id())->where('estado', 'abierta')->first();
+            foreach ($pagosAInsertar as $pp) {
+                if ($pp['tipo'] === 'pago' && $pp['moneda'] === 'usd' && $pp['metodo'] === 'efectivo' && $cajaActiva) {
                     (new DivisaService())->ingresarDivisas(
                         'USD',
                         'App\Models\SesionCaja',
                         $cajaActiva->id,
-                        (float) $venta->total,
-                        (float) $venta->exchange_rate
+                        (float) $pp['monto'],
+                        (float) $pp['tasa']
                     );
                 }
             }
+
+            $venta->load('detalles', 'pagos');
 
             $contabilidad = new \App\Services\ContabilidadService();
             $contabilidad->contabilizarVenta($venta);
@@ -251,37 +317,61 @@ class VentaController extends Controller
 
     /**
      * Calcula y registra las comisiones de los estilistas para una venta específica.
+     * FASE 5 AVANZADA: Soporta comisiones escalonadas (rangos) por esquema.
      */
     private function registrarComisionesVenta($venta)
     {
-        // Iteramos sobre los detalles de la venta (servicios o productos)
         foreach ($venta->detalles as $detalle) {
-            
-            // Solo calculamos si hay un estilista asignado al detalle
             if ($detalle->stylist_id) {
-                $estilista = clone Usuario::find($detalle->stylist_id);
+                $estilista = Usuario::find($detalle->stylist_id);
                 
-                if ($estilista) {
-                    $esquema = $estilista->esquemaActual;
+                if (!$estilista) {
+                    continue;
+                }
+
+                $esquema = $estilista->esquemaActual;
+                $montoVenta = $detalle->quantity * $detalle->unit_price;
+
+                // Determinar porcentaje aplicable
+                $porcentaje = 0;
+                
+                if ($esquema && $esquema->rangos->count() > 0) {
+                    // COMISIONES ESCALONADAS: buscar el rango correspondiente al monto de venta
+                    $rangoAplicable = $esquema->rangos
+                        ->where('desde', '<=', $montoVenta)
+                        ->where(function ($q) use ($montoVenta) {
+                            $q->where('hasta', '>=', $montoVenta)
+                              ->orWhereNull('hasta');
+                        })
+                        ->orderBy('orden')
+                        ->first();
                     
-                    // Si tiene un esquema vigente, usamos ese porcentaje. 
-                    // Si no, usamos el comision_servicio de su perfil por compatibilidad.
-                    $porcentaje = $esquema ? $esquema->porcentaje_comision : ($estilista->comision_servicio ?? 0);
-
-                    if ($porcentaje > 0) {
-                        $montoVenta = $detalle->quantity * $detalle->unit_price;
-                        $montoComision = $montoVenta * ($porcentaje / 100);
-
-                        ComisionGenerada::create([
-                            'empleado_id' => $estilista->id,
-                            'venta_id' => $venta->id,
-                            'monto_venta' => $montoVenta,
-                            'porcentaje_aplicado' => $porcentaje,
-                            'monto_comision' => $montoComision,
-                            'fecha' => \Carbon\Carbon::now(),
-                            'estado' => 'pendiente' // Queda pendiente hasta que se pague en la Planilla
-                        ]);
+                    if ($rangoAplicable) {
+                        $porcentaje = $rangoAplicable->porcentaje;
+                    } elseif ($esquema->porcentaje_comision) {
+                        // Fallback: porcentaje único del esquema
+                        $porcentaje = $esquema->porcentaje_comision;
                     }
+                } elseif ($esquema) {
+                    // Esquema sin rangos: usar porcentaje único
+                    $porcentaje = $esquema->porcentaje_comision;
+                } else {
+                    // Fallback: porcentaje del perfil del empleado
+                    $porcentaje = $estilista->comision_servicio ?? 0;
+                }
+
+                if ($porcentaje > 0) {
+                    $montoComision = $montoVenta * ($porcentaje / 100);
+
+                    ComisionGenerada::create([
+                        'empleado_id' => $estilista->id,
+                        'venta_id' => $venta->id,
+                        'monto_venta' => $montoVenta,
+                        'porcentaje_aplicado' => $porcentaje,
+                        'monto_comision' => $montoComision,
+                        'fecha' => \Carbon\Carbon::now(),
+                        'estado' => 'pendiente'
+                    ]);
                 }
             }
         }

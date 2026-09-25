@@ -13,4 +13,9 @@ class EsquemaComision extends Model
     {
         return $this->belongsTo(Usuario::class, 'empleado_id');
     }
+
+    public function rangos()
+    {
+        return $this->hasMany(EsquemaRango::class, 'esquema_comision_id')->orderBy('orden');
+    }
 }

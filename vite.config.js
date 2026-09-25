@@ -18,6 +18,7 @@ export default defineConfig({
     ],
     server: {
         watch: {
+            allowedHosts: ['.trycloudflare.com'],
             ignored: ['**/storage/framework/views/**'],
         },
     },

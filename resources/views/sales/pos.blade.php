@@ -161,9 +161,121 @@
             </div>
         </div>
 
-        <button @click="checkout()" :disabled="cart.length === 0" class="w-full mt-4 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-400 text-white font-bold py-3.5 px-4 rounded-xl shadow-lg transition text-lg">
-            Facturar Venta
+        <button @click="openCheckout()" :disabled="cart.length === 0" class="w-full mt-4 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-400 text-white font-bold py-3.5 px-4 rounded-xl shadow-lg transition text-lg">
+            Proceder al Pago
         </button>
+    </div>
+
+    <!-- ===== MODAL DE CHECKOUT (PAGOS MIXTOS) ===== -->
+    <div x-show="checkoutOpen" style="display: none;" class="fixed inset-0 z-[90] overflow-y-auto bg-gray-900/60 backdrop-blur-sm">
+        <div class="flex items-center justify-center min-h-screen px-4 py-8">
+            <div class="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
+
+                <!-- Cabecera -->
+                <div class="bg-emerald-800 text-white px-6 py-4 flex items-center justify-between">
+                    <div>
+                        <h3 class="text-lg font-bold">Proceder al Pago</h3>
+                        <p class="text-emerald-200 text-xs">Total a cobrar: <span class="font-black">C$ <span x-text="calculateTotal()"></span></span></p>
+                    </div>
+                    <button @click="checkoutOpen = false" class="text-emerald-200 hover:text-white text-2xl leading-none cursor-pointer">&times;</button>
+                </div>
+
+                <div class="p-6 space-y-5">
+
+                    <!-- Monto faltante -->
+                    <div class="bg-gray-900 text-white p-4 rounded-xl flex items-center justify-between">
+                        <span class="text-sm font-semibold text-gray-300">Monto faltante</span>
+                        <span class="text-2xl font-black text-emerald-400">C$ <span x-text="faltante"></span></span>
+                    </div>
+
+                    <!-- Método y moneda -->
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label class="label">Método de Pago</label>
+                            <select x-model="curMetodo" class="input">
+                                <option value="efectivo">Caja / Efectivo</option>
+                                <option value="bac">Banco BAC</option>
+                                <option value="lafise">Banco LAFISE</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="label">Moneda</label>
+                            <select x-model="curMoneda" class="input">
+                                <option value="nio">Córdobas (C$)</option>
+                                <option value="usd">Dólares (USD)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div x-show="curMoneda === 'usd'">
+                        <label class="label">Tasa de Cambio</label>
+                        <input type="number" x-model.number="curTasa" step="0.01" class="input">
+                    </div>
+
+                    <!-- Botones de denominación rápida -->
+                    <div>
+                        <label class="label">Denominaciones rápidas</label>
+                        <div class="flex flex-wrap gap-2">
+                            <template x-for="d in (curMoneda === 'usd' ? denomUsd : denomNio)" :key="d">
+                                <button type="button" @click="setDenom(d)"
+                                        class="px-3 py-2 rounded-lg border text-sm font-bold transition cursor-pointer"
+                                        :class="curMoneda === 'usd' ? 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100' : 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'">
+                                    <span x-text="curMoneda === 'usd' ? '$' : 'C$'"></span><span x-text="d"></span>
+                                </button>
+                            </template>
+                        </div>
+                    </div>
+
+                    <!-- Monto del pago a agregar -->
+                    <div class="flex items-end gap-2">
+                        <div class="flex-1">
+                            <label class="label">Monto recibido</label>
+                            <input type="number" x-model.number="curMonto" step="0.01" min="0" class="input text-lg font-bold">
+                        </div>
+                        <button type="button" @click="addPayment()" class="btn btn-primary">Agregar Pago</button>
+                    </div>
+                    <p class="text-xs text-gray-400">Este pago equivale a: C$ <span x-text="valorCurPago.toFixed(2)"></span></p>
+
+                    <!-- Pagos agregados -->
+                    <div class="border border-gray-200 rounded-xl overflow-hidden">
+                        <div class="bg-gray-50 px-4 py-2 text-xs font-bold text-gray-500 uppercase">Pagos Registrados</div>
+                        <template x-if="payments.length > 0">
+                            <div class="divide-y divide-gray-100">
+                                <template x-for="(p, i) in payments" :key="i">
+                                    <div class="flex items-center justify-between px-4 py-2.5 text-sm">
+                                        <div>
+                                            <span class="font-bold text-gray-900" x-text="p.metodo.charAt(0).toUpperCase() + p.metodo.slice(1)"></span>
+                                            <span class="text-gray-400" x-text="' · ' + p.moneda.toUpperCase()"></span>
+                                        </div>
+                                        <div class="flex items-center gap-3">
+                                            <span class="font-bold" x-text="(p.moneda === 'usd' ? '$' : 'C$') + ' ' + Number(p.monto).toFixed(2)"></span>
+                                            <button @click="removePayment(i)" class="text-red-500 hover:text-red-700 font-bold cursor-pointer">&times;</button>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+                        </template>
+                        <div x-show="payments.length === 0" class="px-4 py-6 text-center text-sm text-gray-400">Aún no agregas pagos.</div>
+                    </div>
+
+                    <!-- Vuelto -->
+                    <div x-show="parseFloat(vuelto) > 0" class="bg-emerald-50 border border-emerald-200 p-4 rounded-xl flex items-center justify-between">
+                        <span class="text-sm font-bold text-emerald-800">Vuelto a entregar</span>
+                        <span class="text-2xl font-black text-emerald-700">C$ <span x-text="vuelto"></span></span>
+                    </div>
+
+                </div>
+
+                <!-- Acciones -->
+                <div class="px-6 py-4 bg-gray-50 border-t border-gray-100 flex flex-row-reverse gap-3">
+                    <button @click="checkout()" :disabled="payments.length === 0 || totalRecibidoNio < parseFloat(calculateTotal())"
+                            class="btn btn-primary py-3 flex-1 disabled:opacity-50 disabled:cursor-not-allowed">
+                        Confirmar Venta
+                    </button>
+                    <button @click="checkoutOpen = false" type="button" class="btn btn-secondary">Cancelar</button>
+                </div>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -178,6 +290,67 @@
             currency: 'nio',
             exchangeRate: 36.50,
             paymentMethod: 'efectivo',
+
+            // === CHECKOUT MODAL (PAGOS MIXTOS) ===
+            checkoutOpen: false,
+            payments: [],
+            curMetodo: 'efectivo',
+            curMoneda: 'nio',
+            curTasa: 36.50,
+            curMonto: 0,
+            denomNio: [200, 500, 1000, 2000, 5000],
+            denomUsd: [5, 10, 20, 50, 100],
+
+            get faltante() {
+                return Math.max(0, (parseFloat(this.calculateTotal()) - this.totalRecibidoNio)).toFixed(2);
+            },
+            get totalRecibidoNio() {
+                return this.payments.reduce((sum, p) => sum + (p.moneda === 'usd' ? (p.monto * p.tasa) : p.monto), 0);
+            },
+            get vuelto() {
+                let exceso = (this.totalRecibidoNio - parseFloat(this.calculateTotal()));
+                return exceso > 0 ? exceso.toFixed(2) : '0.00';
+            },
+            get valorCurPago() {
+                return this.curMoneda === 'usd' ? (this.curMonto * this.curTasa) : this.curMonto;
+            },
+
+            openCheckout() {
+                if (this.cart.length === 0) return;
+                if (this.currency === 'usd' && (this.exchangeRate <= 0 || !this.exchangeRate)) {
+                    window.dispatchEvent(new CustomEvent('notify', { detail: 'Debes ingresar una tasa de cambio válida.' }));
+                    return;
+                }
+                this.payments = [];
+                this.curMetodo = 'efectivo';
+                this.curMoneda = 'nio';
+                this.curTasa = this.exchangeRate || 36.50;
+                this.curMonto = 0;
+                this.checkoutOpen = true;
+            },
+
+            setDenom(val) {
+                this.curMonto = val;
+            },
+
+            addPayment() {
+                let monto = parseFloat(this.curMonto) || 0;
+                if (monto <= 0) {
+                    window.dispatchEvent(new CustomEvent('notify', { detail: 'Ingresa un monto o usa un botón de denominación.' }));
+                    return;
+                }
+                this.payments.push({
+                    metodo: this.curMetodo,
+                    moneda: this.curMoneda,
+                    monto: monto,
+                    tasa: this.curMoneda === 'usd' ? (this.curTasa || 1) : 1
+                });
+                this.curMonto = 0;
+            },
+
+            removePayment(index) {
+                this.payments.splice(index, 1);
+            },
 
             init() {
                 const urlParams = new URLSearchParams(window.location.search);
@@ -232,10 +405,18 @@
             async checkout() {
                 if (this.cart.length === 0) return;
 
-                if (this.currency === 'usd' && (this.exchangeRate <= 0 || !this.exchangeRate)) {
-                    window.dispatchEvent(new CustomEvent('notify', { detail: 'Debes ingresar una tasa de cambio válida.' }));
+                // Requiere al menos un pago y que el saldo esté cubierto
+                if (this.payments.length === 0) {
+                    window.dispatchEvent(new CustomEvent('notify', { detail: 'Agrega al menos un método de pago.' }));
                     return;
                 }
+                if (this.totalRecibidoNio < parseFloat(this.calculateTotal())) {
+                    window.dispatchEvent(new CustomEvent('notify', { detail: 'Falta cubrir el monto: C$ ' + this.faltante }));
+                    return;
+                }
+
+                // Pago principal (legacy) derivado del primer pago
+                let primario = this.payments[0];
 
                 try {
                     let response = await fetch('/sales', {
@@ -250,24 +431,34 @@
                             cart: this.cart,
                             discount: this.discount,
                             client_id: this.clientId !== '' ? this.clientId : null,
-                            
-                            // ENVIAMOS LA CONFIGURACIÓN AL BACKEND
-                            currency: this.currency,
-                            exchange_rate: this.exchangeRate,
-                            payment_method: this.paymentMethod
+
+                            // PAGOS MIXTOS: arreglo de pagos
+                            payments: this.payments.map(p => ({
+                                metodo: p.metodo,
+                                moneda: p.moneda,
+                                monto: p.monto,
+                                tasa: p.moneda === 'usd' ? (p.tasa || this.exchangeRate) : 1
+                            })),
+
+                            // Primary (compatibilidad)
+                            payment_method: primario.metodo,
+                            currency: primario.moneda,
+                            exchange_rate: primario.moneda === 'usd' ? (primario.tasa || this.exchangeRate) : 1
                         })
                     });
 
                     if (response.ok) {
                         let data = await response.json();
                         window.dispatchEvent(new CustomEvent('notify', { detail: '¡Factura procesada con éxito!' }));
-                        
-                        // Limpiamos la caja
+
+                        // Limpiamos la caja y cerramos el modal
                         this.cart = [];
                         this.discount = 0;
                         this.clientId = '';
                         this.currency = 'nio';
-                        
+                        this.payments = [];
+                        this.checkoutOpen = false;
+
                         window.open('/ventas/' + data.sale_id + '/ticket', '_blank');
                     } else {
                         let data = await response.json();

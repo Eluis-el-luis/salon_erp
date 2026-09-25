@@ -14,4 +14,14 @@ class AsientoContable extends Model
     {
         return $this->hasMany(DetalleAsiento::class, 'asiento_id');
     }
+
+    public function usuario()
+    {
+        return $this->belongsTo(Usuario::class, 'usuario_id');
+    }
+
+    public function periodo()
+    {
+        return $this->belongsTo(PeriodoContable::class, 'periodo_id');
+    }
 }

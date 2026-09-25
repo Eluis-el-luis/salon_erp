@@ -74,16 +74,74 @@
                 <span>C$ {{ number_format($nomina->services_commission, 2) }}</span>
             </div>
             @endif
+
+            @if($nomina->products_commission > 0)
+            <div class="flex justify-between">
+                <span>Comisiones Productos:</span>
+                <span>C$ {{ number_format($nomina->products_commission, 2) }}</span>
+            </div>
+            @endif
+
+            @if($nomina->extra_bonus > 0)
+            <div class="flex justify-between">
+                <span>Bonos Extra:</span>
+                <span>C$ {{ number_format($nomina->extra_bonus, 2) }}</span>
+            </div>
+            @endif
+
+            @if($nomina->sunday_bonus > 0)
+            <div class="flex justify-between">
+                <span>Bono Domingo:</span>
+                <span>C$ {{ number_format($nomina->sunday_bonus, 2) }}</span>
+            </div>
+            @endif
+
+            <div class="border-t border-dashed border-gray-300 my-2"></div>
+            <div class="flex justify-between font-bold">
+                <span>TOTAL DEVENGADO:</span>
+                <span>C$ {{ number_format($nomina->active_salary + $nomina->services_commission + $nomina->products_commission + $nomina->extra_bonus + $nomina->sunday_bonus, 2) }}</span>
+            </div>
         </div>
 
         <!-- Detalle Deducciones -->
         <div class="text-xs space-y-2 mb-4">
             <p class="font-bold uppercase tracking-wider text-gray-500 mb-1">Deducciones</p>
             
+            @if($nomina->inss_empleado > 0)
+            <div class="flex justify-between text-red-600">
+                <span>INSS Empleado ({{ config('salon.nomina.inss_empleado')*100 }}%):</span>
+                <span>- C$ {{ number_format($nomina->inss_empleado, 2) }}</span>
+            </div>
+            @endif
+
+            @if($nomina->impuesto_renta > 0)
+            <div class="flex justify-between text-red-600">
+                <span>Impuesto a la Renta (IR):</span>
+                <span>- C$ {{ number_format($nomina->impuesto_renta, 2) }}</span>
+            </div>
+            @endif
+
+            @if($nomina->salary_advances > 0)
             <div class="flex justify-between text-red-600">
                 <span>Adelantos de Salario:</span>
                 <span>- C$ {{ number_format($nomina->salary_advances, 2) }}</span>
             </div>
+            @endif
+
+            @if($nomina->loan_payments > 0)
+            <div class="flex justify-between text-red-600">
+                <span>Préstamos / Cuotas:</span>
+                <span>- C$ {{ number_format($nomina->loan_payments, 2) }}</span>
+            </div>
+            @endif
+
+            @if($nomina->retenciones_totales > 0)
+            <div class="border-t border-dashed border-gray-300 my-2"></div>
+            <div class="flex justify-between font-bold text-red-600">
+                <span>TOTAL DEDUCCIONES:</span>
+                <span>- C$ {{ number_format($nomina->retenciones_totales, 2) }}</span>
+            </div>
+            @endif
         </div>
 
         <!-- Total Neto -->
