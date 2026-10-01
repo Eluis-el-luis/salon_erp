@@ -35,6 +35,9 @@
                         <tr class="hover:bg-gray-50">
                             <td class="px-6 py-4 whitespace-nowrap">
                                 <div class="font-bold text-gray-900">{{ $periodo->nombre }}</div>
+                                @if($periodo->generado_automaticamente)
+                                    <span class="inline-block mt-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800" title="Generado automáticamente por el sistema al registrar una operación sin periodo abierto">AUTO</span>
+                                @endif
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap text-gray-600">
                                 {{ \Carbon\Carbon::parse($periodo->fecha_inicio)->format('d/m/Y') }} - {{ \Carbon\Carbon::parse($periodo->fecha_fin)->format('d/m/Y') }}

@@ -5,8 +5,10 @@ namespace App\Services;
 use App\Models\AsientoContable;
 use App\Models\DetalleAsiento;
 use App\Models\CuentaContable;
+use App\Exceptions\ContabilidadException;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Exception;
 
 class ContabilidadService
@@ -14,6 +16,95 @@ class ContabilidadService
     // Caché en memoria para evitar consultas redundantes a la base de datos
     protected array $cachedCuentas = [];
     protected ?int $monedaBaseId = null;
+
+    // Notificaciones generadas durante la operación (ej. periodo autogenerado)
+    protected array $notificaciones = [];
+
+    /**
+     * Devuelve las notificaciones acumuladas (para mostrarlas al usuario).
+     */
+    public function notificaciones(): array
+    {
+        return $this->notificaciones;
+    }
+
+    protected function notificar(string $mensaje): void
+    {
+        $this->notificaciones[] = $mensaje;
+
+        try {
+            session()->flash('info', $mensaje);
+        } catch (\Throwable $e) {
+            // Sin sesión disponible (consola): solo se registra en el log.
+        }
+
+        Log::info('[Contabilidad] ' . $mensaje);
+    }
+
+    /**
+     * Resuelve el periodo contable que cubre una fecha.
+     *
+     * - Si existe un periodo abierto que la cubre, lo devuelve.
+     * - Si el periodo que la cubre está cerrado, bloquea la operación.
+     * - Si no existe ninguno, genera automáticamente el periodo mensual,
+     *   lo registra (generado_automaticamente) y notifica al usuario.
+     */
+    protected function resolverPeriodo($fecha): object
+    {
+        $fecha = Carbon::parse($fecha)->startOfDay();
+
+        $periodo = DB::table('periodos_contables')
+            ->whereDate('fecha_inicio', '<=', $fecha->toDateString())
+            ->whereDate('fecha_fin', '>=', $fecha->toDateString())
+            ->orderBy('fecha_inicio')
+            ->first();
+
+        if ($periodo) {
+            if ($periodo->estado !== 'abierto') {
+                throw new ContabilidadException(
+                    "Operación Cancelada: El periodo contable [{$periodo->nombre}] está cerrado. " .
+                    "No se pueden registrar operaciones con fecha {$fecha->toDateString()}."
+                );
+            }
+
+            return $periodo;
+        }
+
+        $inicio = $fecha->copy()->startOfMonth();
+        $fin = $fecha->copy()->endOfMonth();
+        $nombre = $this->nombrePeriodoMensual($inicio);
+
+        $id = DB::table('periodos_contables')->insertGetId([
+            'nombre' => $nombre,
+            'fecha_inicio' => $inicio->toDateString(),
+            'fecha_fin' => $fin->toDateString(),
+            'estado' => 'abierto',
+            'generado_automaticamente' => true,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $this->notificar(
+            "Se generó automáticamente el periodo contable [{$nombre}] " .
+            "({$inicio->format('d/m/Y')} al {$fin->format('d/m/Y')}) para poder registrar la operación."
+        );
+
+        return DB::table('periodos_contables')->find($id);
+    }
+
+    /**
+     * Nombre del periodo mensual en español (ej. "Septiembre 2026").
+     */
+    protected function nombrePeriodoMensual(Carbon $fecha): string
+    {
+        $meses = [
+            1 => 'Enero', 2 => 'Febrero', 3 => 'Marzo', 4 => 'Abril',
+            5 => 'Mayo', 6 => 'Junio', 7 => 'Julio', 8 => 'Agosto',
+            9 => 'Septiembre', 10 => 'Octubre', 11 => 'Noviembre', 12 => 'Diciembre',
+        ];
+
+        return $meses[(int) $fecha->month] . ' ' . $fecha->year;
+    }
 
     /**
      * Obtiene el ID de una cuenta contable mediante su código, utilizando caché local.
@@ -75,16 +166,8 @@ class ContabilidadService
 
     public function contabilizarVenta($sale)
     {
-        // 1. Identificar el periodo actual
-        $periodo = DB::table('periodos_contables')
-            ->where('estado', 'abierto')
-            ->whereDate('fecha_inicio', '<=', $sale->created_at)
-            ->whereDate('fecha_fin', '>=', $sale->created_at)
-            ->first();
-
-        if (!$periodo) {
-            throw new Exception("Operación Cancelada: No existe un periodo contable abierto para la fecha de esta venta.");
-        }
+        // 1. Identificar (o autogenerar) el periodo contable que cubre la venta
+        $periodo = $this->resolverPeriodo($sale->created_at);
 
         $monedaBase = $this->getMonedaBaseId();
         
@@ -343,8 +426,7 @@ class ContabilidadService
 public function contabilizarGasto($descripcion, $monto, $cuentaGastoId, $metodoPago)
     {
         // 1. Identificar periodo
-        $periodo = DB::table('periodos_contables')->where('estado', 'abierto')->first();
-        if (!$periodo) return;
+        $periodo = $this->resolverPeriodo(now());
 
         // 2. Extraer Cuentas
         $cuentaCaja = $this->getCuentaIdByCodigo('1.1.1');
@@ -397,8 +479,7 @@ public function contabilizarGasto($descripcion, $monto, $cuentaGastoId, $metodoP
     {
         if ($cashSession->diferencia == 0) return;
 
-        $periodo = DB::table('periodos_contables')->where('estado', 'abierto')->first();
-        if (!$periodo) return;
+        $periodo = $this->resolverPeriodo(now());
 
         $cuentaCaja = CuentaContable::where('codigo', '1.1.1')->first()->id;
         $monedaBase = DB::table('monedas')->where('es_base', true)->first()->id;
@@ -448,8 +529,7 @@ public function contabilizarGasto($descripcion, $monto, $cuentaGastoId, $metodoP
     
     public function contabilizarCompraInventario($monto, $tipoPago, $referenciaId, $metodoPagoContado = 'efectivo')
     {
-        $periodo = DB::table('periodos_contables')->where('estado', 'abierto')->first();
-        if (!$periodo) return;
+        $periodo = $this->resolverPeriodo(now());
 
         $cuentaInventario = CuentaContable::where('codigo', '1.1.5')->first()->id;
         $monedaBase = DB::table('monedas')->where('es_base', true)->first()->id;
@@ -508,8 +588,7 @@ public function contabilizarGasto($descripcion, $monto, $cuentaGastoId, $metodoP
 
     public function contabilizarPagoProveedor($monto, $referenciaId, $metodoPago = 'efectivo')
     {
-        $periodo = DB::table('periodos_contables')->where('estado', 'abierto')->first();
-        if (!$periodo) return;
+        $periodo = $this->resolverPeriodo(now());
 
         $cuentaPasivo = CuentaContable::where('codigo', '2.1.1')->first()->id;
         $monedaBase = DB::table('monedas')->where('es_base', true)->first()->id;
@@ -552,8 +631,7 @@ public function contabilizarGasto($descripcion, $monto, $cuentaGastoId, $metodoP
 
     public function contabilizarGastoCajaChica($movimiento)
     {
-        $periodo = DB::table('periodos_contables')->where('estado', 'abierto')->first();
-        if (!$periodo) return;
+        $periodo = $this->resolverPeriodo(now());
 
         $monedaBase = DB::table('monedas')->where('es_base', true)->first()->id;
         $cuentaCaja = CuentaContable::where('codigo', '1.1.1')->first()->id; 
@@ -598,8 +676,7 @@ public function contabilizarGasto($descripcion, $monto, $cuentaGastoId, $metodoP
 
     public function contabilizarTransferencia($transferencia)
     {
-        $periodo = DB::table('periodos_contables')->where('estado', 'abierto')->first();
-        if (!$periodo) return;
+        $periodo = $this->resolverPeriodo(now());
 
         $monedaBase = $this->getMonedaBaseId();
         $cuentaCaja = $this->getCuentaIdByCodigo('1.1.1');
@@ -645,8 +722,7 @@ public function contabilizarGasto($descripcion, $monto, $cuentaGastoId, $metodoP
 
     public function contabilizarNomina($payroll, $metodoPago = 'efectivo')
     {
-        $periodo = \Illuminate\Support\Facades\DB::table('periodos_contables')->where('estado', 'abierto')->first();
-        if (!$periodo) return;
+        $periodo = $this->resolverPeriodo(now());
 
         $monedaBase = \Illuminate\Support\Facades\DB::table('monedas')->where('es_base', true)->first()->id;
         
@@ -732,8 +808,7 @@ public function contabilizarGasto($descripcion, $monto, $cuentaGastoId, $metodoP
 
     public function contabilizarAdelantoCXC($advance, $metodoPago = 'efectivo')
     {
-        $periodo = \Illuminate\Support\Facades\DB::table('periodos_contables')->where('estado', 'abierto')->first();
-        if (!$periodo) return;
+        $periodo = $this->resolverPeriodo($advance->date);
 
         $monedaBase = \Illuminate\Support\Facades\DB::table('monedas')->where('es_base', true)->first()->id;
 
@@ -833,15 +908,7 @@ public function contabilizarGasto($descripcion, $monto, $cuentaGastoId, $metodoP
      */
     public function contabilizarRetiroPropietario($retiro, $metodoPago = 'efectivo')
     {
-        $periodo = DB::table('periodos_contables')
-            ->where('estado', 'abierto')
-            ->whereDate('fecha_inicio', '<=', $retiro->fecha)
-            ->whereDate('fecha_fin', '>=', $retiro->fecha)
-            ->first();
-
-        if (!$periodo) {
-            throw new Exception("Operación Cancelada: No existe un periodo contable abierto para la fecha del retiro.");
-        }
+        $periodo = $this->resolverPeriodo($retiro->fecha);
 
         $monedaBase = $this->getMonedaBaseId();
         $cuentaRetiros = $this->getCuentaIdByCodigo('3.3');
@@ -896,15 +963,7 @@ public function contabilizarGasto($descripcion, $monto, $cuentaGastoId, $metodoP
      */
     public function contabilizarMerma($merma, string $codigoInventario)
     {
-        $periodo = DB::table('periodos_contables')
-            ->where('estado', 'abierto')
-            ->whereDate('fecha_inicio', '<=', $merma->fecha)
-            ->whereDate('fecha_fin', '>=', $merma->fecha)
-            ->first();
-
-        if (!$periodo) {
-            throw new Exception("Operación Cancelada: No existe un periodo contable abierto para la fecha de la merma.");
-        }
+        $periodo = $this->resolverPeriodo($merma->fecha);
 
         $monedaBase = $this->getMonedaBaseId();
         $cuentaMerma = $this->getCuentaIdByCodigo('6.8');
@@ -951,8 +1010,7 @@ public function contabilizarGasto($descripcion, $monto, $cuentaGastoId, $metodoP
 
     public function contabilizarOperacionCambio($operacion, $diferencial = 0)
     {
-        $periodo = \Illuminate\Support\Facades\DB::table('periodos_contables')->where('estado', 'abierto')->first();
-        if (!$periodo) return;
+        $periodo = $this->resolverPeriodo($operacion->fecha);
 
         // CORRECCIÓN B9: cuentas de caja por divisa (subcuentas específicas del catálogo).
         // Caja NIO (Córdobas): 1.1.1.1 — Caja USD: 1.1.1.2 (subcuenta de Caja).

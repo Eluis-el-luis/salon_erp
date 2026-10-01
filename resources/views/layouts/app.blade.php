@@ -67,6 +67,12 @@
                                 ['url' => '/contabilidad', 'label' => 'Libro Diario', 'icon' => 'book'],
                                 ['url' => '/contabilidad/mayor', 'label' => 'Libro Mayor', 'icon' => 'book'],
                                 ['url' => '/contabilidad/resultados', 'label' => 'Estado de Resultados', 'icon' => 'chart'],
+                                ['url' => '/contabilidad/balance', 'label' => 'Balance General', 'icon' => 'chart'],
+                                ['sep' => true],
+                                ['url' => '/catalogo', 'label' => 'Catálogo de Cuentas', 'icon' => 'book'],
+                                ['url' => '/asientos', 'label' => 'Asientos Manuales', 'icon' => 'book'],
+                                ['url' => '/periodos', 'label' => 'Periodos y Cierre Fiscal', 'icon' => 'lock'],
+                                ['sep' => true],
                                 ['url' => '/reportes', 'label' => 'Reportes', 'icon' => 'chart'],
                             ],
                             'RRHH' => [
@@ -170,6 +176,22 @@
             </div>
         </div>
     </div>
+
+    @if(session('info') || session('success') || session('error'))
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            @if(session('info'))
+                window.dispatchEvent(new CustomEvent('notify', { detail: @json(session('info')) }));
+            @endif
+            @if(session('success'))
+                window.dispatchEvent(new CustomEvent('notify', { detail: @json(session('success')) }));
+            @endif
+            @if(session('error'))
+                window.dispatchEvent(new CustomEvent('notify', { detail: @json(session('error')) }));
+            @endif
+        });
+    </script>
+    @endif
 
 </body>
 </html>

@@ -451,6 +451,13 @@
                         let data = await response.json();
                         window.dispatchEvent(new CustomEvent('notify', { detail: '¡Factura procesada con éxito!' }));
 
+                        // Notificaciones del backend (ej. periodo contable autogenerado)
+                        (data.notificaciones || []).forEach(function (n, i) {
+                            setTimeout(function () {
+                                window.dispatchEvent(new CustomEvent('notify', { detail: n }));
+                            }, 900 + (i * 1500));
+                        });
+
                         // Limpiamos la caja y cerramos el modal
                         this.cart = [];
                         this.discount = 0;

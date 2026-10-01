@@ -112,12 +112,20 @@ class VentaController extends Controller
             $contabilidad = new \App\Services\ContabilidadService();
             $contabilidad->contabilizarVenta($venta);
             $this->registrarComisionesVenta($venta);
+            $notificaciones = $contabilidad->notificaciones();
 
             \Illuminate\Support\Facades\DB::commit();
 
-            return response()->json(['message' => 'Factura generada y contabilizada con éxito']);
+            return response()->json([
+                'message' => 'Factura generada y contabilizada con éxito',
+                'notificaciones' => $notificaciones,
+            ]);
 
-        } catch (\Exception $e) {
+        } catch (\App\Exceptions\ContabilidadException $e) {
+            \Illuminate\Support\Facades\DB::rollBack();
+            Log::warning('Venta rechazada por regla contable', ['exception' => $e->getMessage()]);
+            return response()->json(['error' => $e->getMessage()], 422);
+        } catch (\Throwable $e) {
             \Illuminate\Support\Facades\DB::rollBack();
             Log::error('Error al facturar cita', [
                 'appointment_id' => $id,
@@ -284,15 +292,21 @@ class VentaController extends Controller
             $contabilidad = new \App\Services\ContabilidadService();
             $contabilidad->contabilizarVenta($venta);
             $this->registrarComisionesVenta($venta);
+            $notificaciones = $contabilidad->notificaciones();
 
             \Illuminate\Support\Facades\DB::commit();
 
             return response()->json([
                 'message' => 'Venta registrada y contabilizada con éxito', 
-                'sale_id' => $venta->id 
+                'sale_id' => $venta->id,
+                'notificaciones' => $notificaciones,
             ], 201);
 
-        } catch (\Exception $e) {
+        } catch (\App\Exceptions\ContabilidadException $e) {
+            \Illuminate\Support\Facades\DB::rollBack();
+            Log::warning('Venta rechazada por regla contable', ['exception' => $e->getMessage()]);
+            return response()->json(['error' => $e->getMessage()], 422);
+        } catch (\Throwable $e) {
             \Illuminate\Support\Facades\DB::rollBack();
             Log::error('Error al guardar la venta', [
                 'exception' => $e->getMessage(),

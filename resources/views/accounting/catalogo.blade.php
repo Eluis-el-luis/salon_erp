@@ -199,7 +199,9 @@
             },
 
             get cuentasDisponiblesParaPadre() {
-                return this.cuentas.filter(c => c.activa && !c.is_system_account && c.id !== this.editandoId);
+                // Se permite colgar subcuentas bajo cualquier cuenta activa, incluidas
+                // las del sistema (protegidas). Solo se excluye la cuenta en edición.
+                return this.cuentas.filter(c => c.activa && c.id !== this.editandoId);
             },
 
             abrirCrear() {
@@ -255,8 +257,15 @@
                         this.mostrarToast(this.editandoId ? 'Cuenta actualizada' : 'Cuenta creada', 'success');
                         setTimeout(() => window.location.reload(), 700);
                     } else {
-                        const msgs = data.errors ? Object.values(data.errors).flat().join(' ') : (data.error || data.message || 'Error');
-                        this.mostrarToast(msgs, 'error');
+                        let partes = [];
+                        if (data.error) partes.push(data.error);
+                        if (data.errors) {
+                            Object.values(data.errors).forEach(function (mensajes) {
+                                [].concat(mensajes).forEach(function (m) { partes.push('• ' + m); });
+                            });
+                        }
+                        if (data.detalle) partes.push('Detalle: ' + data.detalle);
+                        this.mostrarToast(partes.length ? partes.join('  ') : 'No se pudo guardar la cuenta.', 'error');
                     }
                 } catch (e) {
                     this.mostrarToast(e.message, 'error');
@@ -280,7 +289,7 @@
                         this.mostrarToast('Cuenta eliminada', 'success');
                         setTimeout(() => window.location.reload(), 700);
                     } else {
-                        this.mostrarToast(data.error || 'No se pudo eliminar', 'error');
+                        this.mostrarToast((data.error || 'No se pudo eliminar') + (data.detalle ? ' Detalle: ' + data.detalle : ''), 'error');
                     }
                 } catch (e) {
                     this.mostrarToast(e.message, 'error');

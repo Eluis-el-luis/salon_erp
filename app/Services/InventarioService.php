@@ -86,6 +86,32 @@ class InventarioService
         $this->registrarStockCritico($articulo, $stockCritico);
     }
 
+    /**
+     * Registra una alerta de stock crítico cuando el artículo queda en o por
+     * debajo de su stock mínimo (mismo criterio que el dashboard: existencia <= stock_min).
+     * Para fraccionables compara el volumen disponible (unidades + volumen abierto).
+     */
+    protected function registrarStockCritico(Articulo $articulo, array &$stockCritico): void
+    {
+        $minimo = (float) ($articulo->stock_min ?? 0);
+
+        if ($articulo->is_fractionable && (float) $articulo->total_volume > 0) {
+            $disponible = ((float) $articulo->existencia_actual * (float) $articulo->total_volume) + (float) $articulo->current_volume;
+            $minimoVolumen = $minimo * (float) $articulo->total_volume;
+
+            if ($disponible <= $minimoVolumen) {
+                $stockCritico[$articulo->id] = $articulo->producto . ' (queda '
+                    . number_format($disponible, 2, '.', '') . ' ' . ($articulo->unit_measure ?: 'ml') . ')';
+            }
+
+            return;
+        }
+
+        if ((float) $articulo->existencia_actual <= $minimo) {
+            $stockCritico[$articulo->id] = $articulo->producto . ' (queda ' . (int) $articulo->existencia_actual . ')';
+        }
+    }
+
     protected function descontarProductoFisico($itemId, $cantidad, array &$stockCritico): void
     {
         $articulo = Articulo::find($itemId);

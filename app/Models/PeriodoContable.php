@@ -8,11 +8,12 @@ class PeriodoContable extends Model
 {
     protected $table = 'periodos_contables';
 
-    protected $fillable = ['nombre', 'fecha_inicio', 'fecha_fin', 'estado'];
+    protected $fillable = ['nombre', 'fecha_inicio', 'fecha_fin', 'estado', 'generado_automaticamente'];
 
     protected $casts = [
         'fecha_inicio' => 'date',
         'fecha_fin' => 'date',
+        'generado_automaticamente' => 'boolean',
     ];
 
     public function asientos()

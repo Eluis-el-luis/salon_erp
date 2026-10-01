@@ -214,9 +214,9 @@
                         body: JSON.stringify(this.form)
                     });
 
-                    const contentType = response.headers.get("content-type");
-                    if (!contentType || !contentType.includes("application/json")) {
-                        window.dispatchEvent(new CustomEvent('notify', { detail: 'Error de seguridad. Recarga la página (F5).' }));
+                    const contentType = response.headers.get("content-type") || "";
+                    if (!contentType.includes("application/json")) {
+                        window.dispatchEvent(new CustomEvent('notify', { detail: 'El servidor devolvió un error inesperado (HTTP ' + response.status + '). Revisa los logs del sistema.' }));
                         return;
                     }
 
@@ -227,12 +227,15 @@
                         this.openModal = false;
                         setTimeout(() => { window.location.reload(); }, 1000);
                     } else {
-                        let errorMessage = 'Error al guardar los datos.';
-                        if(data.errors) {
-                            errorMessage = Object.values(data.errors)[0][0]; 
-                        } else if (data.message) {
-                            errorMessage = data.message;
+                        let partes = [];
+                        if (data.error) partes.push(data.error);
+                        if (data.errors) {
+                            Object.values(data.errors).forEach(function (mensajes) {
+                                mensajes.forEach(function (m) { partes.push('• ' + m); });
+                            });
                         }
+                        if (data.detalle) partes.push('Detalle: ' + data.detalle);
+                        let errorMessage = partes.length ? partes.join('  ') : 'Error al guardar los datos.';
                         window.dispatchEvent(new CustomEvent('notify', { detail: errorMessage }));
                     }
                 } catch (error) {
@@ -262,9 +265,14 @@
                     if (response.ok) {
                         window.dispatchEvent(new CustomEvent('notify', { detail: '¡Empleado dado de baja!' }));
                         setTimeout(() => { window.location.reload(); }, 1000);
+                    } else {
+                        let data = await response.json().catch(() => ({}));
+                        let msg = (data.error || 'No se pudo dar de baja al colaborador') + (data.detalle ? ' Detalle: ' + data.detalle : '');
+                        window.dispatchEvent(new CustomEvent('notify', { detail: msg }));
                     }
                 } catch (error) {
                     console.error(error);
+                    window.dispatchEvent(new CustomEvent('notify', { detail: 'Error de red al dar de baja: ' + error.message }));
                 }
             }
         }

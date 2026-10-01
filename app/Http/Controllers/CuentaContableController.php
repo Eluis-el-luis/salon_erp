@@ -77,17 +77,29 @@ class CuentaContableController extends Controller
         // Si tiene cuenta padre, heredar naturaleza si es subcuenta de detalle
         $cuentaPadre = $request->cuenta_padre_id ? CuentaContable::find($request->cuenta_padre_id) : null;
         
-        $cuenta = CuentaContable::create([
-            'codigo' => $request->codigo,
-            'nombre' => $request->nombre,
-            'tipo' => $request->tipo,
-            'naturaleza' => $request->naturaleza,
-            'cuenta_padre_id' => $request->cuenta_padre_id,
-            'nivel' => $cuentaPadre ? $cuentaPadre->nivel + 1 : 1,
-            'permite_movimiento' => $request->boolean('permite_movimiento', true),
-            'activa' => true,
-            'is_system_account' => false,
-        ]);
+        try {
+            $cuenta = CuentaContable::create([
+                'codigo' => $request->codigo,
+                'nombre' => $request->nombre,
+                'tipo' => $request->tipo,
+                'naturaleza' => $request->naturaleza,
+                'cuenta_padre_id' => $request->cuenta_padre_id,
+                'nivel' => $cuentaPadre ? $cuentaPadre->nivel + 1 : 1,
+                'permite_movimiento' => $request->boolean('permite_movimiento', true),
+                'activa' => true,
+                'is_system_account' => false,
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('Error al crear cuenta contable', [
+                'exception' => $e->getMessage(),
+                'request' => $request->except(['_token']),
+            ]);
+            return response()->json([
+                'error' => 'No se pudo crear la cuenta contable.',
+                'detalle' => $e->getMessage(),
+                'tipo' => class_basename($e),
+            ], 500);
+        }
 
         return response()->json(['message' => 'Cuenta creada exitosamente', 'cuenta' => $cuenta], 201);
     }
@@ -116,6 +128,22 @@ class CuentaContableController extends Controller
                 'activa' => 'boolean',
             ]);
 
+            // Evitar ciclos en el árbol: una cuenta no puede depender de sí misma
+            // ni de una de sus propias subcuentas.
+            if ($request->filled('cuenta_padre_id')) {
+                if ((int) $request->cuenta_padre_id === (int) $cuenta->id) {
+                    return response()->json(['errors' => [
+                        'cuenta_padre_id' => ['Una cuenta no puede ser su propia cuenta padre.'],
+                    ]], 422);
+                }
+
+                if (in_array((int) $request->cuenta_padre_id, $this->descendientesIds($cuenta->id), true)) {
+                    return response()->json(['errors' => [
+                        'cuenta_padre_id' => ['No se puede usar una subcuenta como cuenta padre (se crearía un ciclo).'],
+                    ]], 422);
+                }
+            }
+
             // Calcular nuevo nivel si cambió de padre
             $nivel = 1;
             if ($request->cuenta_padre_id) {
@@ -123,16 +151,28 @@ class CuentaContableController extends Controller
                 $nivel = $padre->nivel + 1;
             }
 
-            $cuenta->update([
-                'codigo' => $request->codigo,
-                'nombre' => $request->nombre,
-                'tipo' => $request->tipo,
-                'naturaleza' => $request->naturaleza,
-                'cuenta_padre_id' => $request->cuenta_padre_id,
-                'nivel' => $nivel,
-                'permite_movimiento' => $request->boolean('permite_movimiento'),
-                'activa' => $request->boolean('activa', true),
-            ]);
+            try {
+                $cuenta->update([
+                    'codigo' => $request->codigo,
+                    'nombre' => $request->nombre,
+                    'tipo' => $request->tipo,
+                    'naturaleza' => $request->naturaleza,
+                    'cuenta_padre_id' => $request->cuenta_padre_id,
+                    'nivel' => $nivel,
+                    'permite_movimiento' => $request->boolean('permite_movimiento'),
+                    'activa' => $request->boolean('activa', true),
+                ]);
+            } catch (\Throwable $e) {
+                Log::error('Error al actualizar cuenta contable', [
+                    'exception' => $e->getMessage(),
+                    'cuenta_id' => $cuenta->id,
+                ]);
+                return response()->json([
+                    'error' => 'No se pudo actualizar la cuenta contable.',
+                    'detalle' => $e->getMessage(),
+                    'tipo' => class_basename($e),
+                ], 500);
+            }
         }
 
         return response()->json(['message' => 'Cuenta actualizada', 'cuenta' => $cuenta->fresh()]);
@@ -178,10 +218,14 @@ class CuentaContableController extends Controller
             'archivo' => 'required|file|mimes:xlsx,xls',
         ]);
 
+        DB::beginTransaction();
+
         try {
             ExcelFacade::import(new CuentasContablesImport, $request->file('archivo'));
+            DB::commit();
             return back()->with('success', 'Catálogo importado exitosamente.');
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
+            DB::rollBack();
             Log::error('Error importando catálogo', [
                 'exception' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
@@ -196,5 +240,28 @@ class CuentaContableController extends Controller
     public function exportar()
     {
         return Excel::download(new CuentasContablesExport, 'catalogo_cuentas_' . now()->format('Ymd_His') . '.xlsx');
+    }
+
+    /**
+     * IDs de todas las subcuentas (recursivas) de una cuenta.
+     */
+    private function descendientesIds(int $cuentaId): array
+    {
+        $ids = [];
+        $pendientes = [$cuentaId];
+
+        while (!empty($pendientes)) {
+            $actual = array_pop($pendientes);
+            $hijos = CuentaContable::where('cuenta_padre_id', $actual)->pluck('id')->all();
+
+            foreach ($hijos as $hijo) {
+                if (!in_array((int) $hijo, $ids, true)) {
+                    $ids[] = (int) $hijo;
+                    $pendientes[] = $hijo;
+                }
+            }
+        }
+
+        return $ids;
     }
 }
