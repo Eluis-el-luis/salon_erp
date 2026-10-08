@@ -110,6 +110,20 @@
                     </select>
                 </div>
 
+                <!-- CICLO DE VIDA: factura a crédito (emitida / por cobrar) -->
+                <div x-show="!cobroId" class="mb-2">
+                    <label class="flex items-center gap-2 text-xs font-bold text-gray-700 cursor-pointer">
+                        <input type="checkbox" x-model="esCredito" class="rounded border-gray-300 text-amber-500 focus:ring-amber-500">
+                        Venta a crédito <span class="text-amber-600 font-black">(Factura por cobrar)</span>
+                    </label>
+                    <p x-show="esCredito" class="text-[11px] text-amber-600 italic mt-1">Se descuenta inventario y se documenta la CxC del cliente. El cobro se registra después.</p>
+                </div>
+
+                <!-- Aviso cuando se está cobrando una factura emitida -->
+                <div x-show="cobroId" class="mb-2 bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800 font-semibold">
+                    Registrando el cobro de la factura a crédito #<span x-text="cobroId"></span>. El detalle no puede modificarse.
+                </div>
+
                 <div class="flex justify-between text-sm text-gray-600">
                     <span>Subtotal:</span>
                     <span class="font-bold" x-text="'C$ ' + calculateSubtotal()"></span>
@@ -117,8 +131,8 @@
 
                 <div class="flex justify-between items-center text-sm text-gray-600">
                     <span class="font-semibold text-emerald-700">Descuento (NIO):</span>
-                    <input type="number" x-model.number="discount" min="0" step="0.50" 
-                           class="w-28 text-right shadow-sm border border-gray-300 rounded py-1 px-2 text-gray-800 font-bold focus:ring-2 focus:ring-emerald-500" 
+                    <input type="number" x-model.number="discount" min="0" step="0.50" :disabled="!!cobroId"
+                           class="w-28 text-right shadow-sm border border-gray-300 rounded py-1 px-2 text-gray-800 font-bold focus:ring-2 focus:ring-emerald-500 disabled:bg-gray-100"
                            placeholder="0.00">
                 </div>
 
@@ -161,9 +175,17 @@
             </div>
         </div>
 
-        <button @click="openCheckout()" :disabled="cart.length === 0" class="w-full mt-4 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-400 text-white font-bold py-3.5 px-4 rounded-xl shadow-lg transition text-lg">
-            Proceder al Pago
-        </button>
+        <div class="flex gap-2 mt-4">
+            <button @click="saveDraft()" x-show="!cobroId" :disabled="cart.length === 0"
+                    class="flex-1 bg-white hover:bg-gray-100 disabled:bg-gray-100 disabled:text-gray-300 text-gray-700 border-2 border-gray-300 font-bold py-3.5 px-3 rounded-xl shadow transition text-sm"
+                    title="Guardar como cotización sin afectar inventario ni contabilidad">
+                Guardar Cotización
+            </button>
+            <button @click="onConfirmar()" :disabled="cart.length === 0"
+                    class="flex-[2] bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-400 text-white font-bold py-3.5 px-4 rounded-xl shadow-lg transition text-lg"
+                    x-text="cobroId ? 'Registrar Cobro' : (esCredito ? 'Emitir a Crédito' : 'Proceder al Pago')">
+            </button>
+        </div>
     </div>
 
     <!-- ===== MODAL DE CHECKOUT (PAGOS MIXTOS) ===== -->
@@ -305,7 +327,12 @@
             cart: [],
             discount: 0,
             clientId: '',
-            
+
+            // CICLO DE VIDA DEL DOCUMENTO
+            esCredito: false,
+            draftId: null,   // cotización cargada (se transforma en venta al confirmar)
+            cobroId: null,   // factura emitida en proceso de cobro (detalle bloqueado)
+
             // NUEVOS VALORES POR DEFECTO
             currency: 'nio',
             exchangeRate: 36.50,
@@ -385,7 +412,7 @@
                 this.payments.splice(index, 1);
             },
 
-            init() {
+            async init() {
                 const urlParams = new URLSearchParams(window.location.search);
                 const appointmentId = urlParams.get('appointment_id');
 
@@ -414,10 +441,133 @@
                     }
 
                     window.history.replaceState(null, null, window.location.pathname);
+                    return;
+                }
+
+                // CICLO DE VIDA: cargar una cotización o cobrar una factura emitida
+                const draftId = urlParams.get('draft_id');
+                const cobroId = urlParams.get('cobro_id');
+                if (draftId || cobroId) {
+                    await this.cargarDocumento(draftId || cobroId, !!cobroId);
                 }
             },
 
+            async cargarDocumento(id, esCobro) {
+                try {
+                    const r = await fetch('/ventas/' + id + '/documento', { headers: { 'Accept': 'application/json' } });
+                    const doc = await r.json();
+                    if (!r.ok) {
+                        window.dispatchEvent(new CustomEvent('notify', { detail: doc.error || 'No se pudo cargar el documento.' }));
+                        return;
+                    }
+                    this.cart = doc.items;
+                    this.clientId = doc.client_id || '';
+                    this.discount = doc.discount || 0;
+                    if (esCobro) {
+                        this.cobroId = doc.id;
+                    } else {
+                        this.draftId = doc.id;
+                    }
+                    window.dispatchEvent(new CustomEvent('notify', { detail: esCobro ? 'Factura #' + doc.id + ' lista para cobrar.' : 'Cotización #' + doc.id + ' cargada.' }));
+                    window.history.replaceState(null, null, window.location.pathname);
+                } catch (error) { console.error(error); }
+            },
+
+            onConfirmar() {
+                if (this.cart.length === 0) return;
+                // Venta a crédito: no hay modal de cobro, se emite directamente con CxC
+                if (this.esCredito && !this.cobroId) {
+                    if (!this.clientId) {
+                        window.dispatchEvent(new CustomEvent('notify', { detail: 'Asigna un cliente para facturar a crédito (se documenta su cuenta por cobrar).' }));
+                        return;
+                    }
+                    this.enviarCredito();
+                    return;
+                }
+                this.openCheckout();
+            },
+
+            async saveDraft() {
+                if (this.cart.length === 0) return;
+                try {
+                    let response = await fetch('/sales', {
+                        method: 'POST',
+                        credentials: 'same-origin',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Accept': 'application/json',
+                            'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content')
+                        },
+                        body: JSON.stringify({
+                            cart: this.cart,
+                            discount: this.discount,
+                            client_id: this.clientId !== '' ? this.clientId : null,
+                            action: 'cotizar',
+                            draft_id: this.draftId
+                        })
+                    });
+                    let data = await response.json();
+                    if (response.ok) {
+                        window.dispatchEvent(new CustomEvent('notify', { detail: '¡Cotización #' + data.sale_id + ' guardada (sin afectar inventario).' }));
+                        this.limpiarCaja();
+                        window.open('/ventas/' + data.sale_id + '/ticket', '_blank');
+                    } else {
+                        window.dispatchEvent(new CustomEvent('notify', { detail: 'Error al guardar la cotización: ' + (data.error || 'Verifica los datos.') }));
+                    }
+                } catch (error) { console.error(error); }
+            },
+
+            async enviarCredito() {
+                try {
+                    let response = await fetch('/sales', {
+                        method: 'POST',
+                        credentials: 'same-origin',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Accept': 'application/json',
+                            'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content')
+                        },
+                        body: JSON.stringify({
+                            cart: this.cart,
+                            discount: this.discount,
+                            client_id: this.clientId,
+                            action: 'credito',
+                            draft_id: this.draftId
+                        })
+                    });
+                    let data = await response.json();
+                    if (response.ok) {
+                        window.dispatchEvent(new CustomEvent('notify', { detail: '¡Factura #' + data.sale_id + ' emitida a crédito (CxC)!' }));
+                        (data.notificaciones || []).forEach(function (n, i) {
+                            setTimeout(function () {
+                                window.dispatchEvent(new CustomEvent('notify', { detail: n }));
+                            }, 900 + (i * 1500));
+                        });
+                        this.limpiarCaja();
+                        window.open('/ventas/' + data.sale_id + '/ticket', '_blank');
+                    } else {
+                        window.dispatchEvent(new CustomEvent('notify', { detail: 'Error: ' + (data.error || 'Verifica los datos.') }));
+                    }
+                } catch (error) { console.error(error); }
+            },
+
+            limpiarCaja() {
+                this.cart = [];
+                this.discount = 0;
+                this.clientId = '';
+                this.currency = 'nio';
+                this.payments = [];
+                this.checkoutOpen = false;
+                this.esCredito = false;
+                this.draftId = null;
+                this.cobroId = null;
+            },
+
             addItem(product) {
+                if (this.cobroId) {
+                    window.dispatchEvent(new CustomEvent('notify', { detail: 'Al cobrar una factura a crédito el detalle no puede modificarse.' }));
+                    return;
+                }
                 let existingItem = this.cart.find(item => item.id === product.id && item.type === product.type);
                 if (existingItem) {
                     existingItem.quantity++;
@@ -433,6 +583,10 @@
             },
 
             removeItem(index) {
+                if (this.cobroId) {
+                    window.dispatchEvent(new CustomEvent('notify', { detail: 'Al cobrar una factura a crédito el detalle no puede modificarse.' }));
+                    return;
+                }
                 this.cart.splice(index, 1);
             },
 
@@ -462,8 +616,39 @@
                 // Pago principal (legacy) derivado del primer pago
                 let primario = this.payments[0];
 
+                const payloadPagos = this.payments.map(p => ({
+                    metodo: p.metodo,
+                    moneda: p.moneda,
+                    monto: p.monto,
+                    tasa: p.moneda === 'usd' ? (p.tasa || this.exchangeRate) : 1
+                }));
+                const payloadVuelto = parseFloat(this.vuelto) > 0 ? this.changeCurrency : 'nio';
+
+                // Cobro de factura a crédito: endpoint dedicado, el detalle ya existe
+                const url = this.cobroId ? ('/ventas/' + this.cobroId + '/cobrar') : '/sales';
+                const body = this.cobroId
+                    ? { payments: payloadPagos, change_currency: payloadVuelto }
+                    : {
+                        cart: this.cart,
+                        discount: this.discount,
+                        client_id: this.clientId !== '' ? this.clientId : null,
+                        action: 'pagar',
+                        draft_id: this.draftId,
+
+                        // PAGOS MIXTOS: arreglo de pagos
+                        payments: payloadPagos,
+
+                        // Vuelto multimoneda: moneda en la que se entrega el cambio
+                        change_currency: payloadVuelto,
+
+                        // Primary (compatibilidad)
+                        payment_method: primario.metodo,
+                        currency: primario.moneda,
+                        exchange_rate: primario.moneda === 'usd' ? (primario.tasa || this.exchangeRate) : 1
+                    };
+
                 try {
-                    let response = await fetch('/sales', {
+                    let response = await fetch(url, {
                         method: 'POST',
                         credentials: 'same-origin',
                         headers: {
@@ -471,27 +656,7 @@
                             'Accept': 'application/json',
                             'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content')
                         },
-                        body: JSON.stringify({
-                            cart: this.cart,
-                            discount: this.discount,
-                            client_id: this.clientId !== '' ? this.clientId : null,
-
-                            // PAGOS MIXTOS: arreglo de pagos
-                            payments: this.payments.map(p => ({
-                                metodo: p.metodo,
-                                moneda: p.moneda,
-                                monto: p.monto,
-                                tasa: p.moneda === 'usd' ? (p.tasa || this.exchangeRate) : 1
-                            })),
-
-                            // Vuelto multimoneda: moneda en la que se entrega el cambio
-                            change_currency: parseFloat(this.vuelto) > 0 ? this.changeCurrency : 'nio',
-
-                            // Primary (compatibilidad)
-                            payment_method: primario.metodo,
-                            currency: primario.moneda,
-                            exchange_rate: primario.moneda === 'usd' ? (primario.tasa || this.exchangeRate) : 1
-                        })
+                        body: JSON.stringify(body)
                     });
 
                     if (response.ok) {
@@ -506,12 +671,7 @@
                         });
 
                         // Limpiamos la caja y cerramos el modal
-                        this.cart = [];
-                        this.discount = 0;
-                        this.clientId = '';
-                        this.currency = 'nio';
-                        this.payments = [];
-                        this.checkoutOpen = false;
+                        this.limpiarCaja();
 
                         window.open('/ventas/' + data.sale_id + '/ticket', '_blank');
                     } else {

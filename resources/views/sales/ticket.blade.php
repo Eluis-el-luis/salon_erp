@@ -35,6 +35,28 @@
 
         <div class="border-b border-dashed border-gray-400 mb-4"></div>
 
+        {{-- CICLO DE VIDA: banner del estado del documento --}}
+        @if($venta->status === 'borrador')
+            <div class="bg-gray-100 border border-gray-300 rounded p-2 mb-4 text-center">
+                <p class="text-xs font-black text-gray-700 uppercase tracking-widest">Cotización (Borrador)</p>
+                <p class="text-[10px] text-gray-500">Documento sin efecto contable ni de inventario. No constituye factura.</p>
+            </div>
+        @elseif($venta->status === 'emitida')
+            <div class="bg-amber-50 border border-amber-300 rounded p-2 mb-4 text-center">
+                <p class="text-xs font-black text-amber-700 uppercase tracking-widest">Factura por cobrar (Crédito)</p>
+                <p class="text-[10px] text-amber-600">Pendiente de pago. Documentada como cuenta por cobrar del cliente.</p>
+            </div>
+        @elseif($venta->status === 'anulada')
+            <div class="bg-red-50 border border-red-300 rounded p-2 mb-4 text-center">
+                <p class="text-xs font-black text-red-700 uppercase tracking-widest">Factura Anulada</p>
+                <p class="text-[10px] text-red-600">
+                    {{ $venta->motivo_anulacion }}
+                    @if($venta->anulada_at) — {{ \Carbon\Carbon::parse($venta->anulada_at)->format('d/m/Y h:i A') }} @endif
+                    @if($venta->anuladaPor) por {{ $venta->anuladaPor->name }} @endif
+                </p>
+            </div>
+        @endif
+
         <!-- Info de la Factura -->
         <div class="text-xs mb-4 space-y-1">
             <div class="flex justify-between">
@@ -116,6 +138,8 @@
             </div>
         </div>
 
+        {{-- El bloque de pago solo aplica a documentos cobrados --}}
+        @if($venta->status === 'pagada')
         <div class="bg-gray-100 p-2 mt-4 rounded text-center">
             @if($venta->pagos->count() > 0)
                 {{-- PAGOS MIXTOS: desglose del libro de pagos --}}
@@ -169,6 +193,7 @@
                 @endif
             @endif
         </div>
+        @endif
 
         <div class="border-b border-dashed border-gray-400 my-6"></div>
 

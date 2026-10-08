@@ -31,6 +31,8 @@ class VentaPagosMixtosTest extends TestCase
 
     protected Usuario $cajero;
 
+    protected SesionCaja $sesion;
+
     protected Servicio $servicio;
 
     protected function setUp(): void
@@ -56,7 +58,9 @@ class VentaPagosMixtosTest extends TestCase
             'is_active' => true,
         ]);
 
-        SesionCaja::create([
+        // Las divisas se segregan por ID DE SESIÓN (no por user_id): con
+        // RefreshDatabase el AUTO_INCREMENT no revierte y ambos ids divergen.
+        $this->sesion = SesionCaja::create([
             'user_id' => $this->cajero->id,
             'monto_apertura' => 0,
             'estado' => 'abierta',
@@ -114,7 +118,7 @@ class VentaPagosMixtosTest extends TestCase
 
         // Los dólares físicos entraron al inventario de divisas de la caja
         $saldoUsd = SaldoMoneda::where('ubicacion_tipo', SesionCaja::class)
-            ->where('ubicacion_id', $this->cajero->id)->first();
+            ->where('ubicacion_id', $this->sesion->id)->first();
         $this->assertEquals(50.00, (float) $saldoUsd->saldo_actual);
 
         // El asiento de ingreso está cuadrado al centavo (debe = haber = 3500)
@@ -200,7 +204,7 @@ class VentaPagosMixtosTest extends TestCase
 
         // El inventario físico de USD quedó en 100 - vuelto
         $saldoUsd = SaldoMoneda::where('ubicacion_tipo', SesionCaja::class)
-            ->where('ubicacion_id', $this->cajero->id)->first();
+            ->where('ubicacion_id', $this->sesion->id)->first();
         $this->assertEqualsWithDelta(
             100 - round(150 / 36.50, 2),
             (float) $saldoUsd->saldo_actual,

@@ -37,7 +37,8 @@ class CajaController extends Controller
             // PAGOS MIXTOS: efectivo NIO neto (cobros menos vueltos) de ESTE cajero
             // durante ESTE turno, leído del libro de pagos. Fallback legacy incluido.
             $ventasEfectivo = Venta::efectivoNioNeto(
-                Venta::where('cashier_id', auth()->id())
+                Venta::where('status', Venta::ESTADO_PAGADA)
+                    ->where('cashier_id', auth()->id())
                     ->where('created_at', '>=', $sesion->fecha_apertura)
             );
         }
@@ -129,7 +130,8 @@ class CajaController extends Controller
             // MANDAMIENTO: El monto teórico SIEMPRE lo calcula el backend.
             // PAGOS MIXTOS: se lee del libro de pagos (efectivo NIO neto de vuelto).
             $ventasEfectivoTurno = Venta::efectivoNioNeto(
-                Venta::where('cashier_id', auth()->id())
+                Venta::where('status', Venta::ESTADO_PAGADA)
+                    ->where('cashier_id', auth()->id())
                     ->where('created_at', '>=', $sesion->fecha_apertura)
             );
 

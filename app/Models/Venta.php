@@ -11,9 +11,28 @@ class Venta extends Model
 
     protected $table = 'sales';
 
+    // CICLO DE VIDA DEL DOCUMENTO: workflow de estados de factura
+    const ESTADO_BORRADOR = 'borrador'; // Cotización: no afecta inventario ni contabilidad
+    const ESTADO_EMITIDA = 'emitida';   // Por cobrar (crédito): afecta inventario y CxC
+    const ESTADO_PAGADA = 'pagada';     // Venta de mostrador cobrada
+    const ESTADO_ANULADA = 'anulada';   // Corrección: con reversión contable e inventario
+
+    const ESTADOS = [
+        self::ESTADO_BORRADOR,
+        self::ESTADO_EMITIDA,
+        self::ESTADO_PAGADA,
+        self::ESTADO_ANULADA,
+    ];
+
+    // Estados en los que el ingreso ya se reconoció (devengado) y el inventario
+    // ya fue afectado. Los usan panel, reportes y kárdex. El dinero físico solo
+    // se mueve en 'pagada'.
+    const ESTADOS_DEVENGADOS = [self::ESTADO_PAGADA, self::ESTADO_EMITIDA];
+
     protected $fillable = [
         'cashier_id',
         'client_id',
+        'appointment_id',
         'subtotal',
         'discount',
         'total',
@@ -22,6 +41,9 @@ class Venta extends Model
         'payment_method',
         'observations',
         'status',
+        'anulada_at',
+        'anulada_por',
+        'motivo_anulacion',
     ];
 
     public function cajero()
@@ -42,6 +64,16 @@ class Venta extends Model
     public function pagos()
     {
         return $this->hasMany(Pago::class, 'venta_id');
+    }
+
+    public function cita()
+    {
+        return $this->belongsTo(Cita::class, 'appointment_id');
+    }
+
+    public function anuladaPor()
+    {
+        return $this->belongsTo(Usuario::class, 'anulada_por');
     }
 
     /**

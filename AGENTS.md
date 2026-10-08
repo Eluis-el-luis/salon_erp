@@ -38,7 +38,7 @@ Los nombres de tablas y algunos campos conservan nombres heredados en inglés (`
 | --- | --- | --- |
 | Panel, agenda y citas | `PanelController`, ruta `/agenda`, `CitaController`, `Cita`, `Cliente`, `Servicio` | Indicadores del negocio, agenda diaria y citas. La agenda web actualmente consulta modelos desde una closure; el API usa `CitaController`. |
 | Clientes | `ClienteController`, `Cliente` | Datos de clientes y relaciones con citas, ventas y movimientos de crédito. |
-| POS y ventas | `VentaController`, `Venta`, `DetalleVenta`, `Pago` | Venta de servicios/productos, libro de pagos (pagos mixtos y vuelto multimoneda en `pagos`), ticket, facturación de cita vía redirección al POS, inventario, comisiones y asiento contable. |
+| POS y ventas | `VentaController`, `Venta`, `DetalleVenta`, `Pago` | Venta de servicios/productos, libro de pagos (pagos mixtos y vuelto multimoneda en `pagos`), ticket, facturación de cita vía redirección al POS, inventario, comisiones y asiento contable. Ciclo de vida del documento (`status`): `borrador` (cotización sin efectos), `emitida` (crédito/CxC, cobro posterior en `/ventas/{id}/cobrar`), `pagada`, `anulada` (`/ventas/{id}/anular`, solo admin). |
 | Caja y caja chica | `CajaController`, `SesionCaja`, `CajaChicaController`, `CajaChica`, `MovimientoCajaChica` | Apertura/cierre, arqueo (el efectivo teórico se calcula desde el libro de pagos, vía `Venta::efectivoNioNeto()`), movimientos de efectivo y gastos menores. |
 | Inventario y compras | `InventarioController`, `Articulo`, `Lote`, `InventarioService` | Existencias, compras, costos, lotes, kardex y alertas de stock. |
 | Recetas y mermas | `FormulaController`, `FormulaServicio`, `MermaController`, `Merma` | Consumo de productos fraccionables por servicio y bajas por merma. |
@@ -72,6 +72,7 @@ Los nombres de tablas y algunos campos conservan nombres heredados en inglés (`
 ### 5.3 Reversión y borrado
 
 - Nunca hacer borrado físico de movimientos financieros, asientos, pagos, CxC/CxP u otros registros que soporten auditoría. Corregir con movimiento y asiento de reversión vinculados o identificables; no editar silenciosamente el historial.
+- Las facturas NO se borran ni siquiera por error de caja: `VentaController::anular()` (solo `role:admin`, motivo obligatorio) cambia el estado a `anulada`, revierte el inventario (`InventarioService::revertirPorVenta()`), devuelve las divisas físicas cobradas, anula las comisiones pendientes y genera asientos espejo `REV-*` (`ContabilidadService::reversarVenta()`). Bloquea si alguna comisión ya fue pagada en nómina.
 - El flujo de eliminación de adelantos ya genera un nuevo movimiento de naturaleza opuesta y lo contabiliza. Mantener ese patrón para CxC.
 - Para catálogos, respetar el comportamiento del modelo y sus relaciones. Hay migraciones de `SoftDeletes` para artículos y fórmulas; no generalizar que todas las entidades los tienen.
 - Revisar el controlador, modelo y constraints antes de usar `delete()`, `forceDelete()` o cascadas. Que exista una ruta HTTP `DELETE` no autoriza borrado físico financiero.

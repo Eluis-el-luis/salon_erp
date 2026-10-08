@@ -23,7 +23,7 @@ class ReporteController extends Controller
         // REPORTE 1: VENTAS GENERALES
         // ==========================================
         $ventasQuery = Venta::whereBetween('created_at', [$fechaInicio, $fechaFin])
-                       ->where('status', 'completada');
+                       ->whereIn('status', Venta::ESTADOS_DEVENGADOS);
         $ventas = (clone $ventasQuery)->get();
 
         $totalVentas = $ventas->sum('total');
@@ -87,7 +87,7 @@ class ReporteController extends Controller
         $fechaFin = $request->end_date ? Carbon::parse($request->end_date)->endOfDay() : Carbon::now()->endOfMonth();
 
         // Traemos las ventas con sus clientes
-        $ventas = Venta::with('cliente')->whereBetween('created_at', [$fechaInicio, $fechaFin])->where('status', 'completada')->get();
+        $ventas = Venta::with('cliente')->whereBetween('created_at', [$fechaInicio, $fechaFin])->whereIn('status', Venta::ESTADOS_DEVENGADOS)->get();
 
         $fileName = 'Ventas_AlvaroRugama_' . $fechaInicio->format('d-m-Y') . '.csv';
 
@@ -133,7 +133,7 @@ class ReporteController extends Controller
         $fechaFin = $request->end_date ? Carbon::parse($request->end_date)->endOfDay() : Carbon::now()->endOfMonth();
 
         // Recopilar datos exactos de la pantalla
-        $ventasQuery = Venta::whereBetween('created_at', [$fechaInicio, $fechaFin])->where('status', 'completada');
+        $ventasQuery = Venta::whereBetween('created_at', [$fechaInicio, $fechaFin])->whereIn('status', Venta::ESTADOS_DEVENGADOS);
         $ventas = (clone $ventasQuery)->get();
         $totalVentas = $ventas->sum('total');
 

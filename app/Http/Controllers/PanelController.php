@@ -51,7 +51,7 @@ class PanelController extends Controller
         // ==========================================
         // KPIs DE VENTAS EN EL RANGO
         // ==========================================
-        $ventasQuery = Venta::where('status', 'completada')
+        $ventasQuery = Venta::whereIn('status', Venta::ESTADOS_DEVENGADOS)
             ->whereBetween('created_at', [$inicio, $fin]);
 
         $totalIngresos = (clone $ventasQuery)->sum('total');
@@ -110,7 +110,7 @@ class PanelController extends Controller
         $serviciosMasVendidos = DetalleVenta::select('service_id', DB::raw('SUM(quantity) as total_cantidad'))
             ->whereNotNull('service_id')
             ->whereHas('venta', function ($q) use ($inicio, $fin) {
-                $q->where('status', 'completada')->whereBetween('created_at', [$inicio, $fin]);
+                $q->whereIn('status', Venta::ESTADOS_DEVENGADOS)->whereBetween('created_at', [$inicio, $fin]);
             })
             ->with('servicio')
             ->groupBy('service_id')
@@ -125,7 +125,7 @@ class PanelController extends Controller
             $d = Carbon::now()->subDays($i);
             return [
                 'fecha' => $d->format('d/m'),
-                'total' => (float) Venta::whereDate('created_at', $d)->where('status', 'completada')->sum('total'),
+                'total' => (float) Venta::whereDate('created_at', $d)->whereIn('status', Venta::ESTADOS_DEVENGADOS)->sum('total'),
             ];
         });
 
@@ -140,7 +140,7 @@ class PanelController extends Controller
         // WIDGET DE META MENSUAL
         // ==========================================
         $metaMensual = (float) config('salon.meta_mensual', 150000);
-        $ventasMes = Venta::where('status', 'completada')
+        $ventasMes = Venta::whereIn('status', Venta::ESTADOS_DEVENGADOS)
             ->whereMonth('created_at', Carbon::now()->month)
             ->whereYear('created_at', Carbon::now()->year)
             ->sum('total');

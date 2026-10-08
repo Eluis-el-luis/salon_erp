@@ -55,8 +55,9 @@ class VentaController extends Controller
                 'currency' => $request->currency ?? 'nio',
                 'exchange_rate' => $request->currency === 'usd' ? ($request->exchange_rate ?? 1.00) : 1.00,
                 'payment_method' => $request->payment_method ?? 'efectivo',
+                'appointment_id' => $cita->id,
                 
-                'status' => 'completada'
+                'status' => Venta::ESTADO_PAGADA
             ]);
 
             // Soporte multi-estilista: un detalle de venta por estilista,
@@ -167,7 +168,20 @@ class VentaController extends Controller
             'exchange_rate' => 'nullable|numeric|min:1',
             // Vuelto multimoneda: moneda en la que se entrega el cambio al cliente
             'change_currency' => 'nullable|in:nio,usd',
+            'client_id' => 'nullable|integer|exists:clients,id',
+            // CICLO DE VIDA: pagar (mostrador) | cotizar (borrador sin efectos) | credito (emitida CxC)
+            'action' => 'nullable|in:pagar,cotizar,credito',
+            // Transformar/actualizar una cotización existente (mismo documento, trazable)
+            'draft_id' => 'nullable|integer|exists:sales,id',
         ]);
+
+        $accion = $request->action ?? 'pagar';
+
+        if ($accion === 'credito' && !$request->client_id) {
+            return response()->json([
+                'error' => 'Una venta a crédito (por cobrar) requiere asignar un cliente para documentar la CxC.',
+            ], 422);
+        }
 
         // PAGOS MIXTOS: normalizamos el arreglo de pagos (compatibilidad con pago único legacy)
         $pagosRaw = ($request->has('payments') && is_array($request->payments) && count($request->payments) > 0)
@@ -190,23 +204,56 @@ class VentaController extends Controller
             $subtotal = collect($request->cart)->sum(function($item) {
                 return $item['precio_c'] * $item['quantity'];
             });
-            
+
             $total = $subtotal - $request->discount;
 
-            $venta = \App\Models\Venta::create([
-                'cashier_id' => auth()->id() ?? 1,
-                'client_id' => $request->client_id,
-                'subtotal' => $subtotal,
-                'discount' => $request->discount,
-                'total' => $total > 0 ? $total : 0,
+            $nuevoEstado = match ($accion) {
+                'cotizar' => Venta::ESTADO_BORRADOR,
+                'credito' => Venta::ESTADO_EMITIDA,
+                default => Venta::ESTADO_PAGADA,
+            };
 
-                // Método principal derivado del primer pago
-                'currency' => $currency,
-                'exchange_rate' => $exchangeRate,
-                'payment_method' => $paymentMethod,
+            $appointmentId = collect($request->cart)->pluck('appointment_id')->filter()->first();
 
-                'status' => 'completada'
-            ]);
+            if ($request->draft_id) {
+                // Transformar una cotización guardada: se reutiliza el MISMO documento
+                // para conservar la trazabilidad (la cotización se convierte en venta).
+                $venta = Venta::lockForUpdate()->findOrFail($request->draft_id);
+
+                if ($venta->status !== Venta::ESTADO_BORRADOR) {
+                    throw new \App\Exceptions\ContabilidadException(
+                        'El documento #' . $venta->id . ' ya fue procesado y no puede reutilizarse como cotización.'
+                    );
+                }
+
+                $venta->detalles()->delete();
+                $venta->update([
+                    'client_id' => $request->client_id,
+                    'subtotal' => $subtotal,
+                    'discount' => $request->discount,
+                    'total' => $total > 0 ? $total : 0,
+                    'currency' => $currency,
+                    'exchange_rate' => $exchangeRate,
+                    'payment_method' => $paymentMethod,
+                    'status' => $nuevoEstado,
+                ]);
+            } else {
+                $venta = \App\Models\Venta::create([
+                    'cashier_id' => auth()->id() ?? 1,
+                    'client_id' => $request->client_id,
+                    'appointment_id' => $appointmentId,
+                    'subtotal' => $subtotal,
+                    'discount' => $request->discount,
+                    'total' => $total > 0 ? $total : 0,
+
+                    // Método principal derivado del primer pago
+                    'currency' => $currency,
+                    'exchange_rate' => $exchangeRate,
+                    'payment_method' => $paymentMethod,
+
+                    'status' => $nuevoEstado
+                ]);
+            }
 
             foreach ($request->cart as $cartItem) {
                 $esServicio = $cartItem['type'] === 'servicio';
@@ -220,7 +267,7 @@ class VentaController extends Controller
                     'unit_price' => $cartItem['precio_c'] 
                 ]);
 
-                if (isset($cartItem['appointment_id'])) {
+                if (isset($cartItem['appointment_id']) && $accion !== 'cotizar') {
                     \App\Models\Cita::where('id', $cartItem['appointment_id'])
                         ->update(['status' => 'completada']);
                 }
@@ -228,93 +275,42 @@ class VentaController extends Controller
 
             $venta->load('detalles');
 
+            // CICLO DE VIDA - BORRADOR: la cotización NO afecta inventario,
+            // contabilidad, divisas, comisiones ni la agenda. Solo documenta
+            // la propuesta al cliente (ej. paquete de boda).
+            if ($accion === 'cotizar') {
+                \Illuminate\Support\Facades\DB::commit();
+
+                return response()->json([
+                    'message' => 'Cotización guardada con éxito. No afecta inventario ni contabilidad.',
+                    'sale_id' => $venta->id,
+                    'notificaciones' => [],
+                ], 201);
+            }
+
             // Descuento de inventario (insumos fraccionados por fórmulas + productos físicos)
             $stockCritico = (new InventarioService())->descontarPorVenta($venta);
 
-            // PAGOS MIXTOS: registrar cada pago y calcular el vuelto multimoneda
-            $totalRecibidoNio = 0;
-            $pagosAInsertar = [];
+            // CICLO DE VIDA - EMITIDA (crédito): afecta inventario y reconoce el
+            // ingreso como CxC del cliente (1.1.3). No hay libro de pagos aún;
+            // el cobro posterior usa el endpoint /ventas/{id}/cobrar.
+            if ($accion === 'credito') {
+                $contabilidad = new \App\Services\ContabilidadService();
+                $contabilidad->contabilizarVentaCredito($venta);
+                $this->registrarComisionesVenta($venta);
+                $notificaciones = $contabilidad->notificaciones();
 
-            foreach ($pagosRaw as $p) {
-                $moneda = $p['moneda'];
-                $tasa = (float) $p['tasa'];
-                $monto = (float) $p['monto'];
+                \Illuminate\Support\Facades\DB::commit();
 
-                // Legacy: un único pago sin monto -> se cubre el total
-                if ($monto <= 0) {
-                    $monto = (float) $total;
-                }
-
-                $valorNio = $moneda === 'usd' ? round($monto * $tasa, 2) : round($monto, 2);
-                $totalRecibidoNio += $valorNio;
-
-                $pagosAInsertar[] = [
-                    'metodo' => $p['metodo'],
-                    'moneda' => $moneda,
-                    'monto' => $monto,
-                    'tasa' => $tasa,
-                    'valor_nio' => $valorNio,
-                    'tipo' => 'pago',
-                ];
+                return response()->json([
+                    'message' => 'Factura emitida a crédito (CxC) y contabilizada con éxito',
+                    'sale_id' => $venta->id,
+                    'notificaciones' => $notificaciones,
+                ], 201);
             }
 
-            // Vuelto multimoneda: si el cliente pagó de más, se devuelve en efectivo
-            // en la moneda solicitada (valor_nio exacto para que el asiento cuadre)
-            $vueltoNio = round(max(0, $totalRecibidoNio - $total), 2);
-            if ($vueltoNio > 0) {
-                $monedaVuelto = $request->change_currency === 'usd' ? 'usd' : 'nio';
-                $tasaVuelto = $exchangeRate > 1 ? $exchangeRate : 1;
-
-                $pagosAInsertar[] = [
-                    'metodo' => 'efectivo',
-                    'moneda' => $monedaVuelto,
-                    'monto' => $monedaVuelto === 'usd' ? round($vueltoNio / $tasaVuelto, 2) : $vueltoNio,
-                    'tasa' => $tasaVuelto,
-                    'valor_nio' => $vueltoNio,
-                    'tipo' => 'vuelto',
-                ];
-            }
-
-            foreach ($pagosAInsertar as $pp) {
-                \App\Models\Pago::create(['venta_id' => $venta->id] + $pp);
-            }
-
-            // Multimoneda: los pagos en USD en efectivo aumentan el inventario físico
-            // de dólares y el vuelto entregado en USD lo reduce (primero entra, luego sale).
-            $cajaActiva = SesionCaja::where('user_id', auth()->id())->where('estado', 'abierta')->first();
-            $divisaService = new DivisaService();
-
-            foreach ($pagosAInsertar as $pp) {
-                if ($pp['moneda'] !== 'usd' || $pp['metodo'] !== 'efectivo' || !$cajaActiva) {
-                    continue;
-                }
-
-                try {
-                    if ($pp['tipo'] === 'pago') {
-                        $divisaService->ingresarDivisas(
-                            'USD',
-                            'App\Models\SesionCaja',
-                            $cajaActiva->id,
-                            (float) $pp['monto'],
-                            (float) $pp['tasa']
-                        );
-                    } else {
-                        // Vuelto en USD: valida saldo físico disponible en la caja
-                        $divisaService->egresarDivisas(
-                            'USD',
-                            'App\Models\SesionCaja',
-                            $cajaActiva->id,
-                            (float) $pp['monto'],
-                            (float) $pp['tasa']
-                        );
-                    }
-                } catch (\Exception $e) {
-                    throw new \App\Exceptions\ContabilidadException(
-                        'No hay suficientes dólares físicos en caja para entregar el vuelto en USD. ' .
-                        'Entrega el vuelto en córdobas o registra el ingreso de divisas primero.'
-                    );
-                }
-            }
+            // PAGOS MIXTOS: libro de pagos, vuelto multimoneda y divisas físicas
+            $this->registrarLibroPagos($request, $venta, $total > 0 ? (float) $total : 0, $pagosRaw, $exchangeRate);
 
             $venta->load('detalles', 'pagos');
 
@@ -346,21 +342,351 @@ class VentaController extends Controller
         }
     }
 
-    public function index()
+    /**
+     * LIBRO DE PAGOS: registra las líneas de cobro, calcula el vuelto multimoneda
+     * y sincroniza el inventario físico de dólares (entran los pagos en USD en
+     * efectivo, sale el vuelto en USD con validación de saldo).
+     * El vuelto siempre es una línea tipo 'vuelto' con valor_nio EXACTO para que
+     * el asiento contable cuadre al centavo.
+     */
+    protected function registrarLibroPagos(Request $request, Venta $venta, float $total, array $pagosRaw, float $tasaReferencia): void
+    {
+        $totalRecibidoNio = 0;
+        $pagosAInsertar = [];
+
+        foreach ($pagosRaw as $p) {
+            $moneda = $p['moneda'];
+            $tasa = (float) $p['tasa'];
+            $monto = (float) $p['monto'];
+
+            // Legacy: un único pago sin monto -> se cubre el total
+            if ($monto <= 0) {
+                $monto = $total;
+            }
+
+            $valorNio = $moneda === 'usd' ? round($monto * $tasa, 2) : round($monto, 2);
+            $totalRecibidoNio += $valorNio;
+
+            $pagosAInsertar[] = [
+                'metodo' => $p['metodo'],
+                'moneda' => $moneda,
+                'monto' => $monto,
+                'tasa' => $tasa,
+                'valor_nio' => $valorNio,
+                'tipo' => 'pago',
+            ];
+        }
+
+        // Candado de cobertura: el cobro debe cubrir el total (el vuelto parte del exceso)
+        $faltante = round($total - $totalRecibidoNio, 2);
+        if ($faltante > 0) {
+            throw new \App\Exceptions\ContabilidadException(
+                'Los pagos registrados no cubren el total de la factura. Faltan C$ ' . number_format($faltante, 2) . '.'
+            );
+        }
+
+        // Vuelto multimoneda: si el cliente pagó de más, se devuelve en efectivo
+        // en la moneda solicitada (valor_nio exacto para que el asiento cuadre)
+        $vueltoNio = round(max(0, $totalRecibidoNio - $total), 2);
+        if ($vueltoNio > 0) {
+            $monedaVuelto = $request->change_currency === 'usd' ? 'usd' : 'nio';
+            $tasaVuelto = $tasaReferencia > 1 ? $tasaReferencia : 1;
+
+            $pagosAInsertar[] = [
+                'metodo' => 'efectivo',
+                'moneda' => $monedaVuelto,
+                'monto' => $monedaVuelto === 'usd' ? round($vueltoNio / $tasaVuelto, 2) : $vueltoNio,
+                'tasa' => $tasaVuelto,
+                'valor_nio' => $vueltoNio,
+                'tipo' => 'vuelto',
+            ];
+        }
+
+        foreach ($pagosAInsertar as $pp) {
+            \App\Models\Pago::create(['venta_id' => $venta->id] + $pp);
+        }
+
+        // Multimoneda: los pagos en USD en efectivo aumentan el inventario físico
+        // de dólares y el vuelto entregado en USD lo reduce (primero entra, luego sale).
+        $cajaActiva = SesionCaja::where('user_id', auth()->id())->where('estado', 'abierta')->first();
+        $divisaService = new DivisaService();
+
+        foreach ($pagosAInsertar as $pp) {
+            if ($pp['moneda'] !== 'usd' || $pp['metodo'] !== 'efectivo' || !$cajaActiva) {
+                continue;
+            }
+
+            try {
+                if ($pp['tipo'] === 'pago') {
+                    $divisaService->ingresarDivisas(
+                        'USD',
+                        'App\Models\SesionCaja',
+                        $cajaActiva->id,
+                        (float) $pp['monto'],
+                        (float) $pp['tasa']
+                    );
+                } else {
+                    // Vuelto en USD: valida saldo físico disponible en la caja
+                    $divisaService->egresarDivisas(
+                        'USD',
+                        'App\Models\SesionCaja',
+                        $cajaActiva->id,
+                        (float) $pp['monto'],
+                        (float) $pp['tasa']
+                    );
+                }
+            } catch (\Exception $e) {
+                throw new \App\Exceptions\ContabilidadException(
+                    'No hay suficientes dólares físicos en caja para entregar el vuelto en USD. ' .
+                    'Entrega el vuelto en córdobas o registra el ingreso de divisas primero.'
+                );
+            }
+        }
+    }
+
+    /**
+     * COBRO DE FACTURA EMITIDA (crédito): registra el libro de pagos, mueve las
+     * divisas físicas, cancela la CxC contable y marca la venta como pagada.
+     */
+    public function cobrar(Request $request, $id)
+    {
+        $cajaAbierta = SesionCaja::where('user_id', auth()->id())
+                                    ->where('estado', 'abierta')
+                                    ->exists();
+
+        if (!$cajaAbierta) {
+            return response()->json(['error' => 'ACCESO DENEGADO: debes abrir tu turno de caja antes de registrar un cobro.'], 403);
+        }
+
+        $request->validate([
+            'payments' => 'required|array|min:1',
+            'payments.*.metodo' => 'required|in:efectivo,bac,lafise',
+            'payments.*.moneda' => 'required|in:nio,usd',
+            'payments.*.monto' => 'required|numeric|min:0.01',
+            'payments.*.tasa' => 'required|numeric|min:1',
+            'change_currency' => 'nullable|in:nio,usd',
+        ]);
+
+        \Illuminate\Support\Facades\DB::beginTransaction();
+
+        try {
+            $venta = Venta::where('id', $id)->lockForUpdate()->firstOrFail();
+
+            if ($venta->status !== Venta::ESTADO_EMITIDA) {
+                throw new \App\Exceptions\ContabilidadException(
+                    'La factura #' . $venta->id . ' no está pendiente de cobro (estado: ' . $venta->status . ').'
+                );
+            }
+
+            $pagosRaw = $request->payments;
+            $primario = $pagosRaw[0];
+            $exchangeRate = (float) $primario['tasa'];
+
+            $this->registrarLibroPagos($request, $venta, (float) $venta->total, $pagosRaw, $exchangeRate);
+
+            // Método principal (informativo) y cambio de estado del documento
+            $venta->update([
+                'status' => Venta::ESTADO_PAGADA,
+                'payment_method' => $primario['metodo'],
+                'currency' => $primario['moneda'],
+                'exchange_rate' => $exchangeRate,
+            ]);
+
+            $venta->load('pagos');
+
+            $contabilidad = new \App\Services\ContabilidadService();
+            $contabilidad->contabilizarCobroVenta($venta);
+            $notificaciones = $contabilidad->notificaciones();
+
+            \Illuminate\Support\Facades\DB::commit();
+
+            return response()->json([
+                'message' => 'Cobro registrado. La factura #' . $venta->id . ' quedó pagada.',
+                'sale_id' => $venta->id,
+                'notificaciones' => $notificaciones,
+            ]);
+        } catch (\App\Exceptions\ContabilidadException $e) {
+            \Illuminate\Support\Facades\DB::rollBack();
+            Log::warning('Cobro rechazado por regla contable', ['exception' => $e->getMessage()]);
+            return response()->json(['error' => $e->getMessage()], 422);
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\DB::rollBack();
+            Log::error('Error al cobrar factura a crédito', [
+                'sale_id' => $id,
+                'exception' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            return response()->json(['error' => 'Error al registrar el cobro. Contacte al administrador.'], 500);
+        }
+    }
+
+    /**
+     * ANULACIÓN DE FACTURA (solo administrador): el documento NO se borra.
+     * Cambia a estado anulada, revierte el inventario físico, devuelve los
+     * dólares cobrados al cliente y genera asientos de reversión contable.
+     */
+    public function anular(Request $request, $id)
+    {
+        $request->validate([
+            'motivo' => 'required|string|min:5|max:255',
+        ]);
+
+        \Illuminate\Support\Facades\DB::beginTransaction();
+
+        try {
+            $venta = Venta::where('id', $id)
+                ->with(['detalles', 'pagos'])
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            if ($venta->status === Venta::ESTADO_ANULADA) {
+                throw new \App\Exceptions\ContabilidadException('La factura #' . $venta->id . ' ya está anulada.');
+            }
+
+            // Candado de nómina: si las comisiones de esta venta ya se pagaron,
+            // anularla rompería la trazabilidad financiera del pago de planilla.
+            $comisionPagada = ComisionGenerada::where('venta_id', $venta->id)
+                ->where('estado', 'pagada')
+                ->exists();
+
+            if ($comisionPagada) {
+                throw new \App\Exceptions\ContabilidadException(
+                    'No se puede anular: las comisiones de esta factura ya fueron pagadas en una nómina. ' .
+                    'Regulariza primero la nómina correspondiente.'
+                );
+            }
+
+            $motivo = trim($request->motivo);
+
+            // Las cotizaciones no generaron efectos: solo cambian de estado
+            if ($venta->status !== Venta::ESTADO_BORRADOR) {
+                // 1. El inventario físico regresa (unidades y mililitros)
+                (new InventarioService())->revertirPorVenta($venta);
+
+                // 2. Divisas: se devuelven al cliente los USD cobrados y reingresa
+                //    el vuelto USD entregado. Se usa el turno abierto del cajero
+                //    original; si ya cerró, el turno abierto de quien anula.
+                $pagosUsd = $venta->pagos->where('moneda', 'usd')->where('metodo', 'efectivo');
+                if ($pagosUsd->count() > 0) {
+                    $sesionDivisas = SesionCaja::where('user_id', $venta->cashier_id)->where('estado', 'abierta')->first()
+                        ?? SesionCaja::where('user_id', auth()->id())->where('estado', 'abierta')->first();
+
+                    if (!$sesionDivisas) {
+                        throw new \App\Exceptions\ContabilidadException(
+                            'La factura tiene cobros en dólares y no hay un turno de caja abierto ' .
+                            'para devolver las divisas físicas. Abre un turno antes de anular.'
+                        );
+                    }
+
+                    $divisaService = new DivisaService();
+                    foreach ($pagosUsd as $pagoUsd) {
+                        try {
+                            if ($pagoUsd->tipo === 'pago') {
+                                $divisaService->egresarDivisas('USD', 'App\Models\SesionCaja', $sesionDivisas->id, (float) $pagoUsd->monto, (float) $pagoUsd->tasa);
+                            } else {
+                                $divisaService->ingresarDivisas('USD', 'App\Models\SesionCaja', $sesionDivisas->id, (float) $pagoUsd->monto, (float) $pagoUsd->tasa);
+                            }
+                        } catch (\Exception $e) {
+                            throw new \App\Exceptions\ContabilidadException(
+                                'No hay suficientes dólares físicos en caja para devolver al cliente. ' .
+                                'Regulariza el efectivo USD antes de anular la factura.'
+                            );
+                        }
+                    }
+                }
+
+                // 3. Las comisiones pendientes de esta venta quedan anuladas
+                ComisionGenerada::where('venta_id', $venta->id)
+                    ->where('estado', 'pendiente')
+                    ->update(['estado' => 'anulada']);
+
+                // 4. Reversión contable espejo de todos los asientos de la venta
+                $contabilidad = new \App\Services\ContabilidadService();
+                $contabilidad->reversarVenta($venta, $motivo);
+
+                // 5. La cita asociada vuelve a pendiente para permitir refacturar
+                if ($venta->appointment_id) {
+                    \App\Models\Cita::where('id', $venta->appointment_id)
+                        ->where('status', 'completada')
+                        ->update(['status' => 'pendiente']);
+                }
+            }
+
+            $venta->update([
+                'status' => Venta::ESTADO_ANULADA,
+                'anulada_at' => now(),
+                'anulada_por' => auth()->id(),
+                'motivo_anulacion' => $motivo,
+            ]);
+
+            \Illuminate\Support\Facades\DB::commit();
+
+            return back()->with('success', 'Factura #' . $venta->id . ' anulada correctamente. El documento y su reversión quedaron registrados para auditoría.');
+        } catch (\App\Exceptions\ContabilidadException $e) {
+            \Illuminate\Support\Facades\DB::rollBack();
+            return back()->with('error', $e->getMessage());
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\DB::rollBack();
+            Log::error('Error al anular factura', [
+                'sale_id' => $id,
+                'exception' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            return back()->with('error', 'Error al anular la factura. Contacte al administrador.');
+        }
+    }
+
+    /**
+     * Documento JSON para hidratar el POS: carga una cotización (borrador) o una
+     * factura emitida pendiente de cobro en el carrito del punto de venta.
+     */
+    public function documento($id)
+    {
+        $venta = Venta::with(['detalles.servicio', 'detalles.articulo', 'cliente'])->findOrFail($id);
+
+        if (!in_array($venta->status, [Venta::ESTADO_BORRADOR, Venta::ESTADO_EMITIDA])) {
+            return response()->json(['error' => 'Solo se pueden cargar cotizaciones o facturas pendientes de cobro.'], 422);
+        }
+
+        return response()->json([
+            'id' => $venta->id,
+            'status' => $venta->status,
+            'client_id' => $venta->client_id,
+            'discount' => (float) $venta->discount,
+            'total' => (float) $venta->total,
+            'items' => $venta->detalles->map(function ($d) {
+                return [
+                    'id' => $d->service_id ?? $d->item_id,
+                    'producto' => $d->servicio?->name ?? $d->articulo?->producto ?? 'Artículo',
+                    'precio_c' => (float) $d->unit_price,
+                    'type' => $d->service_id ? 'servicio' : 'producto',
+                    'quantity' => (int) $d->quantity,
+                    'stylist_id' => $d->stylist_id,
+                ];
+            })->values(),
+        ]);
+    }
+
+    public function index(Request $request)
     {
         $ventas = Venta::with(['cliente', 'cajero'])
             ->withCount(['pagos as pagos_cobro_count' => function ($q) {
                 $q->where('tipo', 'pago');
             }])
+            ->when($request->estado && in_array($request->estado, Venta::ESTADOS), function ($q) use ($request) {
+                $q->where('status', $request->estado);
+            })
             ->orderBy('created_at', 'desc')
             ->get();
 
-        return view('sales.index', compact('ventas'));
+        $esAdmin = auth()->user()->role === 'admin';
+
+        return view('sales.index', compact('ventas', 'esAdmin'));
     }
 
     public function ticket($id)
     {
-        $venta = Venta::with(['cliente', 'cajero', 'detalles.servicio', 'detalles.articulo', 'detalles.estilista', 'pagos'])->findOrFail($id);
+        $venta = Venta::with(['cliente', 'cajero', 'detalles.servicio', 'detalles.articulo', 'detalles.estilista', 'pagos', 'anuladaPor'])->findOrFail($id);
         return view('sales.ticket', compact('venta'));
     }
 

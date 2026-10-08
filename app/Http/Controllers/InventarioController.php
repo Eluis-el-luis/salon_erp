@@ -204,8 +204,12 @@ class InventarioController extends Controller
                     ]);
                 }
 
-                // SALIDAS: ventas de producto físico
-                $detalles = DetalleVenta::with('venta')->where('item_id', $articulo->id)->get();
+                // SALIDAS: ventas de producto físico (solo documentos vigentes:
+                // borradores nunca salieron y anuladas ya devolvieron el stock)
+                $detalles = DetalleVenta::with('venta')
+                    ->where('item_id', $articulo->id)
+                    ->whereHas('venta', fn ($q) => $q->whereIn('status', \App\Models\Venta::ESTADOS_DEVENGADOS))
+                    ->get();
                 foreach ($detalles as $d) {
                     $movimientos->push([
                         'fecha' => $d->venta?->created_at ?? $d->created_at,
@@ -281,8 +285,11 @@ class InventarioController extends Controller
             ]);
         }
 
-        // SALIDAS: ventas de producto físico
-        $detalles = DetalleVenta::with('venta')->where('item_id', $request->item_id)->get();
+        // SALIDAS: ventas de producto físico (solo documentos vigentes)
+        $detalles = DetalleVenta::with('venta')
+            ->where('item_id', $request->item_id)
+            ->whereHas('venta', fn ($q) => $q->whereIn('status', \App\Models\Venta::ESTADOS_DEVENGADOS))
+            ->get();
         foreach ($detalles as $d) {
             $movimientos->push([
                 'fecha' => $d->venta?->created_at ?? $d->created_at,

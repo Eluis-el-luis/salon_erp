@@ -212,6 +212,103 @@ class InventarioService
     }
 
     /**
+     * ANULACIÓN DE FACTURA: devuelve al inventario todo lo consumido por una
+     * venta. Espejo de descontarPorVenta():
+     *  - Productos físicos: regresan las unidades.
+     *  - Insumos fraccionables: regresa el volumen (si el frasco abierto se
+     *    "llena", se reconstruye la unidad física).
+     * Los lotes se reponen sobre el lote MÁS RECIENTE (retorno LIFO): el sistema
+     * no guarda el lote exacto de cada consumo, por lo que la reposición es
+     * agregada y mantiene consistentes artículo y totales de lote.
+     */
+    public function revertirPorVenta($venta): void
+    {
+        foreach ($venta->detalles as $detalle) {
+            if ($detalle->item_id != null) {
+                $this->revertirProductoFisico($detalle->item_id, (float) $detalle->quantity);
+            }
+
+            if ($detalle->service_id != null) {
+                $servicio = Servicio::with('formulas.articulo')->find($detalle->service_id);
+                if (!$servicio) {
+                    continue;
+                }
+
+                foreach ($servicio->formulas as $formula) {
+                    $articulo = $formula->articulo;
+                    if (!$articulo) {
+                        continue;
+                    }
+
+                    $volumenDevuelto = (float) $formula->quantity_used * (float) $detalle->quantity;
+                    $this->revertirVolumen($articulo, $volumenDevuelto);
+                }
+            }
+        }
+    }
+
+    protected function revertirProductoFisico(int $itemId, float $cantidad): void
+    {
+        $articulo = Articulo::find($itemId);
+        if (!$articulo || $cantidad <= 0) {
+            return;
+        }
+
+        $articulo->existencia_actual += $cantidad;
+        $articulo->save();
+
+        $this->devolverUnidadesALoteReciente($articulo, $cantidad);
+    }
+
+    protected function revertirVolumen(Articulo $articulo, float $volumenMl): void
+    {
+        if ($volumenMl <= 0) {
+            return;
+        }
+
+        $unidadesRearmadas = 0;
+        $articulo->current_volume += $volumenMl;
+
+        // Si el frasco abierto se "desborda", se reconstruyen unidades físicas
+        while ($articulo->total_volume > 0 && $articulo->current_volume > $articulo->total_volume) {
+            $articulo->existencia_actual += 1;
+            $articulo->current_volume -= $articulo->total_volume;
+            $unidadesRearmadas++;
+        }
+
+        $articulo->save();
+
+        // Espejo del consumo en lotes: las unidades enteras consumidas por
+        // volumen (floor del consumo) más las rearmadas en la reposición.
+        if ($articulo->is_fractionable && $articulo->total_volume > 0) {
+            $unidadesPorVolumen = (int) floor($volumenMl / $articulo->total_volume);
+            $this->devolverUnidadesALoteReciente($articulo, $unidadesPorVolumen + $unidadesRearmadas);
+        }
+    }
+
+    /**
+     * Repone unidades en el lote más reciente del artículo (retorno LIFO).
+     * Si no hay lotes, no bloquea: los contadores del artículo ya quedaron bien.
+     */
+    protected function devolverUnidadesALoteReciente(Articulo $articulo, float $unidades): void
+    {
+        if ($unidades <= 0) {
+            return;
+        }
+
+        $lote = Lote::where('item_id', $articulo->id)
+            ->orderBy('fecha_entrada', 'desc')
+            ->orderBy('id', 'desc')
+            ->lockForUpdate()
+            ->first();
+
+        if ($lote) {
+            $lote->cantidad_disponible += $unidades;
+            $lote->save();
+        }
+    }
+
+    /**
      * FASE 4 AVANZADA: Costo Promedio Móvil por VOLUMEN para insumos fraccionables.
      * Calcula el costo promedio ponderado por ml/oz basado en los lotes disponibles.
      */

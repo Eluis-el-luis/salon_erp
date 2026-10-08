@@ -92,6 +92,10 @@ Route::middleware(['auth'])->group(function () {
 
         Route::get('/historial-ventas', [VentaController::class, 'index']);
         Route::get('/ventas/{id}/ticket', [VentaController::class, 'ticket']);
+        Route::get('/ventas/{id}/documento', [VentaController::class, 'documento']);
+        Route::post('/ventas/{id}/cobrar', [VentaController::class, 'cobrar']);
+        // MANDAMIENTO: anular facturas es privilegio exclusivo del administrador
+        Route::post('/ventas/{id}/anular', [VentaController::class, 'anular'])->middleware('role:admin');
 
         Route::get('/adelantos', [AdelantoController::class, 'index']);
         Route::post('/adelantos', [AdelantoController::class, 'store']);
