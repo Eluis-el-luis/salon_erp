@@ -117,22 +117,56 @@
         </div>
 
         <div class="bg-gray-100 p-2 mt-4 rounded text-center">
-            <p class="text-xs text-gray-700 uppercase font-bold">
-                PAGO RECIBIDO EN: 
-                @if($venta->payment_method == 'efectivo')
-                    Efectivo (Caja)
-                @else
-                    Banco {{ strtoupper($venta->payment_method) }}
+            @if($venta->pagos->count() > 0)
+                {{-- PAGOS MIXTOS: desglose del libro de pagos --}}
+                <p class="text-xs text-gray-700 uppercase font-bold mb-1">Detalle del pago</p>
+                @foreach($venta->pagos->where('tipo', 'pago') as $pago)
+                    <div class="flex justify-between text-[11px] text-gray-700 px-2">
+                        <span>{{ ucfirst($pago->metodo) }} ({{ strtoupper($pago->moneda) }})</span>
+                        <span class="font-bold">
+                            {{ $pago->moneda === 'usd' ? '$' : 'C$' }} {{ number_format($pago->monto, 2) }}
+                            @if($pago->moneda === 'usd')
+                                <span class="text-gray-500">(C$ {{ number_format($pago->valor_nio, 2) }})</span>
+                            @endif
+                        </span>
+                    </div>
+                @endforeach
+                @php $vueltoTicket = $venta->pagos->where('tipo', 'vuelto')->first(); @endphp
+                @if($vueltoTicket)
+                    <div class="flex justify-between text-[11px] font-black text-gray-900 px-2 mt-1 border-t border-gray-300 pt-1">
+                        <span>VUELTO ENTREGADO:</span>
+                        <span>
+                            {{ $vueltoTicket->moneda === 'usd' ? '$' : 'C$' }} {{ number_format($vueltoTicket->monto, 2) }}
+                            @if($vueltoTicket->moneda === 'usd')
+                                <span class="text-gray-500">(C$ {{ number_format($vueltoTicket->valor_nio, 2) }})</span>
+                            @endif
+                        </span>
+                    </div>
                 @endif
-            </p>
-            
-            @if($venta->currency == 'usd')
-                <p class="text-[11px] font-black text-gray-900 mt-1">
-                    Equivalente cobrado: $ {{ number_format($venta->total / $venta->exchange_rate, 2) }} USD
+                @if($venta->pagos->where('moneda', 'usd')->count() > 0)
+                    <p class="text-[9px] text-gray-500 italic mt-1">
+                        (Tasa de cambio aplicada: C$ {{ number_format($venta->exchange_rate, 2) }})
+                    </p>
+                @endif
+            @else
+                {{-- Ventas legacy (un solo método de pago) --}}
+                <p class="text-xs text-gray-700 uppercase font-bold">
+                    PAGO RECIBIDO EN:
+                    @if($venta->payment_method == 'efectivo')
+                        Efectivo (Caja)
+                    @else
+                        Banco {{ strtoupper($venta->payment_method) }}
+                    @endif
                 </p>
-                <p class="text-[9px] text-gray-500 italic mt-0.5">
-                    (Tasa de cambio aplicada: C$ {{ number_format($venta->exchange_rate, 2) }})
-                </p>
+
+                @if($venta->currency == 'usd')
+                    <p class="text-[11px] font-black text-gray-900 mt-1">
+                        Equivalente cobrado: $ {{ number_format($venta->total / $venta->exchange_rate, 2) }} USD
+                    </p>
+                    <p class="text-[9px] text-gray-500 italic mt-0.5">
+                        (Tasa de cambio aplicada: C$ {{ number_format($venta->exchange_rate, 2) }})
+                    </p>
+                @endif
             @endif
         </div>
 

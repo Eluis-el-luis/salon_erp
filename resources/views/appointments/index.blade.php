@@ -214,36 +214,6 @@
                 } catch (error) { console.error(error); }
             },
 
-            // --- FLUXO DE FACTURAR CITA ---
-            billAppointment(id) {
-                // 1. Disparamos el modal global
-                window.dispatchEvent(new CustomEvent('open-confirm', { 
-                    detail: { 
-                        message: '¿Deseas generar la factura para esta cita y enviarla a caja?',
-                        action: () => this.processBill(id) 
-                    } 
-                }));
-            },
-
-            async processBill(id) {
-                
-                try {
-                    let response = await fetch(`/sales/bill-appointment/${id}`, {
-                        method: 'POST',
-                        credentials: 'same-origin',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Accept': 'application/json',
-                            'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content')
-                        },
-                        body: JSON.stringify({ discount: 0, payment_method: 'efectivo', currency: 'cordoba', exchange_rate: 36.80 })
-                    });
-                    if (response.ok) {
-                        window.dispatchEvent(new CustomEvent('notify', { detail: '¡Factura generada y enviada a caja!' }));
-                        setTimeout(() => { window.location.reload(); }, 1000);
-                    }
-                } catch (error) { console.error(error); }
-            }
         }
     }
 </script>

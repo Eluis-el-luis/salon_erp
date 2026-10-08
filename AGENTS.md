@@ -8,13 +8,6 @@ El objetivo al modificarlo es conservar integridad financiera y de inventario, c
 
 ## 2. Entorno y stack verificado
 
-- Host habitual: Windows 10 con Laragon y PowerShell. No asumir Bash ni rutas Linux.
-- Backend: PHP `^8.3`, Laravel `^13.8`, Eloquent ORM.
-- Persistencia: MySQL/MariaDB en despliegue; el esquema se evoluciona mediante migraciones.
-- Frontend: Blade, Tailwind CSS 4, Alpine.js 3 y Vite 8.
-- Pruebas: PHPUnit 12 mediante Laravel. Composer también incorpora Laravel Pint.
-- Dependencias de dominio: Laravel Sanctum, Laravel Excel (`maatwebsite/excel`) y `ifsnop/mysqldump-php`.
-
 Las versiones declaradas en `composer.json` y `package.json` son la referencia del stack. La presencia de Sanctum en Composer no demuestra por sí sola que una ruta API esté protegida por Sanctum.
 
 ## 3. Arquitectura y mapa del código
@@ -45,8 +38,8 @@ Los nombres de tablas y algunos campos conservan nombres heredados en inglés (`
 | --- | --- | --- |
 | Panel, agenda y citas | `PanelController`, ruta `/agenda`, `CitaController`, `Cita`, `Cliente`, `Servicio` | Indicadores del negocio, agenda diaria y citas. La agenda web actualmente consulta modelos desde una closure; el API usa `CitaController`. |
 | Clientes | `ClienteController`, `Cliente` | Datos de clientes y relaciones con citas, ventas y movimientos de crédito. |
-| POS y ventas | `VentaController`, `Venta`, `DetalleVenta`, `Pago` | Venta de servicios/productos, pagos mixtos, ticket, facturación de cita, inventario, comisiones y asiento contable. |
-| Caja y caja chica | `CajaController`, `SesionCaja`, `CajaChicaController`, `CajaChica`, `MovimientoCajaChica` | Apertura/cierre, arqueo, movimientos de efectivo y gastos menores. |
+| POS y ventas | `VentaController`, `Venta`, `DetalleVenta`, `Pago` | Venta de servicios/productos, libro de pagos (pagos mixtos y vuelto multimoneda en `pagos`), ticket, facturación de cita vía redirección al POS, inventario, comisiones y asiento contable. |
+| Caja y caja chica | `CajaController`, `SesionCaja`, `CajaChicaController`, `CajaChica`, `MovimientoCajaChica` | Apertura/cierre, arqueo (el efectivo teórico se calcula desde el libro de pagos, vía `Venta::efectivoNioNeto()`), movimientos de efectivo y gastos menores. |
 | Inventario y compras | `InventarioController`, `Articulo`, `Lote`, `InventarioService` | Existencias, compras, costos, lotes, kardex y alertas de stock. |
 | Recetas y mermas | `FormulaController`, `FormulaServicio`, `MermaController`, `Merma` | Consumo de productos fraccionables por servicio y bajas por merma. |
 | Empleados, comisiones y nómina | `EmpleadoController`, `Usuario`, `EsquemaComision`, `EsquemaRango`, `ComisionGenerada`, `NominaController`, `Nomina`, `AsistenciaController` | Personal, asistencia, comisión histórica, deducciones, cuotas y nómina. |
@@ -86,9 +79,11 @@ Los nombres de tablas y algunos campos conservan nombres heredados en inglés (`
 ### 5.4 Multimoneda y mesa de cambio
 
 - Monedas operativas principales: córdobas NIO (moneda base contable) y dólares USD.
-- `DivisaService::ingresarDivisas()` recalcula costo promedio ponderado y redondea a seis decimales; `egresarDivisas()` valida saldo y calcula diferencial con la tasa de venta y el costo promedio.
+- `DivisaService::ingresarDivisas()` recalcula costo promedio ponderado y redondea a seis decimales; `egresarDivisas()` valida saldo y calcula diferencial con la tasa de venta y el costo promedio. Ambos bloquean la fila de saldo con `lockForUpdate()` y deben ejecutarse dentro de una transacción.
 - `saldos_moneda.costo_promedio_ponderado` está definido como `decimal(15,6)`; los saldos monetarios son `decimal(15,2)`. No degradar esa precisión.
 - Mantener saldo segregado por moneda y ubicación (polimórfica); no mezclar efectivo físico, caja y banco.
+- Pagos mixtos (tabla `pagos`): los importes (`subtotal`, `discount`, `total`, `valor_nio`) están SIEMPRE en moneda base NIO. `ContabilidadService::contabilizarVenta()` no debe re-normalizarlos con la tasa de un pago en USD cuando existen líneas de pago; la conversión ya ocurrió por línea en `valor_nio` al registrar el pago.
+- El vuelto al cliente es una línea `tipo = 'vuelto'` en `pagos`: NIO acredita caja `1.1.1`; USD acredita caja USD `1.1.1.2` a su valor operativo (`valor_nio`) y descuenta dólares físicos vía `DivisaService::egresarDivisas()` (rechaza con rollback si no hay saldo). El reconocimiento del diferencial cambiario por valor libro sigue siendo dominio de la mesa de cambio.
 - Antes de cambiar el tratamiento de una venta cobrada en USD, seguir conjuntamente `VentaController`, `DivisaService` y `ContabilidadService`.
 
 ### 5.5 Inventario fraccionado y lotes

@@ -165,6 +165,8 @@ class VentaController extends Controller
             'payment_method' => 'nullable|string|in:efectivo,bac,lafise',
             'currency' => 'nullable|string|in:nio,usd',
             'exchange_rate' => 'nullable|numeric|min:1',
+            // Vuelto multimoneda: moneda en la que se entrega el cambio al cliente
+            'change_currency' => 'nullable|in:nio,usd',
         ]);
 
         // PAGOS MIXTOS: normalizamos el arreglo de pagos (compatibilidad con pago único legacy)
@@ -256,14 +258,18 @@ class VentaController extends Controller
                 ];
             }
 
-            // Vuelto multimoneda: si el cliente pagó de más, se devuelve en efectivo NIO
+            // Vuelto multimoneda: si el cliente pagó de más, se devuelve en efectivo
+            // en la moneda solicitada (valor_nio exacto para que el asiento cuadre)
             $vueltoNio = round(max(0, $totalRecibidoNio - $total), 2);
             if ($vueltoNio > 0) {
+                $monedaVuelto = $request->change_currency === 'usd' ? 'usd' : 'nio';
+                $tasaVuelto = $exchangeRate > 1 ? $exchangeRate : 1;
+
                 $pagosAInsertar[] = [
                     'metodo' => 'efectivo',
-                    'moneda' => 'nio',
-                    'monto' => $vueltoNio,
-                    'tasa' => 1,
+                    'moneda' => $monedaVuelto,
+                    'monto' => $monedaVuelto === 'usd' ? round($vueltoNio / $tasaVuelto, 2) : $vueltoNio,
+                    'tasa' => $tasaVuelto,
                     'valor_nio' => $vueltoNio,
                     'tipo' => 'vuelto',
                 ];
@@ -273,16 +279,39 @@ class VentaController extends Controller
                 \App\Models\Pago::create(['venta_id' => $venta->id] + $pp);
             }
 
-            // Multimoneda: todo pago en USD en efectivo aumenta el inventario físico de dólares
+            // Multimoneda: los pagos en USD en efectivo aumentan el inventario físico
+            // de dólares y el vuelto entregado en USD lo reduce (primero entra, luego sale).
             $cajaActiva = SesionCaja::where('user_id', auth()->id())->where('estado', 'abierta')->first();
+            $divisaService = new DivisaService();
+
             foreach ($pagosAInsertar as $pp) {
-                if ($pp['tipo'] === 'pago' && $pp['moneda'] === 'usd' && $pp['metodo'] === 'efectivo' && $cajaActiva) {
-                    (new DivisaService())->ingresarDivisas(
-                        'USD',
-                        'App\Models\SesionCaja',
-                        $cajaActiva->id,
-                        (float) $pp['monto'],
-                        (float) $pp['tasa']
+                if ($pp['moneda'] !== 'usd' || $pp['metodo'] !== 'efectivo' || !$cajaActiva) {
+                    continue;
+                }
+
+                try {
+                    if ($pp['tipo'] === 'pago') {
+                        $divisaService->ingresarDivisas(
+                            'USD',
+                            'App\Models\SesionCaja',
+                            $cajaActiva->id,
+                            (float) $pp['monto'],
+                            (float) $pp['tasa']
+                        );
+                    } else {
+                        // Vuelto en USD: valida saldo físico disponible en la caja
+                        $divisaService->egresarDivisas(
+                            'USD',
+                            'App\Models\SesionCaja',
+                            $cajaActiva->id,
+                            (float) $pp['monto'],
+                            (float) $pp['tasa']
+                        );
+                    }
+                } catch (\Exception $e) {
+                    throw new \App\Exceptions\ContabilidadException(
+                        'No hay suficientes dólares físicos en caja para entregar el vuelto en USD. ' .
+                        'Entrega el vuelto en córdobas o registra el ingreso de divisas primero.'
                     );
                 }
             }
@@ -319,13 +348,19 @@ class VentaController extends Controller
 
     public function index()
     {
-        $ventas = Venta::with(['cliente', 'cajero'])->orderBy('created_at', 'desc')->get();
+        $ventas = Venta::with(['cliente', 'cajero'])
+            ->withCount(['pagos as pagos_cobro_count' => function ($q) {
+                $q->where('tipo', 'pago');
+            }])
+            ->orderBy('created_at', 'desc')
+            ->get();
+
         return view('sales.index', compact('ventas'));
     }
 
     public function ticket($id)
     {
-        $venta = Venta::with(['cliente', 'cajero', 'detalles.servicio', 'detalles.articulo', 'detalles.estilista'])->findOrFail($id);
+        $venta = Venta::with(['cliente', 'cajero', 'detalles.servicio', 'detalles.articulo', 'detalles.estilista', 'pagos'])->findOrFail($id);
         return view('sales.ticket', compact('venta'));
     }
 

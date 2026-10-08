@@ -170,9 +170,17 @@ class ContabilidadService
         $periodo = $this->resolverPeriodo($sale->created_at);
 
         $monedaBase = $this->getMonedaBaseId();
-        
+
+        // PAGOS MIXTOS: si la venta tiene líneas en el libro de pagos, los precios
+        // del detalle y el total YA están en moneda base (NIO). Normalizar con el
+        // tipo de cambio del primer pago descuadraría el asiento (debe en valor_nio
+        // vs haber inflado por la tasa). Solo el flujo legacy (pago único) convierte.
+        $usaPagosMixtos = $sale->pagos && $sale->pagos->count() > 0;
+
         // Determinar factor de conversión bimonetaria
-        $tasa = ($sale->currency === 'usd' || $sale->currency === 'dolar') ? $sale->exchange_rate : 1.00;
+        $tasa = (!$usaPagosMixtos && ($sale->currency === 'usd' || $sale->currency === 'dolar'))
+            ? $sale->exchange_rate
+            : 1.00;
 
         // Calcular subtotales brutos por línea para partir correctamente el descuento
         $subtotalBrutoServicios = 0;
@@ -266,16 +274,22 @@ class ContabilidadService
                     ]);
                 }
 
-                // Vuelto entregado al cliente (reduce la caja)
-                $vuelto = round((float) $sale->pagos->where('tipo', 'vuelto')->sum('valor_nio'), 2);
-                if ($vuelto > 0) {
+                // Vuelto entregado al cliente (reduce la caja de la moneda entregada)
+                foreach ($sale->pagos->where('tipo', 'vuelto')->groupBy('moneda') as $monedaVuelto => $vueltos) {
+                    $montoVuelto = round((float) $vueltos->sum('valor_nio'), 2);
+                    if ($montoVuelto <= 0) {
+                        continue;
+                    }
+
                     DetalleAsiento::create([
                         'asiento_id' => $asientoIngreso->id,
-                        'cuenta_id' => $this->getCuentaIdByCodigo('1.1.1'),
+                        'cuenta_id' => $monedaVuelto === 'usd'
+                            ? $this->getCuentaIdByCodigo('1.1.1.2')
+                            : $this->getCuentaIdByCodigo('1.1.1'),
                         'moneda_id' => $monedaBase,
                         'debe' => 0,
-                        'haber' => $vuelto,
-                        'descripcion' => 'Vuelto/cambio entregado al cliente factura #' . $sale->id,
+                        'haber' => $montoVuelto,
+                        'descripcion' => 'Vuelto/cambio entregado al cliente (' . strtoupper($monedaVuelto) . ') factura #' . $sale->id,
                     ]);
                 }
             } else {

@@ -55,9 +55,13 @@ class PanelController extends Controller
             ->whereBetween('created_at', [$inicio, $fin]);
 
         $totalIngresos = (clone $ventasQuery)->sum('total');
-        $ventasEfectivo = (clone $ventasQuery)->where('payment_method', 'efectivo')->sum('total');
-        $ventasBac = (clone $ventasQuery)->where('payment_method', 'bac')->sum('total');
-        $ventasLafise = (clone $ventasQuery)->where('payment_method', 'lafise')->sum('total');
+
+        // PAGOS MIXTOS: desglose por método leído del libro de pagos (valores NIO,
+        // netos de vuelto). Las ventas legacy sin pagos agregan su total histórico.
+        $totalesPorMetodo = Venta::totalesPorMetodo($ventasQuery);
+        $ventasEfectivo = $totalesPorMetodo['efectivo'];
+        $ventasBac = $totalesPorMetodo['bac'];
+        $ventasLafise = $totalesPorMetodo['lafise'];
 
         // Egresos del periodo (Caja Chica)
         $egresosCaja = MovimientoCajaChica::whereBetween('fecha', [$inicio, $fin])->sum('monto');

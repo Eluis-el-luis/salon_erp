@@ -22,21 +22,17 @@ class ReporteController extends Controller
         // ==========================================
         // REPORTE 1: VENTAS GENERALES
         // ==========================================
-        $ventas = Venta::whereBetween('created_at', [$fechaInicio, $fechaFin])
-                      ->where('status', 'completada')
-                      ->get();
-                      
+        $ventasQuery = Venta::whereBetween('created_at', [$fechaInicio, $fechaFin])
+                       ->where('status', 'completada');
+        $ventas = (clone $ventasQuery)->get();
+
         $totalVentas = $ventas->sum('total');
         $totalDescuentos = $ventas->sum('discount');
         $cantidadFacturas = $ventas->count();
-        
-        $ventasPorMetodo = [
-            'efectivo' => $ventas->where('payment_method', 'efectivo')->sum('total'),
-            'bac' => $ventas->where('payment_method', 'bac')->sum('total'),
-            'lafise' => $ventas->where('payment_method', 'lafise')->sum('total'),
-            'tarjeta' => $ventas->where('payment_method', 'tarjeta')->sum('total'),
-            'transferencia' => $ventas->where('payment_method', 'transferencia')->sum('total'),
-        ];
+
+        // PAGOS MIXTOS: desglose por método leído del libro de pagos (valores NIO,
+        // netos de vuelto). Métodos legacy (tarjeta/transferencia) se conservan.
+        $ventasPorMetodo = Venta::totalesPorMetodo($ventasQuery) + ['tarjeta' => 0, 'transferencia' => 0];
 
         // ==========================================
         // REPORTE 2: RENDIMIENTO POR ESTILISTA
@@ -137,14 +133,12 @@ class ReporteController extends Controller
         $fechaFin = $request->end_date ? Carbon::parse($request->end_date)->endOfDay() : Carbon::now()->endOfMonth();
 
         // Recopilar datos exactos de la pantalla
-        $ventas = Venta::whereBetween('created_at', [$fechaInicio, $fechaFin])->where('status', 'completada')->get();
+        $ventasQuery = Venta::whereBetween('created_at', [$fechaInicio, $fechaFin])->where('status', 'completada');
+        $ventas = (clone $ventasQuery)->get();
         $totalVentas = $ventas->sum('total');
-        
-        $ventasPorMetodo = [
-            'efectivo' => $ventas->where('payment_method', 'efectivo')->sum('total'),
-            'bac' => $ventas->where('payment_method', 'bac')->sum('total'),
-            'lafise' => $ventas->where('payment_method', 'lafise')->sum('total'),
-        ];
+
+        // PAGOS MIXTOS: desglose por método desde el libro de pagos
+        $ventasPorMetodo = Venta::totalesPorMetodo($ventasQuery);
 
         $estilistas = Usuario::whereIn('role', ['estilista', 'admin'])
             ->withSum(['comisionesGeneradas' => function($query) use ($fechaInicio, $fechaFin) {

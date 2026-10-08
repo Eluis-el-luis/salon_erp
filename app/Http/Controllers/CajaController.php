@@ -34,11 +34,12 @@ class CajaController extends Controller
 
         $ventasEfectivo = 0;
         if ($sesion) {
-            // Solo sumamos las ventas en efectivo hechas por ESTE cajero durante ESTE turno
-            $ventasEfectivo = Venta::where('payment_method', 'efectivo')
-                                  ->where('cashier_id', auth()->id())
-                                  ->where('created_at', '>=', $sesion->fecha_apertura)
-                                  ->sum('total');
+            // PAGOS MIXTOS: efectivo NIO neto (cobros menos vueltos) de ESTE cajero
+            // durante ESTE turno, leído del libro de pagos. Fallback legacy incluido.
+            $ventasEfectivo = Venta::efectivoNioNeto(
+                Venta::where('cashier_id', auth()->id())
+                    ->where('created_at', '>=', $sesion->fecha_apertura)
+            );
         }
 
         // Monto automático de apertura: el cierre de la última sesión del usuario.
@@ -126,10 +127,11 @@ class CajaController extends Controller
             $sesion = SesionCaja::where('user_id', auth()->id())->where('estado', 'abierta')->firstOrFail();
 
             // MANDAMIENTO: El monto teórico SIEMPRE lo calcula el backend.
-            $ventasEfectivoTurno = Venta::where('payment_method', 'efectivo')
-                ->where('cashier_id', auth()->id())
-                ->where('created_at', '>=', $sesion->fecha_apertura)
-                ->sum('total');
+            // PAGOS MIXTOS: se lee del libro de pagos (efectivo NIO neto de vuelto).
+            $ventasEfectivoTurno = Venta::efectivoNioNeto(
+                Venta::where('cashier_id', auth()->id())
+                    ->where('created_at', '>=', $sesion->fecha_apertura)
+            );
 
             $montoTeorico = round((float) $sesion->monto_apertura + (float) $ventasEfectivoTurno, 2);
 

@@ -259,9 +259,29 @@
                     </div>
 
                     <!-- Vuelto -->
-                    <div x-show="parseFloat(vuelto) > 0" class="bg-emerald-50 border border-emerald-200 p-4 rounded-xl flex items-center justify-between">
-                        <span class="text-sm font-bold text-emerald-800">Vuelto a entregar</span>
-                        <span class="text-2xl font-black text-emerald-700">C$ <span x-text="vuelto"></span></span>
+                    <div x-show="parseFloat(vuelto) > 0" class="bg-emerald-50 border border-emerald-200 p-4 rounded-xl space-y-3">
+                        <div class="flex items-center justify-between">
+                            <span class="text-sm font-bold text-emerald-800">Vuelto a entregar</span>
+                            <span class="text-2xl font-black text-emerald-700" x-text="vueltoMostrar"></span>
+                        </div>
+                        <div class="flex items-center justify-between gap-3">
+                            <label class="text-xs font-bold text-emerald-700">Entregar el cambio en:</label>
+                            <div class="flex gap-2">
+                                <button type="button" @click="changeCurrency = 'nio'"
+                                        class="px-3 py-1.5 rounded-lg border text-xs font-bold transition cursor-pointer"
+                                        :class="changeCurrency === 'nio' ? 'bg-emerald-600 border-emerald-600 text-white' : 'border-emerald-300 bg-white text-emerald-700 hover:bg-emerald-100'">
+                                    Córdobas (C$)
+                                </button>
+                                <button type="button" @click="changeCurrency = 'usd'"
+                                        class="px-3 py-1.5 rounded-lg border text-xs font-bold transition cursor-pointer"
+                                        :class="changeCurrency === 'usd' ? 'bg-blue-600 border-blue-600 text-white' : 'border-blue-300 bg-white text-blue-700 hover:bg-blue-100'">
+                                    Dólares (US$)
+                                </button>
+                            </div>
+                        </div>
+                        <p x-show="changeCurrency === 'usd'" class="text-[11px] text-emerald-700 italic">
+                            Se descontarán dólares físicos de la caja. Requiere tener saldo USD disponible.
+                        </p>
                     </div>
 
                 </div>
@@ -298,6 +318,7 @@
             curMoneda: 'nio',
             curTasa: 36.50,
             curMonto: 0,
+            changeCurrency: 'nio',
             denomNio: [200, 500, 1000, 2000, 5000],
             denomUsd: [5, 10, 20, 50, 100],
 
@@ -310,6 +331,17 @@
             get vuelto() {
                 let exceso = (this.totalRecibidoNio - parseFloat(this.calculateTotal()));
                 return exceso > 0 ? exceso.toFixed(2) : '0.00';
+            },
+            // Tasa de referencia del vuelto: la del primer pago en USD o la tasa actual
+            get tasaRef() {
+                let pagoUsd = this.payments.find(p => p.moneda === 'usd');
+                return pagoUsd ? pagoUsd.tasa : (this.curTasa || this.exchangeRate || 1);
+            },
+            get vueltoMostrar() {
+                let v = parseFloat(this.vuelto);
+                return this.changeCurrency === 'usd'
+                    ? '$ ' + (v / this.tasaRef).toFixed(2)
+                    : 'C$ ' + v.toFixed(2);
             },
             get valorCurPago() {
                 return this.curMoneda === 'usd' ? (this.curMonto * this.curTasa) : this.curMonto;
@@ -326,6 +358,7 @@
                 this.curMoneda = 'nio';
                 this.curTasa = this.exchangeRate || 36.50;
                 this.curMonto = 0;
+                this.changeCurrency = 'nio';
                 this.checkoutOpen = true;
             },
 
@@ -358,16 +391,27 @@
 
                 if (appointmentId) {
                     this.clientId = urlParams.get('client_id') || '';
-                    
-                    this.cart.push({
+
+                    // Multi-estilista: la agenda envía stylist_ids separados por coma.
+                    // Se crea una línea por estilista dividiendo el precio del servicio,
+                    // igual que el flujo histórico de facturación de citas.
+                    const base = {
                         id: parseInt(urlParams.get('service_id')),
                         producto: urlParams.get('service_name'),
-                        precio_c: parseFloat(urlParams.get('price')),
                         type: 'servicio',
                         quantity: 1,
                         appointment_id: parseInt(appointmentId),
-                        stylist_id: parseInt(urlParams.get('stylist_id'))
-                    });
+                    };
+                    const price = parseFloat(urlParams.get('price'));
+                    const stylistIds = (urlParams.get('stylist_ids') || urlParams.get('stylist_id') || '')
+                        .split(',').map(Number).filter(n => n > 0);
+
+                    if (stylistIds.length > 0) {
+                        const precioPorEstilista = Math.round((price / stylistIds.length) * 100) / 100;
+                        stylistIds.forEach(sid => this.cart.push({ ...base, precio_c: precioPorEstilista, stylist_id: sid }));
+                    } else {
+                        this.cart.push({ ...base, precio_c: price });
+                    }
 
                     window.history.replaceState(null, null, window.location.pathname);
                 }
@@ -439,6 +483,9 @@
                                 monto: p.monto,
                                 tasa: p.moneda === 'usd' ? (p.tasa || this.exchangeRate) : 1
                             })),
+
+                            // Vuelto multimoneda: moneda en la que se entrega el cambio
+                            change_currency: parseFloat(this.vuelto) > 0 ? this.changeCurrency : 'nio',
 
                             // Primary (compatibilidad)
                             payment_method: primario.metodo,

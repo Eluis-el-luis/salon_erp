@@ -22,14 +22,22 @@ class DivisaService
     {
         $monedaId = Moneda::idPorCodigo($codigoMoneda);
 
-        $saldo = SaldoMoneda::firstOrCreate(
-            [
+        // Candado de concurrencia: este método siempre se invoca dentro de una transacción
+        $saldo = SaldoMoneda::where('moneda_id', $monedaId)
+            ->where('ubicacion_tipo', $ubicacionTipo)
+            ->where('ubicacion_id', $ubicacionId)
+            ->lockForUpdate()
+            ->first();
+
+        if (!$saldo) {
+            $saldo = SaldoMoneda::create([
                 'moneda_id' => $monedaId,
                 'ubicacion_tipo' => $ubicacionTipo,
                 'ubicacion_id' => $ubicacionId,
-            ],
-            ['saldo_actual' => 0, 'costo_promedio_ponderado' => 0]
-        );
+                'saldo_actual' => 0,
+                'costo_promedio_ponderado' => 0,
+            ]);
+        }
 
         $valorTotalAntiguo = $saldo->saldo_actual * $saldo->costo_promedio_ponderado;
         $valorNuevoAgregado = $montoMoneda * $tasa;
