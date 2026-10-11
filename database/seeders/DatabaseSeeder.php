@@ -17,6 +17,7 @@ class DatabaseSeeder extends Seeder
             ServiceSeeder::class,  // Servicios antes que Fórmulas
             FormulaSeeder::class,
             ContabilidadBaseSeeder::class,
+            CuentasComplementariasSeeder::class,
         ]);
     }
 }

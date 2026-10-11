@@ -1,7 +1,7 @@
 @extends('layouts.app')
 
 @section('content')
-<div class="max-w-7xl mx-auto space-y-6" x-data="mayorApp()">
+<div class="max-w-7xl mx-auto space-y-6">
 
     <!-- Header -->
     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
@@ -16,10 +16,10 @@
 
     <!-- Filtros -->
     <div class="card p-4 mb-6">
-        <form method="GET" class="flex flex-wrap gap-4 items-end">
+        <form method="GET" action="{{ url('/contabilidad/mayor') }}" class="flex flex-wrap gap-4 items-end">
             <div class="flex-1 min-w-[200px]">
                 <label class="label">Cuenta Contable</label>
-                <select name="cuenta_id" class="input" x-model="filtros.cuenta_id" @change="$watch('filtros.cuenta_id', v => window.location.href = '{{ url('/contabilidad/mayor') }}?cuenta_id=' + v + '&centro_costo_id=' + filtros.centro_costo_id + '&fecha_desde=' + filtros.fecha_desde + '&fecha_hasta=' + filtros.fecha_hasta + '&buscar=' + filtros.buscar)">
+                <select name="cuenta_id" class="input">
                     <option value="">Todas las cuentas</option>
                     @foreach($cuentasDisponibles as $cuenta)
                         <option value="{{ $cuenta->id }}" {{ $filtros['cuenta_id'] == $cuenta->id ? 'selected' : '' }}>
@@ -31,7 +31,7 @@
 
             <div class="w-48">
                 <label class="label">Centro de Costo</label>
-                <select name="centro_costo_id" class="input" x-model="filtros.centro_costo_id" @change="$watch('filtros.centro_costo_id', v => window.location.href = '{{ url('/contabilidad/mayor') }}?cuenta_id=' + filtros.cuenta_id + '&centro_costo_id=' + v + '&fecha_desde=' + filtros.fecha_desde + '&fecha_hasta=' + filtros.fecha_hasta + '&buscar=' + filtros.buscar)">
+                <select name="centro_costo_id" class="input">
                     <option value="">Todos los centros</option>
                     @foreach($centrosCosto as $cc)
                         <option value="{{ $cc->id }}" {{ $filtros['centro_costo_id'] == $cc->id ? 'selected' : '' }}>
@@ -43,18 +43,21 @@
 
             <div class="w-40">
                 <label class="label">Desde</label>
-                <input type="date" name="fecha_desde" value="{{ $filtros['fecha_desde'] }}" class="input" @change="window.location.href = '{{ url('/contabilidad/mayor') }}?cuenta_id=' + filtros.cuenta_id + '&centro_costo_id=' + filtros.centro_costo_id + '&fecha_desde=' + this.value + '&fecha_hasta=' + filtros.fecha_hasta + '&buscar=' + filtros.buscar">
+                <input type="date" name="fecha_desde" value="{{ $filtros['fecha_desde'] }}" class="input">
             </div>
 
             <div class="w-40">
                 <label class="label">Hasta</label>
-                <input type="date" name="fecha_hasta" value="{{ $filtros['fecha_hasta'] }}" class="input" @change="window.location.href = '{{ url('/contabilidad/mayor') }}?cuenta_id=' + filtros.cuenta_id + '&centro_costo_id=' + filtros.centro_costo_id + '&fecha_desde=' + filtros.fecha_desde + '&fecha_hasta=' + this.value + '&buscar=' + filtros.buscar">
+                <input type="date" name="fecha_hasta" value="{{ $filtros['fecha_hasta'] }}" class="input">
             </div>
 
             <div class="flex-1 min-w-[200px]">
                 <label class="label">Buscar</label>
-                <input type="text" name="buscar" value="{{ $filtros['buscar'] }}" placeholder="Buscar en concepto..." class="input" @change="window.location.href = '{{ url('/contabilidad/mayor') }}?cuenta_id=' + filtros.cuenta_id + '&centro_costo_id=' + filtros.centro_costo_id + '&fecha_desde=' + filtros.fecha_desde + '&fecha_hasta=' + filtros.fecha_hasta + '&buscar=' + this.value">
+                <input type="text" name="buscar" value="{{ $filtros['buscar'] }}" placeholder="Buscar en concepto..." class="input">
             </div>
+
+            <button type="submit" class="btn btn-primary">Filtrar</button>
+            <a href="{{ url('/contabilidad/mayor') }}" class="btn btn-secondary">Limpiar</a>
         </form>
     </div>
 
@@ -211,6 +214,7 @@
                             </tbody>
                         </table>
                     </div>
+                </div>
                 @else
                     <div class="bg-gray-50 border border-gray-200 rounded-xl p-8 text-center">
                         <svg class="w-16 h-16 mx-auto text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 001.414 0l4.414 4.414a1 1 0 001.414 0l3.536-3.536a1 1 0 000-1.414z"></path></svg>

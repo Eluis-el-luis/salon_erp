@@ -53,3 +53,6 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Alpine.js: evita el "flash" de modales antes de que x-show los oculte */
+[x-cloak] { display: none !important; }

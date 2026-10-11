@@ -110,6 +110,7 @@ Route::middleware(['auth'])->group(function () {
 
         Route::get('/mesa-cambio', [MesaCambioController::class, 'index']);
         Route::post('/mesa-cambio/operar', [MesaCambioController::class, 'store']);
+        Route::post('/mesa-cambio/tasa-oficial', [MesaCambioController::class, 'registrarTasaOficial'])->name('mesa.tasa.oficial');
     });
 
 
@@ -194,6 +195,12 @@ Route::middleware(['auth'])->group(function () {
 
         Route::get('/bancos', [BancoController::class, 'index']);
         Route::post('/bancos/depositar', [BancoController::class, 'depositar']);
+        Route::post('/bancos/transferir', [BancoController::class, 'transferir']);
+        Route::post('/bancos/cargo', [BancoController::class, 'registrarCargo'])->name('bancos.cargo');
+        Route::post('/bancos/abono', [BancoController::class, 'registrarAbono'])->name('bancos.abono');
+        Route::get('/bancos/{cuenta_bancaria}/libro', [BancoController::class, 'libro'])->name('bancos.libro');
+        Route::get('/bancos/{cuenta_bancaria}/conciliacion', [BancoController::class, 'conciliacion'])->name('bancos.conciliacion');
+        Route::post('/bancos/{cuenta_bancaria}/conciliacion', [BancoController::class, 'guardarConciliacion'])->name('bancos.conciliar');
 
         Route::get('/retiros', [RetiroController::class, 'index']);
         Route::post('/retiros', [RetiroController::class, 'depositar']);

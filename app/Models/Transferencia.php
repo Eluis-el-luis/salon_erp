@@ -7,22 +7,31 @@ use Illuminate\Database\Eloquent\Model;
 class Transferencia extends Model
 {
     protected $table = 'transferencias';
+
     protected $fillable = [
-        'origen_tipo', 'origen_id', 
-        'destino_tipo', 'destino_id', 
-        'monto', 'fecha', 'usuario_id', 'estado'
+        'origen_tipo', 'origen_id',
+        'destino_tipo', 'destino_id',
+        'monto', 'moneda_id', 'concepto', 'referencia_bancaria', 'comision',
+        'fecha', 'usuario_id', 'estado',
     ];
 
-    // Relación Polimórfica: Permite mover dinero desde Caja o Banco usando la misma tabla[cite: 3]
+    protected $casts = ['monto' => 'float', 'comision' => 'float'];
+
+    // Relación polimórfica con columnas explícitas: la tabla usa
+    // origen_tipo/origen_id y destino_tipo/destino_id (no los *_type por defecto).
     public function origen()
     {
-        return $this->morphTo();
+        return $this->morphTo(__FUNCTION__, 'origen_tipo', 'origen_id');
     }
 
-    // Relación Polimórfica: Permite enviar dinero a Caja o Banco[cite: 3]
     public function destino()
     {
-        return $this->morphTo();
+        return $this->morphTo(__FUNCTION__, 'destino_tipo', 'destino_id');
+    }
+
+    public function moneda()
+    {
+        return $this->belongsTo(Moneda::class, 'moneda_id');
     }
 
     public function usuario()

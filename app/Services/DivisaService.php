@@ -29,7 +29,7 @@ class DivisaService
             ->lockForUpdate()
             ->first();
 
-        if (!$saldo) {
+        if (! $saldo) {
             $saldo = SaldoMoneda::create([
                 'moneda_id' => $monedaId,
                 'ubicacion_tipo' => $ubicacionTipo,
@@ -61,13 +61,20 @@ class DivisaService
     {
         $monedaId = Moneda::idPorCodigo($codigoMoneda);
 
+        // Candado de concurrencia: evita vender los mismos billetes dos veces
+        // cuando dos cajeros operan la mesa al mismo tiempo.
         $saldo = SaldoMoneda::where('moneda_id', $monedaId)
             ->where('ubicacion_tipo', $ubicacionTipo)
             ->where('ubicacion_id', $ubicacionId)
+            ->lockForUpdate()
             ->first();
 
-        if (!$saldo || $saldo->saldo_actual < $montoMoneda) {
-            throw new \Exception('No hay suficientes divisas físicas para realizar la operación.');
+        if (! $saldo || $saldo->saldo_actual < $montoMoneda) {
+            $disponible = $saldo ? (float) $saldo->saldo_actual : 0;
+            throw new \Exception(
+                'No hay suficientes divisas físicas para realizar la operación. '.
+                'Disponible: $'.number_format($disponible, 2).' — Solicitado: $'.number_format($montoMoneda, 2).'.'
+            );
         }
 
         $diferencial = round(($tasaVenta - $saldo->costo_promedio_ponderado) * $montoMoneda, 2);
@@ -91,5 +98,29 @@ class DivisaService
             'saldo' => $saldo->saldo_actual ?? 0,
             'costo_promedio' => $saldo->costo_promedio_ponderado ?? 0,
         ];
+    }
+
+    /**
+     * Bóvedas con saldo de una divisa (para el dashboard de Mesa de Cambio):
+     * devuelve el saldo y costo promedio agrupado por ubicación polimórfica.
+     */
+    public function saldosPorUbicacion(string $codigoMoneda): array
+    {
+        $monedaId = Moneda::idPorCodigo($codigoMoneda);
+
+        return SaldoMoneda::where('moneda_id', $monedaId)
+            ->where('saldo_actual', '>', 0)
+            ->orderBy('ubicacion_tipo')
+            ->get()
+            ->map(fn (SaldoMoneda $s) => [
+                'saldo_moneda_id' => $s->id,
+                'ubicacion_tipo' => $s->ubicacion_tipo,
+                'ubicacion_id' => $s->ubicacion_id,
+                'saldo' => (float) $s->saldo_actual,
+                'costo_promedio' => (float) $s->costo_promedio_ponderado,
+                'valor_libro_nio' => round((float) $s->saldo_actual * (float) $s->costo_promedio_ponderado, 2),
+                'ubicacion' => $s->ubicacion, // resuelto vía morphTo
+            ])
+            ->all();
     }
 }

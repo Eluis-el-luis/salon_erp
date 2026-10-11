@@ -107,6 +107,15 @@ class ContabilidadService
     }
 
     /**
+     * Resuelve el ID de una cuenta contable por su código (versión pública
+     * para servicios de dominio: FondosService, etc.). Usa la misma caché.
+     */
+    public function cuentaIdPorCodigo(string $codigo): int
+    {
+        return $this->getCuentaIdByCodigo($codigo);
+    }
+
+    /**
      * Obtiene el ID de una cuenta contable mediante su código, utilizando caché local.
      */
     protected function getCuentaIdByCodigo(string $codigo): int
@@ -913,48 +922,192 @@ public function contabilizarGasto($descripcion, $monto, $cuentaGastoId, $metodoP
         }
     }
 
-    public function contabilizarTransferencia($transferencia)
+    /**
+     * TRANSFERENCIAS CORPORATIVAS entre bóvedas de fondos:
+     *  - Caja -> Banco (depósito), Banco -> Caja (retiro de fondos) y Banco -> Banco.
+     *  - Soporta moneda extranjera: la subcuenta contable se resuelve desde la
+     *    CuentaBancaria real (cuenta_contable_id), no por el nombre del banco.
+     *  - La comisión bancaria va al gasto 6.9 "Comisiones y Cargos Bancarios"
+     *    contra la cuenta bancaria que la cobra (origen si es banco, si no destino).
+     *
+     * @return int ID del asiento generado (para vincularlo al movimiento).
+     */
+    public function contabilizarTransferencia($transferencia, ?float $tasaValoracionUsd = null): int
     {
-        $periodo = $this->resolverPeriodo(now());
+        $periodo = $this->resolverPeriodo($transferencia->fecha ?? now());
+
+        $fondos = app(FondosService::class);
+        $origen = $transferencia->origen;
+        $destino = $transferencia->destino;
+
+        if (!$origen || !$destino) {
+            throw new Exception('Transferencia incompleta: no se pudo resolver el origen o el destino de los fondos.');
+        }
 
         $monedaBase = $this->getMonedaBaseId();
-        $cuentaCaja = $this->getCuentaIdByCodigo('1.1.1');
-        // MANDAMIENTO CATÁLOGO ADAPTADO: subcuenta específica del banco de destino (BAC/LAFISE)
-        $cuentaBanco = $this->getCuentaBancoDestino($transferencia);
+        $esUsd = $transferencia->moneda_id && (int) $transferencia->moneda_id !== (int) $monedaBase;
 
+        if ($esUsd && is_null($tasaValoracionUsd)) {
+            throw new Exception('Se requiere la tasa de valoración (costo promedio) para transferencias en dólares.');
+        }
+
+        // El registro guarda el monto en la moneda de la cuenta; el asiento
+        // contable siempre se expresa en moneda base (NIO).
         $monto = round((float) $transferencia->monto, 2);
+        $comision = round((float) ($transferencia->comision ?? 0), 2);
+        $montoContable = $esUsd ? round($monto * $tasaValoracionUsd, 2) : $monto;
+        $comisionContable = $esUsd ? round($comision * $tasaValoracionUsd, 2) : $comision;
+
+        $cuentaOrigen = $origen instanceof \App\Models\CuentaBancaria
+            ? $fondos->cuentaContableDeBanco($origen)
+            : $this->getCuentaIdByCodigo($esUsd ? '1.1.1.2' : '1.1.1');
+
+        $cuentaDestino = $destino instanceof \App\Models\CuentaBancaria
+            ? $fondos->cuentaContableDeBanco($destino)
+            : $this->getCuentaIdByCodigo($esUsd ? '1.1.1.2' : '1.1.1');
+
+        if ($cuentaOrigen === $cuentaDestino) {
+            throw new Exception('Transferencia inválida: el origen y el destino apuntan a la misma subcuenta contable.');
+        }
+
+        $etiquetaMoneda = $esUsd ? 'USD' : 'NIO';
+        $nombreOrigen = $origen instanceof \App\Models\CuentaBancaria
+            ? $origen->etiqueta()
+            : 'Caja (Turno #' . $origen->id . ')';
+        $nombreDestino = $destino instanceof \App\Models\CuentaBancaria
+            ? $destino->etiqueta()
+            : 'Caja (Turno #' . $destino->id . ')';
 
         DB::beginTransaction();
         try {
             $asiento = AsientoContable::create([
-            'numero_asiento' => 'DEP-' . str_pad($transferencia->id, 5, '0', STR_PAD_LEFT),
-            'fecha' => \Carbon\Carbon::now(),
-            'concepto' => 'Depósito / Transferencia de Caja a Banco (Ref #' . $transferencia->id . ')',
-            'modulo_origen' => 'transferencias',
-            'referencia_id' => $transferencia->id,
-            'periodo_id' => $periodo->id,
-            'usuario_id' => auth()->id() ?? 1,
-        ]);
+                'numero_asiento' => 'DEP-' . str_pad($transferencia->id, 5, '0', STR_PAD_LEFT),
+                'fecha' => $transferencia->fecha ?? Carbon::now(),
+                'concepto' => 'Transferencia de fondos ' . ($transferencia->concepto ? $transferencia->concepto . ': ' : '')
+                    . $nombreOrigen . ' → ' . $nombreDestino . ' (' . $etiquetaMoneda . ' ' . number_format($monto, 2) . ')',
+                'modulo_origen' => 'transferencias',
+                'referencia_id' => $transferencia->id,
+                'periodo_id' => $periodo->id,
+                'usuario_id' => auth()->id() ?? 1,
+            ]);
 
-        // DEBE: Entra el dinero al Banco (Aumenta Activo)
-        DetalleAsiento::create([
-            'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaBanco,
-            'moneda_id' => $monedaBase, 'debe' => $monto, 'haber' => 0,
-            'descripcion' => 'Ingreso de fondos por depósito de caja'
-        ]);
+            // DEBE: Entra el dinero al destino (Aumenta Activo)
+            DetalleAsiento::create([
+                'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaDestino,
+                'moneda_id' => $monedaBase, 'debe' => $montoContable, 'haber' => 0,
+                'descripcion' => 'Ingreso de fondos en ' . $nombreDestino,
+            ]);
 
-        // HABER: Sale el dinero de la Caja (Disminuye Activo)
-        DetalleAsiento::create([
-            'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaCaja,
-            'moneda_id' => $monedaBase, 'debe' => 0, 'haber' => $monto,
-            'descripcion' => 'Salida de efectivo hacia el banco'
-        ]);
-        $this->validarCuadre($asiento->id);
+            // HABER: Sale el dinero del origen (Disminuye Activo)
+            DetalleAsiento::create([
+                'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaOrigen,
+                'moneda_id' => $monedaBase, 'debe' => 0, 'haber' => $montoContable,
+                'descripcion' => 'Salida de fondos de ' . $nombreOrigen,
+            ]);
+
+            // COMISIÓN BANCARIA: gasto real del banco (6.9) cargado a la cuenta
+            // bancaria afectada (origen si es banco; de lo contrario, destino).
+            if ($comisionContable > 0) {
+                $cuentaBancoComision = $origen instanceof \App\Models\CuentaBancaria
+                    ? $cuentaOrigen
+                    : ($destino instanceof \App\Models\CuentaBancaria ? $cuentaDestino : null);
+
+                if (is_null($cuentaBancoComision)) {
+                    throw new Exception('La comisión bancaria exige que el origen o el destino sea una cuenta bancaria.');
+                }
+
+                DetalleAsiento::create([
+                    'asiento_id' => $asiento->id,
+                    'cuenta_id' => $this->getCuentaIdByCodigo('6.9'),
+                    'moneda_id' => $monedaBase, 'debe' => $comisionContable, 'haber' => 0,
+                    'descripcion' => 'Comisión bancaria por transferencia #' . $transferencia->id,
+                ]);
+
+                DetalleAsiento::create([
+                    'asiento_id' => $asiento->id,
+                    'cuenta_id' => $cuentaBancoComision,
+                    'moneda_id' => $monedaBase, 'debe' => 0, 'haber' => $comisionContable,
+                    'descripcion' => 'Cobro de comisión bancaria (a cuenta de fondos)',
+                ]);
+            }
+
+            $this->validarCuadre($asiento->id);
             DB::commit();
         } catch (Exception $e) {
             DB::rollBack();
             throw $e;
         }
+
+        return $asiento->id;
+    }
+
+    /**
+     * CARGOS/ABONOS BANCARIOS DIRECTOS (mantenimiento de cuenta, cheques
+     * devueltos, intereses ganados, impuestos a remesas, etc.):
+     *  - cargo  -> DEBE cuenta de gasto (default 6.9) | HABER Banco
+     *  - abono  -> DEBE Banco | HABER cuenta de ingreso (default 4.7)
+     *
+     * @return int ID del asiento generado.
+     */
+    public function contabilizarMovimientoBancario($movimiento, int $cuentaContrapartidaId): int
+    {
+        $periodo = $this->resolverPeriodo($movimiento->fecha ?? now());
+        $monedaBase = $this->getMonedaBaseId();
+
+        $cuentaBancaria = $movimiento->cuentaBancaria()->with('banco')->first();
+        if (!$cuentaBancaria) {
+            throw new Exception('El movimiento bancario no tiene una cuenta bancaria válida.');
+        }
+
+        $fondos = app(FondosService::class);
+        $cuentaBanco = $fondos->cuentaContableDeBanco($cuentaBancaria);
+        $monto = round((float) $movimiento->monto, 2);
+
+        DB::beginTransaction();
+        try {
+            $asiento = AsientoContable::create([
+                'numero_asiento' => 'CBA-' . str_pad($movimiento->id, 5, '0', STR_PAD_LEFT),
+                'fecha' => $movimiento->fecha ?? Carbon::now(),
+                'concepto' => ($movimiento->tipo === 'cargo' ? 'Cargo' : 'Abono') . ' bancario: ' . $movimiento->concepto
+                    . ' (' . $cuentaBancaria->etiqueta() . ')',
+                'modulo_origen' => 'cargos_bancarios',
+                'referencia_id' => $movimiento->id,
+                'periodo_id' => $periodo->id,
+                'usuario_id' => auth()->id() ?? 1,
+            ]);
+
+            if ($movimiento->tipo === 'cargo') {
+                DetalleAsiento::create([
+                    'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaContrapartidaId,
+                    'moneda_id' => $monedaBase, 'debe' => $monto, 'haber' => 0,
+                    'descripcion' => 'Cargo bancario: ' . $movimiento->concepto,
+                ]);
+                DetalleAsiento::create([
+                    'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaBanco,
+                    'moneda_id' => $monedaBase, 'debe' => 0, 'haber' => $monto,
+                    'descripcion' => 'Débito del banco ' . ($cuentaBancaria->banco->nombre ?? ''),
+                ]);
+            } else {
+                DetalleAsiento::create([
+                    'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaBanco,
+                    'moneda_id' => $monedaBase, 'debe' => $monto, 'haber' => 0,
+                    'descripcion' => 'Crédito del banco ' . ($cuentaBancaria->banco->nombre ?? ''),
+                ]);
+                DetalleAsiento::create([
+                    'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaContrapartidaId,
+                    'moneda_id' => $monedaBase, 'debe' => 0, 'haber' => $monto,
+                    'descripcion' => 'Abono bancario: ' . $movimiento->concepto,
+                ]);
+            }
+
+            $this->validarCuadre($asiento->id);
+            DB::commit();
+        } catch (Exception $e) {
+            DB::rollBack();
+            throw $e;
+        }
+
+        return $asiento->id;
     }
 
     
@@ -1247,69 +1400,127 @@ public function contabilizarGasto($descripcion, $monto, $cuentaGastoId, $metodoP
         }
     }
 
-    public function contabilizarOperacionCambio($operacion, $diferencial = 0)
+    /**
+     * OPERACIÓN DE MESA DE CAMBIO con trazabilidad de bóvedas.
+     *
+     * Partida doble estricta (CORRECCIÓN AUDITORÍA: la versión anterior cargaba
+     * el HABER de USD a la tasa de venta y sumaba el diferencial como línea
+     * extra, descuadrando el asiento exactamente por el diferencial):
+     *
+     *  COMPRA de USD (entra USD, sale NIO):
+     *    DEBE  cuenta USD de la bóveda de recepción  = USD × tasa negociada
+     *    HABER cuenta NIO de la bóveda de entrega    = USD × tasa negociada
+     *    (el costo promedio ponderado se recalcula en DivisaService)
+     *
+     *  VENTA de USD (sale USD, entra NIO):
+     *    DEBE  cuenta NIO de la bóveda de recepción  = USD × tasa negociada
+     *    HABER cuenta USD de la bóveda de entrega    = USD × costo promedio (valor libro)
+     *    HABER 4.6 Ganancia cambiaria | DEBE 7.5 Pérdida cambiaria = diferencial
+     *
+     * contexto: [
+     *   'ubicacion_entrega'  => modelo que entrega la moneda origen (obligatorio),
+     *   'ubicacion_recepcion'=> modelo que recibe la moneda destino (obligatorio),
+     *   'tasa_costo_usd'     => costo promedio del USD en la bóveda que entrega USD (venta),
+     * ]
+     *
+     * @return int ID del asiento generado.
+     */
+    public function contabilizarOperacionCambio($operacion, array $contexto = []): int
     {
         $periodo = $this->resolverPeriodo($operacion->fecha);
+        $monedaBase = $this->getMonedaBaseId();
+        $fondos = app(FondosService::class);
 
-        // CORRECCIÓN B9: cuentas de caja por divisa (subcuentas específicas del catálogo).
-        // Caja NIO (Córdobas): 1.1.1.1 — Caja USD: 1.1.1.2 (subcuenta de Caja).
-        $cuentaCajaNio = $this->getCuentaIdByCodigo('1.1.1.1');
-        $cuentaCajaUsd = $this->getCuentaIdByCodigo('1.1.1.2');
+        $entrega = $contexto['ubicacion_entrega'] ?? $operacion->origenPago;
+        $recepcion = $contexto['ubicacion_recepcion'] ?? $operacion->destinoPago;
 
-        $monedaBase = \Illuminate\Support\Facades\DB::table('monedas')->where('es_base', true)->first()->id;
+        if (!$entrega || !$recepcion) {
+            throw new Exception('Operación de cambio incompleta: falta la bóveda de entrega o de recepción de fondos.');
+        }
+
+        $esCompra = $operacion->tipo === 'compra';
+
+        // La cuenta contable depende de la moneda que sale/entra en cada bóveda.
+        $cuentaMonedaEntregada = $esCompra
+            ? $fondos->cuentaContableNio($entrega)      // compra: entregamos córdobas
+            : $fondos->cuentaContableUsd($entrega);     // venta: entregamos dólares
+
+        $cuentaMonedaRecibida = $esCompra
+            ? $fondos->cuentaContableUsd($recepcion)    // compra: recibimos dólares
+            : $fondos->cuentaContableNio($recepcion);   // venta: recibimos córdobas
+
+        if ($cuentaMonedaEntregada === $cuentaMonedaRecibida) {
+            throw new Exception('Operación de cambio inválida: la bóveda de entrega y la de recepción caen en la misma subcuenta contable.');
+        }
+
+        $montoUsd = $esCompra ? (float) $operacion->monto_origen : (float) $operacion->monto_destino;
+        $valorNioNegociado = $esCompra ? (float) $operacion->monto_destino : (float) $operacion->monto_origen;
+
+        $etiquetaEntrega = $entrega instanceof \App\Models\CuentaBancaria ? $entrega->etiqueta() : 'Caja (Turno #' . $entrega->id . ')';
+        $etiquetaRecepcion = $recepcion instanceof \App\Models\CuentaBancaria ? $recepcion->etiqueta() : 'Caja (Turno #' . $recepcion->id . ')';
 
         DB::beginTransaction();
         try {
-            $asiento = \App\Models\AsientoContable::create([
-                'numero_asiento' => 'CAM-' . time(),
-                'fecha' => \Carbon\Carbon::parse($operacion->fecha),
-                'concepto' => 'Operación de Mesa de Cambio: ' . ucfirst($operacion->tipo) . ' de divisas',
+            $asiento = AsientoContable::create([
+                'numero_asiento' => 'CAM-' . str_pad($operacion->id, 5, '0', STR_PAD_LEFT),
+                'fecha' => Carbon::parse($operacion->fecha),
+                'concepto' => 'Mesa de Cambio: ' . ($esCompra ? 'compra' : 'venta') . ' de USD ' . number_format($montoUsd, 2)
+                    . ' a C$ ' . rtrim(rtrim(number_format((float) $operacion->tasa_aplicada, 4, '.', ''), '0'), '.')
+                    . ' (' . $etiquetaEntrega . ' → ' . $etiquetaRecepcion . ')',
                 'modulo_origen' => 'mesa_cambio',
                 'referencia_id' => $operacion->id,
                 'periodo_id' => $periodo->id,
                 'usuario_id' => auth()->id() ?? 1,
             ]);
 
-            if ($operacion->tipo == 'compra') {
-                $valorEnCordobas = $operacion->monto_destino;
-
-                \App\Models\DetalleAsiento::create([
-                    'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaCajaUsd, 'moneda_id' => $monedaBase,
-                    'debe' => $valorEnCordobas, 'haber' => 0, 'descripcion' => 'Ingreso de divisas (USD ' . $operacion->monto_origen . ' a tasa ' . $operacion->tasa_aplicada . ')'
+            if ($esCompra) {
+                DetalleAsiento::create([
+                    'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaMonedaRecibida,
+                    'moneda_id' => $monedaBase, 'debe' => $valorNioNegociado, 'haber' => 0,
+                    'descripcion' => 'Ingreso de USD ' . number_format($montoUsd, 2) . ' a ' . $etiquetaRecepcion,
+                ]);
+                DetalleAsiento::create([
+                    'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaMonedaEntregada,
+                    'moneda_id' => $monedaBase, 'debe' => 0, 'haber' => $valorNioNegociado,
+                    'descripcion' => 'Pago en córdobas desde ' . $etiquetaEntrega,
                 ]);
 
-                \App\Models\DetalleAsiento::create([
-                    'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaCajaNio, 'moneda_id' => $monedaBase,
-                    'debe' => 0, 'haber' => $valorEnCordobas, 'descripcion' => 'Salida de efectivo (NIO) por compra de divisas'
-                ]);
+                $diferencial = 0;
             } else {
-                $valorEnCordobas = $operacion->monto_origen;
+                $tasaCostoUsd = isset($contexto['tasa_costo_usd']) ? (float) $contexto['tasa_costo_usd'] : null;
+                if (is_null($tasaCostoUsd) || $tasaCostoUsd <= 0) {
+                    throw new Exception('No se registró el costo promedio del USD: imposible valorar la salida de divisas al precio de libro.');
+                }
 
-                \App\Models\DetalleAsiento::create([
-                    'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaCajaNio, 'moneda_id' => $monedaBase,
-                    'debe' => $valorEnCordobas, 'haber' => 0, 'descripcion' => 'Ingreso de efectivo (NIO) por venta de divisas'
-                ]);
-
-                \App\Models\DetalleAsiento::create([
-                    'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaCajaUsd, 'moneda_id' => $monedaBase,
-                    'debe' => 0, 'haber' => $valorEnCordobas, 'descripcion' => 'Salida de divisas (USD ' . $operacion->monto_destino . ' a tasa ' . $operacion->tasa_aplicada . ')'
-                ]);
-            }
-
-            // ASIENTO ADICIONAL: Diferencial Cambiario (Ganancia o Pérdida al vender USD)
-            if ($diferencial != 0) {
-                $cuentaGananciaPerdida = $diferencial > 0 ? $this->getCuentaIdByCodigo('7.1') : $this->getCuentaIdByCodigo('7.3');
-                $signo = $diferencial > 0 ? 'debe' : 'haber';
-                $montoAbs = abs($diferencial);
+                $valorLibroUsd = round($montoUsd * $tasaCostoUsd, 2);
+                $diferencial = round($valorNioNegociado - $valorLibroUsd, 2);
 
                 DetalleAsiento::create([
-                    'asiento_id' => $asiento->id,
-                    'cuenta_id' => $cuentaGananciaPerdida,
-                    'moneda_id' => $monedaBase,
-                    'debe' => $diferencial > 0 ? $montoAbs : 0,
-                    'haber' => $diferencial > 0 ? 0 : $montoAbs,
-                    'descripcion' => $diferencial > 0 ? 'Diferencial cambiario Ganancia por venta de USD' : 'Diferencial cambiario Pérdida por venta de USD',
+                    'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaMonedaRecibida,
+                    'moneda_id' => $monedaBase, 'debe' => $valorNioNegociado, 'haber' => 0,
+                    'descripcion' => 'Cobro en córdobas a ' . $etiquetaRecepcion . ' (tasa de calle)',
                 ]);
+                DetalleAsiento::create([
+                    'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaMonedaEntregada,
+                    'moneda_id' => $monedaBase, 'debe' => 0, 'haber' => $valorLibroUsd,
+                    'descripcion' => 'Salida de USD ' . number_format($montoUsd, 2) . ' de ' . $etiquetaEntrega . ' (valor libro)',
+                ]);
+
+                if ($diferencial > 0) {
+                    DetalleAsiento::create([
+                        'asiento_id' => $asiento->id,
+                        'cuenta_id' => $this->getCuentaIdByCodigo('4.6'),
+                        'moneda_id' => $monedaBase, 'debe' => 0, 'haber' => $diferencial,
+                        'descripcion' => 'Ganancia por diferencial cambiario (tasa de calle vs. costo promedio)',
+                    ]);
+                } elseif ($diferencial < 0) {
+                    DetalleAsiento::create([
+                        'asiento_id' => $asiento->id,
+                        'cuenta_id' => $this->getCuentaIdByCodigo('7.5'),
+                        'moneda_id' => $monedaBase, 'debe' => abs($diferencial), 'haber' => 0,
+                        'descripcion' => 'Pérdida por diferencial cambiario (tasa de calle vs. costo promedio)',
+                    ]);
+                }
             }
 
             $this->validarCuadre($asiento->id);
@@ -1318,5 +1529,7 @@ public function contabilizarGasto($descripcion, $monto, $cuentaGastoId, $metodoP
             DB::rollBack();
             throw $e;
         }
+
+        return $asiento->id;
     }
 }

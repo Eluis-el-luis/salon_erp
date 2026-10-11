@@ -22,6 +22,7 @@ La aplicación usa MVC de Laravel con servicios para reglas financieras y de inv
 - `app/Models/`: modelos Eloquent y relaciones del dominio.
 - `app/Services/ContabilidadService.php`: asientos, integración financiera, períodos y cuadre.
 - `app/Services/DivisaService.php`: saldos físicos de moneda y costo promedio ponderado.
+- `app/Services/FondosService.php`: bóvedas de fondos (cajas de turno y cuentas bancarias), disponibilidad de efectivo por turno y resolución de la subcuenta contable de cada ubicación.
 - `app/Services/InventarioService.php`: consumo de productos, insumos fraccionados y lotes FIFO.
 - `app/Exceptions/ContabilidadException.php`: error de dominio contable.
 - `database/migrations/`: esquema e historial de cambios; revisar migraciones existentes antes de crear otra.
@@ -45,8 +46,9 @@ Los nombres de tablas y algunos campos conservan nombres heredados en inglés (`
 | Empleados, comisiones y nómina | `EmpleadoController`, `Usuario`, `EsquemaComision`, `EsquemaRango`, `ComisionGenerada`, `NominaController`, `Nomina`, `AsistenciaController` | Personal, asistencia, comisión histórica, deducciones, cuotas y nómina. |
 | Adelantos / CxC | `AdelantoController`, `Adelanto`, `AdelantoCuota` | Saldos de empleados/clientes, cuotas y reversión de movimientos. |
 | Proveedores / CxP | `ProveedorController`, `CuentaPorPagarController`, `CuentaPorPagar`, `PagoProveedor` | Proveedores, obligaciones y abonos. |
-| Bancos y retiros | `BancoController`, `CuentaBancaria`, `MovimientoBancario`, `Transferencia`, `RetiroController`, `RetiroPropietario` | Saldos/movimientos bancarios, transferencias y retiros patrimoniales. |
-| Mesa de cambio | `MesaCambioController`, `Moneda`, `SaldoMoneda`, `OperacionCambio`, `DiferencialCambiario`, `CierreMesaCambio`, `DivisaService` | Operaciones NIO/USD, existencias por ubicación, costo promedio y diferencial cambiario. |
+| Bancos | `BancoController`, `CuentaBancaria`, `MovimientoBancario`, `Transferencia`, `ConciliacionBancaria`, `FondosService` | Dashboard multimoneda (NIO/USD), libro mayor con saldo corriendo, depósitos, transferencias entre bóvedas con comisión (gasto 6.9), cargos/abonos bancarios con asiento (`CBA-*`) y conciliación contra extracto (sólo cierra con diferencia 0). Cada cuenta bancaria apunta a su subcuenta del mayor vía `cuenta_contable_id`. |
+| Retiros | `RetiroController`, `RetiroPropietario` | Retiros patrimoniales (movimiento contra patrimonio `3.3`, nunca gasto operativo). |
+| Mesa de cambio | `MesaCambioController`, `Moneda`, `SaldoMoneda`, `OperacionCambio`, `DiferencialCambiario`, `TipoCambio`, `DivisaService`, `FondosService` | Operaciones NIO/USD con trazabilidad de bóvedas (origen que entrega vs. destino que recibe), costo promedio ponderado, tasa oficial BCN (`tipos_cambio`) vs. tasa de calle y diferencial contable al instante (`4.6` ganancia / `7.5` pérdida). |
 | Contabilidad | `ContabilidadService`, `ContabilidadController`, `CuentaContableController`, `AsientoManualController`, `PeriodoContableController` | Libro diario/mayor, estados, catálogo, centros de costo, reversión y cierre fiscal. |
 | Reportes y respaldos | `ReporteController`, `RespaldoController` | Reportes/exportaciones y respaldo/restauración SQL. Verificar impacto antes de restaurar datos. |
 | Portal de colaborador | `PortalColaboradorController`, `PortalColaboradorConfig`, `PortalColaboradorToken` | Consulta de comisiones, nóminas, cuotas y perfil con token de sesión propio. Consultar también la limitación de rutas en §6. |
@@ -83,6 +85,8 @@ Los nombres de tablas y algunos campos conservan nombres heredados en inglés (`
 - `DivisaService::ingresarDivisas()` recalcula costo promedio ponderado y redondea a seis decimales; `egresarDivisas()` valida saldo y calcula diferencial con la tasa de venta y el costo promedio. Ambos bloquean la fila de saldo con `lockForUpdate()` y deben ejecutarse dentro de una transacción.
 - `saldos_moneda.costo_promedio_ponderado` está definido como `decimal(15,6)`; los saldos monetarios son `decimal(15,2)`. No degradar esa precisión.
 - Mantener saldo segregado por moneda y ubicación (polimórfica); no mezclar efectivo físico, caja y banco.
+- BÓVEDAS DE FONDOS (octubre 2026): toda operación entre posiciones de efectivo declara bóveda de origen (moneda que entrega) y bóveda de destino (moneda que recibe) a través de `FondosService` (`App\Models\SesionCaja` y `App\Models\CuentaBancaria`). El efectivo NIO disponible de un turno se calcula como apertura + cobros netos − salidas ya registradas (depósitos, transferencias y compras de divisas); no fiarse del saldo teórico crudo del arqueo.
+- ASIENTO DE CAMBIO CORREGIDO (octubre 2026): en la venta de USD, la salida de divisas se valora a COSTO PROMEDIO (valor libro) y el diferencial va a la cuenta contraria del mismo asiento: `4.6` Ganancia (haber) o `7.5` Pérdida (debe). La versión anterior cargaba el haber de USD a la tasa de venta y sumaba el diferencial como línea extra, descuadrando el asiento exactamente por el diferencial. No revertir a ese patrón.
 - Pagos mixtos (tabla `pagos`): los importes (`subtotal`, `discount`, `total`, `valor_nio`) están SIEMPRE en moneda base NIO. `ContabilidadService::contabilizarVenta()` no debe re-normalizarlos con la tasa de un pago en USD cuando existen líneas de pago; la conversión ya ocurrió por línea en `valor_nio` al registrar el pago.
 - El vuelto al cliente es una línea `tipo = 'vuelto'` en `pagos`: NIO acredita caja `1.1.1`; USD acredita caja USD `1.1.1.2` a su valor operativo (`valor_nio`) y descuenta dólares físicos vía `DivisaService::egresarDivisas()` (rechaza con rollback si no hay saldo). El reconocimiento del diferencial cambiario por valor libro sigue siendo dominio de la mesa de cambio.
 - Antes de cambiar el tratamiento de una venta cobrada en USD, seguir conjuntamente `VentaController`, `DivisaService` y `ContabilidadService`.
@@ -100,6 +104,15 @@ Los nombres de tablas y algunos campos conservan nombres heredados en inglés (`
 - La nómina debe consumir los montos congelados de comisión, no recalcular ventas históricas usando el porcentaje actual del empleado.
 - Cambios en venta, esquema o nómina deben considerar el estado de pago de la comisión, adelantos/cuotas y deducciones (incluidos INSS e impuesto sobre la renta).
 
+### 5.7 Bancos corporativos: cargos, transferencias y conciliación (octubre 2026)
+
+- Cuentas bancarias MULTIMONEDA: `cuentas_bancarias` admite una cuenta NIO y una USD por banco; cada cuenta apunta a su subcuenta del mayor vía `cuenta_contable_id` (BAC NIO `1.1.2.2`, LAFISE NIO `1.1.2.1`, BAC USD `1.1.2.3`, LAFISE USD `1.1.2.4`). Al crear cuentas nuevas, resolver la subcuenta contra el catálogo; si no existe, añadirla al seeder complementario, no hardcodearla en controladores.
+- `MovimientoBancario` lleva `moneda_id`, `referencia_banco`, `asiento_contable_id` y estado de conciliación (`pendiente`, `en_transito`, `conciliado` con `fecha_conciliacion` y `conciliacion_id`). El monto vive en la moneda de la cuenta; el asiento siempre en NIO (las transferencias USD exigen `tasaValoracionUsd`, normalmente el costo promedio de la caja).
+- COMISIÓN BANCARIA: toda comisión de transferencia va al gasto `6.9` "Comisiones y Cargos Bancarios" contra la cuenta bancaria que la cobra, dentro del mismo asiento `DEP-*` de la transferencia, y genera además un movimiento tipo `cargo`.
+- Cargos/abonos bancarios directos (`/bancos/cargo`, `/bancos/abono`) crean movimiento + asiento `CBA-*`: cargo → DEBE cuenta de gasto/costo (default `6.9`); abono → HABER cuenta de ingreso (default `4.7` Intereses y Rendimientos). Validar el tipo de la cuenta contrapartida en el controlador, no confiar sólo en el formulario.
+- CONCILIACIÓN BANCARIA: `ConciliacionBancaria` fotografía el arqueo contra el extracto. El teórico del extracto = saldo inicial conciliado (último extracto cerrado) + movimientos marcados. La conciliación SOLO se guarda cerrada con diferencia C$ 0.00: las diferencias se corrigen registrando el cargo/abono faltante, y lo pendiente con fecha vencida pasa a `en_transito` (cheques no presentados). Nunca auto-contabilizar la diferencia de una conciliación.
+- No borrar movimientos bancarios: se anulan o corrigen con movimiento y asiento de reversión, igual que el resto del libro.
+
 ## 6. Autenticación, autorización y rutas actuales
 
 - Las rutas web administrativas están dentro de `auth`, salvo el bloque inicial de login/logout. Las rutas base incluyen panel, agenda, asistencia y clientes.
@@ -109,13 +122,15 @@ Los nombres de tablas y algunos campos conservan nombres heredados en inglés (`
 - `routes/api.php` declara `apiResource` para `clients`, `items` y `appointments`. No asumir autenticación/autorización de esos endpoints sin verificar middleware y configuración efectiva.
 - Hay una discrepancia importante en el portal: `/portal/login` y el resto del grupo `portal` están anidados dentro del grupo web `auth`, aunque el controlador además valida un token de portal propio guardado en sesión. No describir el login del colaborador como independiente del login administrativo hasta corregir y probar esa configuración.
 - Antes de alterar rutas, verificar nombres, verbos, middleware y precedencia. Las definiciones históricamente duplicadas del catálogo contable y de la consulta de un período ya fueron consolidadas (octubre 2026); quedan closures con lógica de agenda/POS.
+- Rutas bancarias (octubre 2026, grupo `role:admin`): `GET /bancos`, `POST /bancos/depositar`, `POST /bancos/transferir`, `POST /bancos/cargo`, `POST /bancos/abono`, `GET /bancos/{cuenta_bancaria}/libro`, `GET|POST /bancos/{cuenta_bancaria}/conciliacion` (nombres `bancos.*`). El binding del parámetro debe llamarse `cuenta_bancaria` para que Laravel resuelva `CuentaBancaria`.
+- Mesa de cambio (grupo `role:recepcion,contador`): `GET /mesa-cambio`, `POST /mesa-cambio/operar` y `POST /mesa-cambio/tasa-oficial` (nombre `mesa.tasa.oficial`). Cobertura de pruebas: `tests/Feature/BancosMesaCambioTest.php` (17 pruebas de cuadre, rollback, comisiones y conciliación).
 
 ## 7. Datos, migraciones y documentación
 
 - Las migraciones son la fuente de verdad del esquema versionado. Revisar tablas/constraints/índices actuales y migraciones cercanas antes de modificar modelos o generar migraciones nuevas.
 - No editar migraciones que ya se hayan ejecutado en entornos compartidos; agregar migración correctiva reversible, salvo que el usuario confirme que el cambio es sólo local y no desplegado.
 - Hay migraciones de compatibilidad que verifican existencia de columnas/tablas. Preservar idempotencia cuando sea parte del propósito de esa migración.
-- Revisar seeders antes de cambiar catálogo contable, monedas, roles o datos iniciales. `ContabilidadBaseSeeder` es parte relevante de la configuración del motor contable.
+- Revisar seeders antes de cambiar catálogo contable, monedas, roles o datos iniciales. `ContabilidadBaseSeeder` es parte relevante de la configuración del motor contable. Las subcuentas complementarias del motor (`1.1.1.1`, `1.1.1.2`, `1.1.2.3`, `1.1.2.4`, `4.6`, `4.7`, `6.9`, `7.5`) las inserta `CuentasComplementariasSeeder` (idempotente, invocado también por la migración corporativa y por los tests, porque el catálogo base se siembra después de migrar en instalaciones nuevas).
 - `README.md` describe instalación general, pero referencia `PROJECT_CONTEXT.md` y `DOCUMENTACION_TECNICA.md`, que no figuran en la estructura actual del workspace. Confirmar su existencia antes de enlazarlos o tratarlos como fuentes vigentes.
 - `Como_trabajar.md` aporta mandamientos de negocio adicionales. Mantenerlo consistente con este archivo cuando se modifiquen reglas financieras; si hay contradicción, verificar implementación y pedir precisión antes de relajar una restricción financiera.
 
