@@ -178,25 +178,6 @@ Route::middleware(['auth'])->group(function () {
         Route::get('/contabilidad/balance', [PeriodoContableController::class, 'balanceGeneral'])->name('contabilidad.balance');
         
         // Catálogo de Cuentas
-        Route::get('/catalogo', [CuentaContableController::class, 'index'])->name('catalogo.index');
-        Route::get('/catalogo/tree', [CuentaContableController::class, 'tree'])->name('catalogo.tree');
-        Route::post('/catalogo', [CuentaContableController::class, 'store'])->name('catalogo.store');
-        Route::put('/catalogo/{id}', [CuentaContableController::class, 'update'])->name('catalogo.update');
-        Route::delete('/catalogo/{id}', [CuentaContableController::class, 'destroy'])->name('catalogo.destroy');
-        Route::get('/catalogo/plantilla', [CuentaContableController::class, 'descargarPlantilla'])->name('catalogo.plantilla');
-        Route::post('/catalogo/importar', [CuentaContableController::class, 'importar'])->name('catalogo.importar');
-        Route::get('/catalogo/exportar', [CuentaContableController::class, 'exportar'])->name('catalogo.exportar');
-        
-        Route::get('/cuentas-por-pagar', [CuentaPorPagarController::class, 'index']);
-        Route::post('/cuentas-por-pagar/abonar', [CuentaPorPagarController::class, 'store']);
-        
-        Route::get('/bancos', [BancoController::class, 'index']);
-        Route::post('/bancos/depositar', [BancoController::class, 'depositar']);
-        
-        Route::get('/retiros', [RetiroController::class, 'index']);
-        Route::post('/retiros', [RetiroController::class, 'depositar']);
-        
-        // Catálogo de Cuentas
         Route::prefix('catalogo')->name('catalogo.')->group(function () {
             Route::get('/', [CuentaContableController::class, 'index'])->name('index');
             Route::get('/tree', [CuentaContableController::class, 'tree'])->name('tree');
@@ -207,6 +188,15 @@ Route::middleware(['auth'])->group(function () {
             Route::post('/importar', [CuentaContableController::class, 'importar'])->name('importar');
             Route::get('/exportar', [CuentaContableController::class, 'exportar'])->name('exportar');
         });
+
+        Route::get('/cuentas-por-pagar', [CuentaPorPagarController::class, 'index']);
+        Route::post('/cuentas-por-pagar/abonar', [CuentaPorPagarController::class, 'store']);
+
+        Route::get('/bancos', [BancoController::class, 'index']);
+        Route::post('/bancos/depositar', [BancoController::class, 'depositar']);
+
+        Route::get('/retiros', [RetiroController::class, 'index']);
+        Route::post('/retiros', [RetiroController::class, 'depositar']);
 
         // Asientos Manuales
         Route::prefix('asientos')->name('asientos.')->group(function () {
@@ -224,7 +214,6 @@ Route::middleware(['auth'])->group(function () {
             Route::post('/', [PeriodoContableController::class, 'store'])->name('store');
             Route::get('/{periodo}', [PeriodoContableController::class, 'show'])->name('show');
             Route::post('/{periodo}/cierre', [PeriodoContableController::class, 'cierreFiscal'])->name('cierre');
-            Route::get('/{periodo}', [PeriodoContableController::class, 'show'])->name('show');
         });
     });
 

@@ -150,10 +150,13 @@
                 <div class="p-4 bg-blue-50 border border-blue-200 rounded-lg">
                     <p class="text-sm text-blue-800 mb-2"><strong>Instrucciones:</strong></p>
                     <ul class="text-xs text-blue-700 space-y-1 pl-4 list-disc">
-                        <li>Descarga la plantilla usando el botón "Exportar Excel" en la vista principal</li>
-                        <li>Llena las columnas: codigo, nombre, tipo, naturaleza, codigo_padre, permite_movimiento, activa</li>
+                        <li>Descarga la plantilla con el botón <a href="{{ route('catalogo.plantilla') }}" class="font-semibold underline hover:text-blue-900">Descargar Plantilla</a></li>
+                        <li>Llena la hoja <strong>Plantilla</strong> con las cuentas NUEVAS (la hoja "Ejemplo" no se importa)</li>
+                        <li>El importador solo crea cuentas nuevas: los códigos que ya existen en el catálogo se rechazan</li>
+                        <li>La cuenta padre debe existir en el catálogo o estar declarada en el propio archivo, antes de la fila que la usa</li>
                         <li>Tipos válidos: activo, pasivo, patrimonio, ingreso, gasto, costo</li>
                         <li>Naturaleza: deudora o acreedora</li>
+                        <li>Si algún dato es inválido no se guarda nada: el catálogo queda intacto</li>
                     </ul>
                 </div>
 

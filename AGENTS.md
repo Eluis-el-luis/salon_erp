@@ -108,7 +108,7 @@ Los nombres de tablas y algunos campos conservan nombres heredados en inglés (`
 - La migración de septiembre de 2026 amplía `users.role` con `contador`; el enum y la tabla `roles` deben permanecer sincronizados.
 - `routes/api.php` declara `apiResource` para `clients`, `items` y `appointments`. No asumir autenticación/autorización de esos endpoints sin verificar middleware y configuración efectiva.
 - Hay una discrepancia importante en el portal: `/portal/login` y el resto del grupo `portal` están anidados dentro del grupo web `auth`, aunque el controlador además valida un token de portal propio guardado en sesión. No describir el login del colaborador como independiente del login administrativo hasta corregir y probar esa configuración.
-- Antes de alterar rutas, verificar nombres, verbos, middleware y precedencia. `routes/web.php` contiene definiciones duplicadas para el catálogo contable y para la consulta de un período, además de closures con lógica de agenda/POS.
+- Antes de alterar rutas, verificar nombres, verbos, middleware y precedencia. Las definiciones históricamente duplicadas del catálogo contable y de la consulta de un período ya fueron consolidadas (octubre 2026); quedan closures con lógica de agenda/POS.
 
 ## 7. Datos, migraciones y documentación
 
