@@ -62,6 +62,7 @@
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-right font-medium">
                             <!-- Pasamos el valor calculado a la función editEmployee -->
+                            <a href="/rrhh/colaborador/{{ $empleado->empleado->id ?? 0 }}" class="text-emerald-600 hover:text-emerald-900 font-bold bg-emerald-50 py-1 px-3 rounded transition mr-2" @if(!$empleado->empleado) onclick="return false" title="Sin expediente RRHH" @endif>Perfil</a>
                             <button @click="editEmployee({{ $empleado }}, {{ $comisionServicioReal }})" class="text-blue-600 hover:text-blue-900 font-bold bg-blue-50 py-1 px-3 rounded transition mr-2">Editar</button>
                             @if($empleado->is_active)
                                 <button @click="deactivateEmployee({{ $empleado->id }})" class="text-red-600 hover:text-red-900 font-bold bg-red-50 py-1 px-3 rounded transition">Baja</button>
@@ -139,6 +140,37 @@
                         <label class="block text-xs font-bold text-gray-700 mb-1">Comisión por Productos (%)</label>
                         <input type="number" step="0.01" min="0" max="100" x-model.number="form.comision_producto" class="w-full shadow-sm border-gray-300 rounded-lg py-2 px-3 text-gray-700 focus:ring-emerald-500 focus:border-emerald-500 font-bold">
                     </div>
+
+                    <!-- Expediente RRHH (Employee) -->
+                    <div class="col-span-2 mt-2 border-t pt-5">
+                        <h4 class="text-sm font-black text-emerald-700 mb-4">Expediente RRHH (Contrato)</h4>
+                    </div>
+
+                    <div class="col-span-2 md:col-span-1">
+                        <label class="block text-xs font-bold text-gray-700 mb-1">Tipo de Contrato</label>
+                        <select x-model="form.tipo_contrato" class="w-full shadow-sm border-gray-300 rounded-lg py-2 px-3 text-gray-700 focus:ring-emerald-500 focus:border-emerald-500">
+                            <option value="indefinido">Indefinido</option>
+                            <option value="plazo_fijo">Plazo Fijo</option>
+                            <option value="obra_labor">Obra o Labor</option>
+                            <option value="servicios_profesionales">Servicios Profesionales</option>
+                        </select>
+                    </div>
+                    <div class="col-span-2 md:col-span-1">
+                        <label class="block text-xs font-bold text-gray-700 mb-1">Fecha de Ingreso</label>
+                        <input type="date" x-model="form.fecha_ingreso" class="w-full shadow-sm border-gray-300 rounded-lg py-2 px-3 text-gray-700 focus:ring-emerald-500 focus:border-emerald-500">
+                    </div>
+                    <div class="col-span-2 md:col-span-1">
+                        <label class="block text-xs font-bold text-gray-700 mb-1">Cargo</label>
+                        <input type="text" x-model="form.cargo" maxlength="120" class="w-full shadow-sm border-gray-300 rounded-lg py-2 px-3 text-gray-700" placeholder="Ej. Estilista Senior">
+                    </div>
+                    <div class="col-span-2 md:col-span-1">
+                        <label class="block text-xs font-bold text-gray-700 mb-1">Documento de Identidad</label>
+                        <input type="text" x-model="form.documento_identidad" maxlength="50" class="w-full shadow-sm border-gray-300 rounded-lg py-2 px-3 text-gray-700">
+                    </div>
+                    <div class="col-span-2 md:col-span-1">
+                        <label class="block text-xs font-bold text-gray-700 mb-1">Número INSS (NSS)</label>
+                        <input type="text" x-model="form.nss" maxlength="50" class="w-full shadow-sm border-gray-300 rounded-lg py-2 px-3 text-gray-700">
+                    </div>
                 </form>
                 
                 <div class="mt-6 flex justify-end gap-3 pt-4 border-t">
@@ -159,7 +191,8 @@
             
             form: {
                 name: '', email: '', password: '', phone: '',
-                role: 'estilista', salario_fijo: 0, comision_servicio: 0, comision_producto: 0
+                role: 'estilista', salario_fijo: 0, comision_servicio: 0, comision_producto: 0,
+                tipo_contrato: 'indefinido', fecha_ingreso: '', cargo: '', documento_identidad: '', nss: ''
             },
 
             resetForm() {
@@ -167,7 +200,8 @@
                 this.editId = null;
                 this.form = {
                     name: '', email: '', password: '', phone: '',
-                    role: 'estilista', salario_fijo: 0, comision_servicio: 0, comision_producto: 0
+                    role: 'estilista', salario_fijo: 0, comision_servicio: 0, comision_producto: 0,
+                    tipo_contrato: 'indefinido', fecha_ingreso: '', cargo: '', documento_identidad: '', nss: ''
                 };
             },
 
@@ -188,7 +222,13 @@
                     role: employee.role,
                     salario_fijo: employee.salario_fijo,
                     comision_servicio: comisionReal, // Usamos la que viene del esquema
-                    comision_producto: employee.comision_producto
+                    comision_producto: employee.comision_producto,
+                    // Expediente RRHH
+                    tipo_contrato: employee.empleado?.tipo_contrato || 'indefinido',
+                    fecha_ingreso: employee.empleado?.fecha_ingreso || '',
+                    cargo: employee.empleado?.cargo || '',
+                    documento_identidad: employee.empleado?.documento_identidad || '',
+                    nss: employee.empleado?.nss || ''
                 };
                 this.openModal = true;
             },

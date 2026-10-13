@@ -108,5 +108,11 @@ class Usuario extends Authenticatable
     {
         return $this->hasMany(ComisionGenerada::class, 'empleado_id');
     }
+
+    // HRMS: expediente RRHH del colaborador (Employee separado del User)
+    public function empleado()
+    {
+        return $this->hasOne(Empleado::class, 'user_id');
+    }
 }
 

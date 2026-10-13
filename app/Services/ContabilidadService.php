@@ -1198,6 +1198,264 @@ public function contabilizarGasto($descripcion, $monto, $cuentaGastoId, $metodoP
 
     
 
+    /**
+     * CONTABILIZACIÓN DE COLILLA DE NÓMINA (HRMS, octubre 2026).
+     *
+     * Estructura del asiento NOM-* por colilla:
+     *   DEBE  6.7     Gasto de Sueldos y Salarios (base + extras - sin goce - tardanzas)
+     *   DEBE  5.3     Gasto por Comisiones de Estilistas
+     *   DEBE  2.1.6   Propinas por Pagar (se extingue el pasivo al liquidarlas)
+     *   HABER 1.1.6   Anticipos a Empleados (disminuye el activo/CxC por adelantos)
+     *   HABER 2.1.5   Retenciones por Pagar (INSS/IR retenidos al empleado)
+     *   HABER 1.1.1.3 Propinas en Custodia (sale el dinero custodiado)
+     *   HABER 1.1.1 / 1.1.2.x  Neto pagado desde caja/banco
+     *
+     * Si las deducciones laborales superan el devengado no propinas (ej. adelanto
+     * grande), el remanente se absorbe de las propinas custodiadas (haber custodia
+     * reducido); el asiento SIEMPRE cuadra a centavos exactos.
+     *
+     * @return int ID del asiento generado.
+     */
+    public function contabilizarColillaNomina($colilla, string $metodoPago = 'banco'): int
+    {
+        $periodo = $this->resolverPeriodo(now());
+        $monedaBase = $this->getMonedaBaseId();
+
+        $detalles = $colilla->detalles()->get();
+
+        $sueldosExtras = round($detalles
+            ->where('tipo', 'ingreso')
+            ->whereIn('codigo', ['SAL_BASE', 'HORAS_EXT'])
+            ->sum('monto'), 2);
+
+        $comisiones = round($detalles->where('tipo', 'ingreso')->where('codigo', 'COM_VENT')->sum('monto'), 2);
+        $propinas = round($detalles->where('tipo', 'ingreso')->where('codigo', 'PROPINAS')->sum('monto'), 2);
+
+        $retenciones = round($detalles
+            ->where('tipo', 'deduccion')
+            ->whereIn('codigo', ['INSS', 'IR'])
+            ->sum('monto'), 2);
+
+        $adelantos = round($detalles->where('tipo', 'deduccion')->where('codigo', 'ADELANTOS')->sum('monto'), 2);
+
+        // Las ausencias sin goce y las tardanzas reducen el GASTO real incurrido
+        $ajustesGasto = round($detalles
+            ->where('tipo', 'deduccion')
+            ->whereIn('codigo', ['SIN_GOCE', 'TARDANZAS'])
+            ->sum('monto'), 2);
+
+        $gastoSueldos = round(max(0, $sueldosExtras - $ajustesGasto), 2);
+
+        // Déficit laboral: si las retenciones + adelantos superan el devengado no
+        // propinas, la diferencia se absorbe del dinero custodiado (DEBE caja) y
+        // el colaborador recibe la diferencia desde la bóveda de propinas.
+        $deficitLaboral = round($adelantos + $retenciones - $gastoSueldos - $comisiones, 2);
+
+        // La custodia se libera COMPLETA (el pasivo 2.1.6 se extingue íntegro):
+        // una parte va al colaborador y, si hay déficit, la diferencia vuelve a caja.
+        $haberCustodia = $propinas;
+        $absorcionCaja = 0.0;
+        $haberFondo = 0.0;
+
+        if ($deficitLaboral > 0) {
+            $absorcionCaja = min($deficitLaboral, $propinas); // defensa: nunca exceder la custodia
+            $haberFondo = 0.0;
+        } else {
+            $haberFondo = round($gastoSueldos + $comisiones - $adelantos - $retenciones, 2);
+        }
+
+        $cuentaFondo = ($metodoPago === 'efectivo')
+            ? $this->getCuentaIdByCodigo('1.1.1')
+            : $this->getBancoIdPorMetodo($metodoPago);
+
+        $nombreEmpleado = $colilla->empleado->nombre ?? 'Colaborador';
+
+        DB::beginTransaction();
+        try {
+            $asiento = AsientoContable::create([
+                'numero_asiento' => 'NOM-' . str_pad((string) $colilla->id, 6, '0', STR_PAD_LEFT),
+                'fecha' => Carbon::now(),
+                'concepto' => 'Liquidación de nómina ' . $colilla->periodo_inicio->format('d/m') . '-' . $colilla->periodo_fin->format('d/m/Y') . ': ' . $nombreEmpleado,
+                'modulo_origen' => 'nomina',
+                'referencia_id' => $colilla->id,
+                'periodo_id' => $periodo->id,
+                'usuario_id' => auth()->id() ?? 1,
+            ]);
+
+            if ($gastoSueldos > 0) {
+                DetalleAsiento::create([
+                    'asiento_id' => $asiento->id, 'cuenta_id' => $this->getCuentaIdByCodigo('6.7'),
+                    'moneda_id' => $monedaBase, 'debe' => $gastoSueldos, 'haber' => 0,
+                    'descripcion' => 'Gasto de sueldos y salarios',
+                ]);
+            }
+
+            if ($comisiones > 0) {
+                DetalleAsiento::create([
+                    'asiento_id' => $asiento->id, 'cuenta_id' => $this->getCuentaIdByCodigo('5.3'),
+                    'moneda_id' => $monedaBase, 'debe' => $comisiones, 'haber' => 0,
+                    'descripcion' => 'Gasto por comisiones devengadas',
+                ]);
+            }
+
+            if ($propinas > 0) {
+                DetalleAsiento::create([
+                    'asiento_id' => $asiento->id, 'cuenta_id' => $this->getCuentaIdByCodigo('2.1.6'),
+                    'moneda_id' => $monedaBase, 'debe' => $propinas, 'haber' => 0,
+                    'descripcion' => 'Pago de propinas acumuladas (extinción de pasivo)',
+                ]);
+            }
+
+            if ($adelantos > 0) {
+                DetalleAsiento::create([
+                    'asiento_id' => $asiento->id, 'cuenta_id' => $this->getCuentaIdByCodigo('1.1.6'),
+                    'moneda_id' => $monedaBase, 'debe' => 0, 'haber' => $adelantos,
+                    'descripcion' => 'Amortización de anticipos a empleados (activo 1.1.6)',
+                ]);
+            }
+
+            if ($retenciones > 0) {
+                DetalleAsiento::create([
+                    'asiento_id' => $asiento->id, 'cuenta_id' => $this->getCuentaIdByCodigo('2.1.5'),
+                    'moneda_id' => $monedaBase, 'debe' => 0, 'haber' => $retenciones,
+                    'descripcion' => 'Retenciones INSS/IR por pagar',
+                ]);
+            }
+
+            if ($haberCustodia > 0) {
+                DetalleAsiento::create([
+                    'asiento_id' => $asiento->id, 'cuenta_id' => $this->getCuentaIdByCodigo('1.1.1.3'),
+                    'moneda_id' => $monedaBase, 'debe' => 0, 'haber' => $haberCustodia,
+                    'descripcion' => 'Liberación de propinas custodiadas',
+                ]);
+            }
+
+            // Déficit laboral absorbido: la caja recibe el remanente de la custodia
+            if ($absorcionCaja > 0) {
+                DetalleAsiento::create([
+                    'asiento_id' => $asiento->id, 'cuenta_id' => $this->getCuentaIdByCodigo('1.1.1'),
+                    'moneda_id' => $monedaBase, 'debe' => $absorcionCaja, 'haber' => 0,
+                    'descripcion' => 'Absorción de déficit laboral con propinas custodiadas',
+                ]);
+            }
+
+            if ($haberFondo > 0) {
+                DetalleAsiento::create([
+                    'asiento_id' => $asiento->id, 'cuenta_id' => $cuentaFondo,
+                    'moneda_id' => $monedaBase, 'debe' => 0, 'haber' => $haberFondo,
+                    'descripcion' => 'Pago neto de nómina',
+                ]);
+            }
+
+            $this->validarCuadre($asiento->id);
+            DB::commit();
+        } catch (Exception $e) {
+            DB::rollBack();
+            throw $e;
+        }
+
+        return $asiento->id;
+    }
+
+    /**
+     * REVERSIÓN DE COLILLA DE NÓMINA: genera el asiento espejo REV-NOM-* con
+     * DEBE y HABER intercambiados. El original jamás se borra ni se edita.
+     */
+    public function reversarColillaNomina($colilla, string $motivo): int
+    {
+        $periodo = $this->resolverPeriodo(Carbon::now());
+        $monedaBase = $this->getMonedaBaseId();
+
+        $original = AsientoContable::where('modulo_origen', 'nomina')
+            ->where('referencia_id', $colilla->id)
+            ->where('numero_asiento', 'not like', 'REV-%')
+            ->with('detalles')
+            ->first();
+
+        if (!$original) {
+            throw new Exception("No se encontró el asiento original de la colilla #{$colilla->id} para revertir.");
+        }
+
+        DB::beginTransaction();
+        try {
+            $reversa = AsientoContable::create([
+                'numero_asiento' => 'REV-' . $original->numero_asiento,
+                'fecha' => Carbon::now(),
+                'concepto' => 'Reversión de nómina colilla #' . $colilla->id . ': ' . $motivo,
+                'modulo_origen' => 'nomina',
+                'referencia_id' => $colilla->id,
+                'periodo_id' => $periodo->id,
+                'usuario_id' => auth()->id() ?? 1,
+            ]);
+
+            foreach ($original->detalles as $linea) {
+                DetalleAsiento::create([
+                    'asiento_id' => $reversa->id,
+                    'cuenta_id' => $linea->cuenta_id,
+                    'moneda_id' => $monedaBase,
+                    'debe' => $linea->haber,
+                    'haber' => $linea->debe,
+                    'descripcion' => 'Reversa: ' . $linea->descripcion,
+                ]);
+            }
+
+            $this->validarCuadre($reversa->id);
+            DB::commit();
+        } catch (Exception $e) {
+            DB::rollBack();
+            throw $e;
+        }
+
+        return $reversa->id;
+    }
+
+    /**
+     * RECONOCIMIENTO DE PROPINAS EN CUSTODIA (HRMS): al registrar propinas que el
+     * salón guarda para el colaborador, el dinero custodiado entra como activo
+     * 1.1.1.3 contra el pasivo 2.1.6 Propinas por Pagar. El pago posterior se
+     * liquida desde la colilla de nómina.
+     *
+     * @return int ID del asiento generado.
+     */
+    public function contabilizarRegistroPropinas(float $monto, string $descripcion, $fecha = null): int
+    {
+        $periodo = $this->resolverPeriodo($fecha ?? now());
+        $monedaBase = $this->getMonedaBaseId();
+
+        DB::beginTransaction();
+        try {
+            $asiento = AsientoContable::create([
+                'numero_asiento' => 'PRO-' . str_pad((string) time(), 9, '0', STR_PAD_LEFT),
+                'fecha' => Carbon::parse($fecha ?? now()),
+                'concepto' => 'Reconocimiento de propinas en custodia: ' . $descripcion,
+                'modulo_origen' => 'propinas',
+                'referencia_id' => null,
+                'periodo_id' => $periodo->id,
+                'usuario_id' => auth()->id() ?? 1,
+            ]);
+
+            DetalleAsiento::create([
+                'asiento_id' => $asiento->id, 'cuenta_id' => $this->getCuentaIdByCodigo('1.1.1.3'),
+                'moneda_id' => $monedaBase, 'debe' => $monto, 'haber' => 0,
+                'descripcion' => 'Propinas recibidas en custodia',
+            ]);
+
+            DetalleAsiento::create([
+                'asiento_id' => $asiento->id, 'cuenta_id' => $this->getCuentaIdByCodigo('2.1.6'),
+                'moneda_id' => $monedaBase, 'debe' => 0, 'haber' => $monto,
+                'descripcion' => 'Propinas por pagar al colaborador',
+            ]);
+
+            $this->validarCuadre($asiento->id);
+            DB::commit();
+        } catch (Exception $e) {
+            DB::rollBack();
+            throw $e;
+        }
+
+        return $asiento->id;
+    }
+
     public function contabilizarAdelantoCXC($advance, $metodoPago = 'efectivo')
     {
         $periodo = $this->resolverPeriodo($advance->date);

@@ -22,6 +22,9 @@ class Nomina extends Model
         'sunday_bonus',
         'salary_advances',
         'loan_payments',
+        'inss_empleado',
+        'impuesto_renta',
+        'retenciones_totales',
         'total_to_pay',
         'status',
     ];

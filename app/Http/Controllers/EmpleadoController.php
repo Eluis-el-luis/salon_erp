@@ -2,26 +2,31 @@
 
 namespace App\Http\Controllers;
 
-use Illuminate\Http\Request;
-use App\Models\Usuario;
-use App\Models\Rol;
+use App\Models\Empleado;
 use App\Models\EsquemaComision;
+use App\Models\Rol;
+use App\Models\Usuario;
+use Carbon\Carbon;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
-use Carbon\Carbon;
 
 class EmpleadoController extends Controller
 {
     // Roles válidos del sistema (deben coincidir con el enum de users.role)
     protected const ROLES_VALIDOS = ['admin', 'estilista', 'recepcion', 'contador'];
 
+    // Tipos de contrato del expediente RRHH
+    protected const TIPOS_CONTRATO = ['indefinido', 'plazo_fijo', 'obra_labor', 'servicios_profesionales'];
+
     // Mostrar la lista de empleados
     public function index()
     {
-        // Traemos a los empleados junto con su esquema de comisión actual vigente
-        $empleados = Usuario::with('esquemaActual')->orderBy('name', 'asc')->get();
+        // Traemos a los empleados junto con su esquema de comisión actual vigente y su expediente RRHH
+        $empleados = Usuario::with(['esquemaActual', 'empleado'])->orderBy('name', 'asc')->get();
+
         return view('employees.index', compact('empleados'));
     }
 
@@ -32,11 +37,16 @@ class EmpleadoController extends Controller
             'name' => 'required|string|max:255',
             'email' => 'required|string|email|max:255|unique:users,email',
             'password' => 'required|string|min:8',
-            'role' => 'required|string|in:' . implode(',', self::ROLES_VALIDOS),
+            'role' => 'required|string|in:'.implode(',', self::ROLES_VALIDOS),
             'salario_fijo' => 'nullable|numeric|min:0',
             'comision_servicio' => 'nullable|numeric|min:0|max:100',
             'comision_producto' => 'nullable|numeric|min:0|max:100',
             'phone' => 'nullable|string|max:30',
+            'fecha_ingreso' => 'nullable|date|before_or_equal:today',
+            'tipo_contrato' => 'nullable|string|in:'.implode(',', self::TIPOS_CONTRATO),
+            'cargo' => 'nullable|string|max:120',
+            'documento_identidad' => 'nullable|string|max:50',
+            'nss' => 'nullable|string|max:50',
         ], $this->mensajesValidacion(), $this->atributos());
 
         if ($validator->fails()) {
@@ -62,6 +72,15 @@ class EmpleadoController extends Controller
                 'is_active' => true,
             ]);
 
+            // HRMS: expediente Employee (ciclo de vida) separado del User (acceso)
+            Empleado::crearParaUsuario($usuario, [
+                'tipo_contrato' => $request->tipo_contrato ?? 'indefinido',
+                'fecha_ingreso' => $request->fecha_ingreso ?? Carbon::today()->toDateString(),
+                'cargo' => $request->cargo,
+                'documento_identidad' => $request->documento_identidad,
+                'nss' => $request->nss,
+            ]);
+
             // Crear el Esquema de Comisión inicial si tiene comisión por servicio
             if ($request->comision_servicio > 0) {
                 EsquemaComision::create([
@@ -79,6 +98,7 @@ class EmpleadoController extends Controller
             ]);
         } catch (\Throwable $e) {
             DB::rollBack();
+
             return $this->errorDetallado($e, 'No se pudo registrar el colaborador');
         }
     }
@@ -89,7 +109,7 @@ class EmpleadoController extends Controller
         try {
             $empleado = Usuario::with('esquemaActual')->find($id);
 
-            if (!$empleado) {
+            if (! $empleado) {
                 return response()->json([
                     'error' => 'Colaborador no encontrado.',
                     'detalle' => "No existe un usuario con ID {$id}.",
@@ -98,13 +118,18 @@ class EmpleadoController extends Controller
 
             $validator = Validator::make($request->all(), [
                 'name' => 'required|string|max:255',
-                'email' => 'required|string|email|max:255|unique:users,email,' . $empleado->id,
-                'role' => 'required|string|in:' . implode(',', self::ROLES_VALIDOS),
+                'email' => 'required|string|email|max:255|unique:users,email,'.$empleado->id,
+                'role' => 'required|string|in:'.implode(',', self::ROLES_VALIDOS),
                 'salario_fijo' => 'nullable|numeric|min:0',
                 'comision_servicio' => 'nullable|numeric|min:0|max:100',
                 'comision_producto' => 'nullable|numeric|min:0|max:100',
                 'phone' => 'nullable|string|max:30',
                 'password' => 'nullable|string|min:8',
+                'fecha_ingreso' => 'nullable|date|before_or_equal:today',
+                'tipo_contrato' => 'nullable|string|in:'.implode(',', self::TIPOS_CONTRATO),
+                'cargo' => 'nullable|string|max:120',
+                'documento_identidad' => 'nullable|string|max:50',
+                'nss' => 'nullable|string|max:50',
             ], $this->mensajesValidacion(), $this->atributos());
 
             if ($validator->fails()) {
@@ -146,11 +171,26 @@ class EmpleadoController extends Controller
 
             $empleado->update($data);
 
+            // HRMS: sincronizar el expediente Employee (salario base y lifecycle)
+            $expediente = Empleado::firstOrCreate(
+                ['user_id' => $empleado->id],
+                ['codigo_empleado' => Empleado::siguienteCodigo($empleado->id)],
+            );
+            $expediente->update([
+                'salario_base' => $request->salario_fijo ?? $expediente->salario_base,
+                'tipo_contrato' => $request->tipo_contrato ?? $expediente->tipo_contrato,
+                'fecha_ingreso' => $request->fecha_ingreso ?? $expediente->fecha_ingreso,
+                'cargo' => $request->cargo,
+                'documento_identidad' => $request->documento_identidad,
+                'nss' => $request->nss,
+            ]);
+
             DB::commit();
 
             return response()->json(['message' => 'Datos del empleado actualizados correctamente']);
         } catch (\Throwable $e) {
             DB::rollBack();
+
             return $this->errorDetallado($e, 'No se pudo actualizar el colaborador');
         }
     }
@@ -161,7 +201,7 @@ class EmpleadoController extends Controller
         try {
             $empleado = Usuario::find($id);
 
-            if (!$empleado) {
+            if (! $empleado) {
                 return response()->json([
                     'error' => 'Colaborador no encontrado.',
                     'detalle' => "No existe un usuario con ID {$id}.",
@@ -169,6 +209,13 @@ class EmpleadoController extends Controller
             }
 
             $empleado->update(['is_active' => false]);
+
+            // HRMS: cierra el ciclo de vida del expediente (fecha de salida)
+            $expediente = Empleado::where('user_id', $empleado->id)->first();
+            $expediente?->update([
+                'estado_laboral' => 'retirado',
+                'fecha_salida' => Carbon::today()->toDateString(),
+            ]);
 
             return response()->json(['message' => 'Empleado dado de baja del sistema']);
         } catch (\Throwable $e) {
@@ -187,7 +234,7 @@ class EmpleadoController extends Controller
             'email' => 'El campo :attribute debe ser un correo electrónico válido.',
             'unique' => 'El :attribute ya está registrado en el sistema.',
             'numeric' => 'El campo :attribute debe ser un número.',
-            'in' => 'El valor de :attribute no es válido. Roles permitidos: ' . implode(', ', self::ROLES_VALIDOS) . '.',
+            'in' => 'El valor de :attribute no es válido. Roles permitidos: '.implode(', ', self::ROLES_VALIDOS).'.',
             'min' => [
                 'string' => 'El campo :attribute debe tener al menos :min caracteres.',
                 'numeric' => 'El campo :attribute debe ser como mínimo :min.',
@@ -213,6 +260,11 @@ class EmpleadoController extends Controller
             'comision_servicio' => 'comisión por servicios',
             'comision_producto' => 'comisión por productos',
             'phone' => 'teléfono',
+            'fecha_ingreso' => 'fecha de ingreso',
+            'tipo_contrato' => 'tipo de contrato',
+            'cargo' => 'cargo',
+            'documento_identidad' => 'documento de identidad',
+            'nss' => 'número INSS',
         ];
     }
 
@@ -247,7 +299,7 @@ class EmpleadoController extends Controller
         ]);
 
         return response()->json([
-            'error' => $contexto . '.',
+            'error' => $contexto.'.',
             'detalle' => $e->getMessage(),
             'tipo' => class_basename($e),
         ], $status);

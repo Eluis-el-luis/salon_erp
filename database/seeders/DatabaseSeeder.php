@@ -18,6 +18,7 @@ class DatabaseSeeder extends Seeder
             FormulaSeeder::class,
             ContabilidadBaseSeeder::class,
             CuentasComplementariasSeeder::class,
+            RrhhBaseSeeder::class, // Tipos de ausencia, turnos y estructura salarial estándar
         ]);
     }
 }

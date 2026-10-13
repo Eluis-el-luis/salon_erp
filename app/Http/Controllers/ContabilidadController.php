@@ -2,30 +2,30 @@
 
 namespace App\Http\Controllers;
 
-use Illuminate\Http\Request;
 use App\Models\AsientoContable;
-use App\Models\CuentaContable;
 use App\Models\CentroCosto;
+use App\Models\CuentaContable;
 use App\Models\DetalleAsiento;
 use App\Services\ContabilidadService;
+use Carbon\Carbon;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use Carbon\Carbon;
 
 class ContabilidadController extends Controller
 {
     public function diario()
     {
         $asientos = AsientoContable::with(['detalles.cuenta'])
-                    ->orderBy('created_at', 'desc')
-                    ->get();
+            ->orderBy('created_at', 'desc')
+            ->get();
 
         // Solo traemos Gastos (Clase 6) y Costos (Clase 5)
         $cuentasGasto = CuentaContable::where('permite_movimiento', true)
-                        ->where(function($query) {
-                            $query->where('codigo', 'like', '5.%')
-                                  ->orWhere('codigo', 'like', '6.%');
-                        })->get();
+            ->where(function ($query) {
+                $query->where('codigo', 'like', '5.%')
+                    ->orWhere('codigo', 'like', '6.%');
+            })->get();
 
         return view('accounting.diario', compact('asientos', 'cuentasGasto'));
     }
@@ -36,21 +36,22 @@ class ContabilidadController extends Controller
             'descripcion' => 'required|string|max:255',
             'monto' => 'required|numeric|min:1',
             'cuenta_id' => 'required|exists:cuentas_contables,id',
-            'metodo_pago' => 'required|in:efectivo,banco,bac,lafise'
+            'metodo_pago' => 'required|in:efectivo,banco,bac,lafise',
         ]);
 
         DB::beginTransaction(); // INICIA LA PROTECCIÓN
 
         try {
-            $contabilidad = new ContabilidadService();
+            $contabilidad = new ContabilidadService;
             $contabilidad->contabilizarGasto(
-                $request->descripcion, 
-                $request->monto, 
-                $request->cuenta_id, 
+                $request->descripcion,
+                $request->monto,
+                $request->cuenta_id,
                 $request->metodo_pago
             );
 
             DB::commit(); // SI EL CANDADO NO DETONA, GUARDAMOS
+
             return back()->with('success', 'Gasto registrado y contabilizado en el Libro Diario.');
 
         } catch (\Exception $e) {
@@ -60,6 +61,7 @@ class ContabilidadController extends Controller
                 'trace' => $e->getTraceAsString(),
                 'request' => $request->all(),
             ]);
+
             return back()->withErrors(['error' => 'Error contable al registrar el gasto. Contacte al administrador.']);
         }
     }
@@ -102,9 +104,15 @@ class ContabilidadController extends Controller
             $query = DetalleAsiento::where('cuenta_id', $cuenta->id)
                 ->with(['asiento', 'centroCosto'])
                 ->whereHas('asiento', function ($q) use ($fechaDesde, $fechaHasta, $buscar) {
-                    if ($fechaDesde) $q->whereDate('fecha', '>=', $fechaDesde);
-                    if ($fechaHasta) $q->whereDate('fecha', '<=', $fechaHasta);
-                    if ($buscar) $q->where('concepto', 'like', "%{$buscar}%");
+                    if ($fechaDesde) {
+                        $q->whereDate('fecha', '>=', $fechaDesde);
+                    }
+                    if ($fechaHasta) {
+                        $q->whereDate('fecha', '<=', $fechaHasta);
+                    }
+                    if ($buscar) {
+                        $q->where('concepto', 'like', "%{$buscar}%");
+                    }
                 });
 
             // Filtrar por centro de costo si se especifica
@@ -114,7 +122,7 @@ class ContabilidadController extends Controller
 
             $detalles = $query->get()
                 ->sortBy(function ($d) {
-                    return $d->asiento->fecha . str_pad($d->asiento->id, 10, '0', STR_PAD_LEFT);
+                    return $d->asiento->fecha.str_pad($d->asiento->id, 10, '0', STR_PAD_LEFT);
                 })
                 ->values();
 
@@ -141,7 +149,7 @@ class ContabilidadController extends Controller
             ];
 
             // Agrupar por centro de costo si no hay filtro específico
-            if (!$centroCostoId && $movimientos->isNotEmpty()) {
+            if (! $centroCostoId && $movimientos->isNotEmpty()) {
                 $agrupadosPorCentro = $detalles
                     ->groupBy('centro_costo_id')
                     ->map(function ($grupo) {
@@ -181,22 +189,42 @@ class ContabilidadController extends Controller
         ));
     }
 
-    public function resultados()
+    /**
+     * ESTADO DE RESULTADOS con filtro mensual.
+     *
+     * - Por defecto muestra el MES ACTUAL (en curso).
+     * - ?mes=YYYY-MM filtra los movimientos por la fecha del asiento.
+     * - ?mes=todo conserva la vista histórica acumulada (comportamiento anterior).
+     */
+    public function resultados(Request $request)
     {
+        $mes = $request->query('mes', now()->format('Y-m'));
+
+        if ($mes !== 'todo' && ! preg_match('/^\d{4}-(0[1-9]|1[0-2])$/', $mes)) {
+            $mes = now()->format('Y-m'); // valor manipulado o inválido: mes actual
+        }
+
+        $esHistorico = $mes === 'todo';
+        $desde = $esHistorico ? null : Carbon::createFromFormat('Y-m-d', $mes.'-01')->startOfDay();
+        $hasta = $esHistorico ? null : $desde->copy()->endOfMonth();
+
         // Clases 4 (Ingresos), 5 (Costos), 6 (Gastos) y 7 (Otros egresos).
         // La clase 7 SÍ existe en el catálogo y recibe diferenciales cambiarios y ajustes de arqueo.
         $cuentasResultados = CuentaContable::where('permite_movimiento', true)
             ->where(function ($query) {
                 $query->where('codigo', 'like', '4.%')
-                      ->orWhere('codigo', 'like', '5.%')
-                      ->orWhere('codigo', 'like', '6.%')
-                      ->orWhere('codigo', 'like', '7.%');
+                    ->orWhere('codigo', 'like', '5.%')
+                    ->orWhere('codigo', 'like', '6.%')
+                    ->orWhere('codigo', 'like', '7.%');
             })
-            ->with(['detalles' => function ($q) {
-                // Excluir el asiento de cierre fiscal para que el reporte conserve
-                // los saldos reales del periodo una vez cerrado.
-                $q->whereHas('asiento', function ($a) {
+            ->with(['detalles' => function ($q) use ($desde, $hasta) {
+                // El asiento de cierre fiscal siempre se excluye para que el
+                // reporte conserve los saldos reales del periodo una vez cerrado.
+                $q->whereHas('asiento', function ($a) use ($desde, $hasta) {
                     $a->where('modulo_origen', '!=', 'cierre_fiscal');
+                    if ($desde && $hasta) {
+                        $a->whereBetween('fecha', [$desde->toDateString(), $hasta->toDateString()]);
+                    }
                 });
             }])
             ->orderBy('codigo')
@@ -232,13 +260,36 @@ class ContabilidadController extends Controller
         $utilidadOperativa = $utilidadBruta - $gastosOperativos;
         $utilidadNeta = $utilidadOperativa - $otrosEgresos;
 
-        // Periodo mostrado en el encabezado (periodo abierto o el último registrado)
-        $periodo = DB::table('periodos_contables')->where('estado', 'abierto')->orderBy('fecha_inicio')->first()
-            ?? DB::table('periodos_contables')->orderBy('fecha_fin', 'desc')->first();
+        // Periodo que cubre el mes mostrado (para el encabezado corporativo).
+        $periodo = $esHistorico
+            ? (DB::table('periodos_contables')->where('estado', 'abierto')->orderBy('fecha_inicio')->first()
+                ?? DB::table('periodos_contables')->orderBy('fecha_fin', 'desc')->first())
+            : DB::table('periodos_contables')
+                ->whereDate('fecha_inicio', '<=', $desde->toDateString())
+                ->whereDate('fecha_fin', '>=', $hasta->toDateString())
+                ->orderBy('fecha_inicio')
+                ->first();
+
+        $meses = [
+            1 => 'Enero', 2 => 'Febrero', 3 => 'Marzo', 4 => 'Abril',
+            5 => 'Mayo', 6 => 'Junio', 7 => 'Julio', 8 => 'Agosto',
+            9 => 'Septiembre', 10 => 'Octubre', 11 => 'Noviembre', 12 => 'Diciembre',
+        ];
+
+        $etiquetaMes = $esHistorico
+            ? 'Histórico completo'
+            : $meses[(int) $desde->month].' '.$desde->year;
+
+        $mesAnterior = $esHistorico ? null : $desde->copy()->subMonth()->format('Y-m');
+        $mesSiguiente = $esHistorico ? null : $desde->copy()->addMonth()->format('Y-m');
+        // No se permite navegar hacia meses futuros: aún no hay operaciones.
+        $esMesActual = ! $esHistorico && $mes === now()->format('Y-m');
 
         return view('accounting.resultados', compact(
             'cuentasResultados', 'ingresos', 'costos', 'gastosOperativos', 'otrosEgresos',
-            'utilidadBruta', 'utilidadOperativa', 'utilidadNeta', 'periodo'
+            'utilidadBruta', 'utilidadOperativa', 'utilidadNeta', 'periodo',
+            'mes', 'etiquetaMes', 'mesAnterior', 'mesSiguiente', 'esMesActual', 'esHistorico',
+            'desde', 'hasta'
         ));
     }
 }

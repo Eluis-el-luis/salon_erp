@@ -34,53 +34,98 @@
                     </a>
 
                     @php
+                        // VISIBILIDAD POR ROL: 'roles' lista los roles con acceso a la
+                        // ruta. Sin 'roles' = todos los roles. El admin ve todo (bypass).
+                        $rolUsuario = auth()->user()->role ?? null;
+                        $puedeVer = function (array $item) use ($rolUsuario): bool {
+                            if (!isset($item['roles'])) return true;
+                            if ($rolUsuario === 'admin') return true;
+                            return in_array($rolUsuario, $item['roles'], true);
+                        };
+
                         $grupos = [
                             'Operaciones' => [
                                 ['url' => '/agenda', 'label' => 'Agenda Diaria', 'icon' => 'calendar'],
-                                ['url' => '/pos', 'label' => 'Caja (POS)', 'icon' => 'cart'],
-                                ['url' => '/caja/arqueo', 'label' => 'Turnos y Arqueo', 'icon' => 'lock'],
+                                ['url' => '/pos', 'label' => 'Caja (POS)', 'icon' => 'cart', 'roles' => ['recepcion', 'contador']],
+                                ['url' => '/caja/arqueo', 'label' => 'Turnos y Arqueo', 'icon' => 'lock', 'roles' => ['recepcion', 'contador']],
                             ],
                             'Administración' => [
                                 ['url' => '/clientes', 'label' => 'Clientes', 'icon' => 'users'],
-                                ['url' => '/servicios', 'label' => 'Servicios', 'icon' => 'scissors'],
-                                ['url' => '/formulas', 'label' => 'Fórmulas / Recetas', 'icon' => 'flask'],
+                                ['url' => '/servicios', 'label' => 'Servicios', 'icon' => 'scissors', 'roles' => ['admin']],
+                                ['url' => '/formulas', 'label' => 'Fórmulas / Recetas', 'icon' => 'flask', 'roles' => ['admin']],
                                 ['sep' => true],
-                                ['url' => '/inventario', 'label' => 'Inventario', 'icon' => 'box'],
-                                ['url' => '/inventario/kardex', 'label' => 'Kárdex Físico-Valorado', 'icon' => 'chart'],
-                                ['url' => '/inventario/comprar', 'label' => 'Compras a Proveedor', 'icon' => 'cart'],
-                                ['url' => '/mermas', 'label' => 'Mermas y Ajustes', 'icon' => 'trash'],
-                                ['url' => '/proveedores', 'label' => 'Proveedores', 'icon' => 'truck'],
+                                ['url' => '/inventario', 'label' => 'Inventario', 'icon' => 'box', 'roles' => ['admin']],
+                                ['url' => '/inventario/kardex', 'label' => 'Kárdex Físico-Valorado', 'icon' => 'chart', 'roles' => ['admin']],
+                                ['url' => '/inventario/comprar', 'label' => 'Compras a Proveedor', 'icon' => 'cart', 'roles' => ['admin']],
+                                ['url' => '/mermas', 'label' => 'Mermas y Ajustes', 'icon' => 'trash', 'roles' => ['admin']],
+                                ['url' => '/proveedores', 'label' => 'Proveedores', 'icon' => 'truck', 'roles' => ['admin']],
                                 ['sep' => true],
-                                ['url' => '/backups', 'label' => 'Respaldos', 'icon' => 'save'],
+                                ['url' => '/backups', 'label' => 'Respaldos', 'icon' => 'save', 'roles' => ['admin']],
                             ],
                             'Finanzas' => [
-                                ['url' => '/historial-ventas', 'label' => 'Historial Ventas', 'icon' => 'receipt'],
-                                ['url' => '/bancos', 'label' => 'Bancos y Depósitos', 'icon' => 'bank'],
-                                ['url' => '/mesa-cambio', 'label' => 'Mesa de Cambio', 'icon' => 'exchange'],
-                                ['url' => '/caja-chica', 'label' => 'Caja Chica', 'icon' => 'wallet'],
-                                ['url' => '/retiros', 'label' => 'Retiros del Propietario', 'icon' => 'user'],
-                                ['url' => '/contabilidad', 'label' => 'Gasto', 'icon' => 'banknote'],
+                                ['url' => '/historial-ventas', 'label' => 'Historial Ventas', 'icon' => 'receipt', 'roles' => ['recepcion', 'contador']],
+                                ['url' => '/bancos', 'label' => 'Bancos y Conciliación', 'icon' => 'bank', 'roles' => ['admin', 'contador']],
+                                ['url' => '/mesa-cambio', 'label' => 'Mesa de Cambio', 'icon' => 'exchange', 'roles' => ['recepcion', 'contador']],
+                                ['url' => '/caja-chica', 'label' => 'Caja Chica', 'icon' => 'wallet', 'roles' => ['recepcion', 'contador']],
+                                ['url' => '/retiros', 'label' => 'Retiros del Propietario', 'icon' => 'user', 'roles' => ['admin', 'contador']],
+                                ['url' => '/contabilidad', 'label' => 'Registro de Gastos', 'icon' => 'banknote', 'roles' => ['admin', 'contador']],
                                 ['sep' => true],
-                                ['url' => '/adelantos', 'label' => 'Cuentas por Cobrar', 'icon' => 'handshake'],
-                                ['url' => '/cuentas-por-pagar', 'label' => 'Cuentas por Pagar', 'icon' => 'credit'],
+                                ['url' => '/adelantos', 'label' => 'Cuentas por Cobrar', 'icon' => 'handshake', 'roles' => ['recepcion', 'contador']],
+                                ['url' => '/cuentas-por-pagar', 'label' => 'Cuentas por Pagar', 'icon' => 'credit', 'roles' => ['admin', 'contador']],
                                 ['sep' => true],
-                                ['url' => '/contabilidad', 'label' => 'Libro Diario', 'icon' => 'book'],
-                                ['url' => '/contabilidad/mayor', 'label' => 'Libro Mayor', 'icon' => 'book'],
-                                ['url' => '/contabilidad/resultados', 'label' => 'Estado de Resultados', 'icon' => 'chart'],
-                                ['url' => '/contabilidad/balance', 'label' => 'Balance General', 'icon' => 'chart'],
+                                ['url' => '/contabilidad', 'label' => 'Libro Diario', 'icon' => 'book', 'roles' => ['admin', 'contador']],
+                                ['url' => '/contabilidad/mayor', 'label' => 'Libro Mayor', 'icon' => 'book', 'roles' => ['admin', 'contador']],
+                                ['url' => '/contabilidad/resultados', 'label' => 'Estado de Resultados', 'icon' => 'chart', 'roles' => ['admin', 'contador']],
+                                ['url' => '/contabilidad/balance', 'label' => 'Balance General', 'icon' => 'chart', 'roles' => ['admin', 'contador']],
                                 ['sep' => true],
-                                ['url' => '/catalogo', 'label' => 'Catálogo de Cuentas', 'icon' => 'book'],
-                                ['url' => '/asientos', 'label' => 'Asientos Manuales', 'icon' => 'book'],
-                                ['url' => '/periodos', 'label' => 'Periodos y Cierre Fiscal', 'icon' => 'lock'],
+                                ['url' => '/catalogo', 'label' => 'Catálogo de Cuentas', 'icon' => 'book', 'roles' => ['admin', 'contador']],
+                                ['url' => '/asientos', 'label' => 'Asientos Manuales', 'icon' => 'book', 'roles' => ['admin', 'contador']],
+                                ['url' => '/periodos', 'label' => 'Periodos y Cierre Fiscal', 'icon' => 'lock', 'roles' => ['admin', 'contador']],
                                 ['sep' => true],
-                                ['url' => '/reportes', 'label' => 'Reportes', 'icon' => 'chart'],
+                                ['url' => '/reportes', 'label' => 'Reportes', 'icon' => 'chart', 'roles' => ['admin', 'contador']],
                             ],
                             'RRHH' => [
-                                ['url' => '/empleados', 'label' => 'Colaboradores', 'icon' => 'users'],
-                                ['url' => '/nomina', 'label' => 'Nómina (Planillas)', 'icon' => 'banknote'],
+                                ['url' => '/rrhh', 'label' => 'Dashboard RRHH', 'icon' => 'chart', 'roles' => ['admin']],
+                                ['url' => '/empleados', 'label' => 'Colaboradores', 'icon' => 'users', 'roles' => ['admin']],
+                                ['url' => '/rrhh/turnos', 'label' => 'Turnos', 'icon' => 'clock', 'roles' => ['admin']],
                                 ['url' => '/asistencia', 'label' => 'Asistencia', 'icon' => 'clock'],
+                                ['url' => '/ausencias', 'label' => 'Ausencias y Permisos', 'icon' => 'calendar', 'roles' => ['admin']],
+                                ['url' => '/rrhh/propinas', 'label' => 'Propinas', 'icon' => 'banknote', 'roles' => ['admin']],
+                                ['sep' => true],
+                                ['url' => '/nomina', 'label' => 'Nómina (Corridas)', 'icon' => 'banknote', 'roles' => ['admin']],
+                                ['url' => '/nomina/estructuras', 'label' => 'Estructuras Salariales', 'icon' => 'book', 'roles' => ['admin']],
                             ],
                         ];
+
+                        // Filtra los grupos según el rol, limpiando separadores
+                        // huérfanos (al inicio, al final o duplicados).
+                        $grupos = collect($grupos)
+                            ->map(function ($items) use ($puedeVer) {
+                                $resultado = collect();
+                                $hayVisible = false;
+                                $sepPendiente = false;
+
+                                foreach ($items as $item) {
+                                    if (isset($item['sep'])) {
+                                        if ($hayVisible) {
+                                            $sepPendiente = true;
+                                        }
+                                        continue;
+                                    }
+                                    if ($puedeVer($item)) {
+                                        if ($sepPendiente) {
+                                            $resultado->push(['sep' => true]);
+                                            $sepPendiente = false;
+                                        }
+                                        $resultado->push($item);
+                                        $hayVisible = true;
+                                    }
+                                }
+
+                                return $resultado;
+                            })
+                            ->filter(fn ($items) => $items->isNotEmpty())
+                            ->all();
                     @endphp
 
                     @foreach($grupos as $titulo => $items)

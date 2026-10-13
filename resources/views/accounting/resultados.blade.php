@@ -3,12 +3,62 @@
 @section('content')
 <div class="max-w-4xl mx-auto space-y-6">
 
+    <!-- Filtro de Mes -->
+    <div class="card p-4 flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+        <form method="GET" action="{{ url('/contabilidad/resultados') }}" class="flex items-end gap-3">
+            <div>
+                <label class="label" for="filtro-mes">Mes del reporte</label>
+                <select name="mes" id="filtro-mes" class="input" onchange="this.form.submit()">
+                    <option value="todo" {{ $esHistorico ? 'selected' : '' }}>Histórico completo</option>
+                    @for($m = 0; $m < 24; $m++)
+                        @php
+                            $op = now()->copy()->subMonths($m);
+                            $valor = $op->format('Y-m');
+                            $nombreMes = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'][(int) $op->format('n') - 1];
+                        @endphp
+                        <option value="{{ $valor }}" {{ $mes === $valor ? 'selected' : '' }}>
+                            {{ $nombreMes }} {{ $op->format('Y') }}@if($m === 0) (actual) @endif
+                        </option>
+                    @endfor
+                </select>
+            </div>
+            <button type="submit" class="btn btn-primary">Aplicar</button>
+        </form>
+
+        <div class="flex gap-2">
+            @if(!$esHistorico)
+                <a href="{{ url('/contabilidad/resultados?mes=' . $mesAnterior) }}"
+                   class="btn btn-secondary text-sm" title="Mes anterior">
+                    &larr; Mes anterior
+                </a>
+                @unless($esMesActual)
+                    <a href="{{ url('/contabilidad/resultados?mes=' . $mesSiguiente) }}"
+                       class="btn btn-secondary text-sm {{ $mesSiguiente > now()->format('Y-m') ? 'opacity-40 pointer-events-none' : '' }}" title="Mes siguiente">
+                        Mes siguiente &rarr;
+                    </a>
+                @endunless
+            @endif
+            <a href="{{ url('/contabilidad/resultados?mes=todo') }}"
+               class="btn {{ $esHistorico ? 'btn-primary' : 'btn-secondary' }} text-sm">
+                Histórico
+            </a>
+        </div>
+    </div>
+
     <!-- Cabecera Corporativa -->
     <div class="bg-white p-8 rounded-2xl shadow-sm border border-gray-100 text-center">
         <h1 class="text-3xl font-black text-gray-900 uppercase tracking-widest">Álvaro Rugama</h1>
         <h2 class="text-xl font-bold text-gray-600 uppercase mt-1">Make Up Studio</h2>
         <h3 class="text-lg font-bold text-emerald-600 uppercase mt-4">Estado de Resultados</h3>
-        <p class="text-gray-500 text-sm mt-1">{{ $periodo->nombre ?? 'Periodo actual' }}</p>
+        <p class="text-gray-500 text-sm mt-1">
+            {{ $etiquetaMes }}
+            @if(!$esHistorico && $desde)
+                <span class="text-gray-400">({{ $desde->format('d/m/Y') }} al {{ $hasta->format('d/m/Y') }})</span>
+            @endif
+        </p>
+        @if(!empty($periodo?->nombre))
+            <p class="text-gray-400 text-xs mt-1">Periodo contable: {{ $periodo->nombre }}</p>
+        @endif
         <p class="text-gray-400 text-xs mt-1">Expresado en Córdobas (C$)</p>
     </div>
 

@@ -6,6 +6,8 @@ use App\Http\Controllers\InventarioController;
 use App\Http\Controllers\PanelController;
 use App\Http\Controllers\EmpleadoController;
 use App\Http\Controllers\AsistenciaController;
+use App\Http\Controllers\AusenciaController;
+use App\Http\Controllers\RrhhController;
 use App\Http\Controllers\AdelantoController;
 use App\Http\Controllers\ClienteController;
 use App\Http\Controllers\ServicioController;
@@ -115,69 +117,25 @@ Route::middleware(['auth'])->group(function () {
 
 
     // -------------------------------------------------------------
-    // NIVEL 3: ADMINISTRADOR (Acceso exclusivo Gerencia)
+    // NIVEL 3: FINANZAS (Administrador + Contador)
     // -------------------------------------------------------------
-    // Operaciones críticas del negocio que ningún otro empleado debe ver.
-    
-    Route::middleware(['role:admin'])->group(function () {
-        
+    // Todo lo contable-financiero es territorio del contador (además del admin,
+    // que siempre tiene bypass global): reportes, contabilidad, catálogo,
+    // asientos, periodos, bancos, CxP y retiros.
+    Route::middleware(['role:admin,contador'])->group(function () {
+
         // Reportes Financieros
         Route::get('/reportes', [ReporteController::class, 'index']);
         Route::get('/reportes/excel', [ReporteController::class, 'exportExcel']);
         Route::get('/reportes/pdf', [ReporteController::class, 'exportPdf']);
 
-        // Recursos Humanos y Nómina
-        Route::get('/empleados', [EmpleadoController::class, 'index']);
-        Route::post('/empleados', [EmpleadoController::class, 'store']);
-        Route::put('/empleados/{id}', [EmpleadoController::class, 'update']);
-        Route::delete('/empleados/{id}', [EmpleadoController::class, 'destroy']);
-        
-        Route::get('/nomina', [NominaController::class, 'index']);
-        Route::post('/nomina/generar', [NominaController::class, 'store']);
-        Route::get('/nomina/{id}/ticket', [NominaController::class, 'ticket']);
-        Route::get('/nomina/{id}/ticket', [NominaController::class, 'ticket']);
-        
-        // Control de Inventario y Proveedores
-        Route::get('/inventario', [InventarioController::class, 'index']);
-        Route::post('/inventario', [InventarioController::class, 'store']);
-        Route::put('/inventario/{id}', [InventarioController::class, 'update']);
-        Route::delete('/inventario/{id}', [InventarioController::class, 'destroy']);
-        Route::get('/inventario/comprar', [InventarioController::class, 'createCompra']);
-        Route::post('/inventario/comprar', [InventarioController::class, 'registrarCompra']);
-        Route::get('/mermas', [MermaController::class, 'index']);
-        Route::post('/mermas', [MermaController::class, 'store']);
-        Route::get('/inventario/kardex', [InventarioController::class, 'kardex']);
-        Route::get('/inventario/kardex/excel', [InventarioController::class, 'kardexExcel'])->name('inventario.kardex.excel');
-        Route::get('/inventario/kardex/pdf', [InventarioController::class, 'kardexPdf'])->name('inventario.kardex.pdf');
-        Route::get('/inventario/alertas-caducidad', [InventarioController::class, 'alertasCaducidad'])->name('inventario.alertas.caducidad');
-        
-        Route::get('/proveedores', [ProveedorController::class, 'index']);
-        Route::post('/proveedores', [ProveedorController::class, 'store']);
-        Route::put('/proveedores/{id}', [ProveedorController::class, 'update']);
-        Route::delete('/proveedores/{id}', [ProveedorController::class, 'destroy']);
-        
-        // Configuración de Catálogos y Fórmulas
-        Route::get('/servicios', [ServicioController::class, 'index']);
-        Route::post('/servicios', [ServicioController::class, 'store']);
-        Route::put('/servicios/{id}', [ServicioController::class, 'update']);
-        Route::delete('/servicios/{id}', [ServicioController::class, 'destroy']);
-        
-        Route::get('/formulas', [FormulaController::class, 'index']);
-        Route::post('/formulas', [FormulaController::class, 'store']);
-        Route::delete('/formulas/{id}', [FormulaController::class, 'destroy']);
-        
-        // Seguridad del Sistema
-        Route::get('/backups', [RespaldoController::class, 'index']);
-        Route::get('/backups/descargar', [RespaldoController::class, 'download']);
-        Route::post('/backups/restaurar', [RespaldoController::class, 'restore']);
-        
         // Contabilidad
         Route::get('/contabilidad', [ContabilidadController::class, 'diario']);
         Route::post('/contabilidad/gasto', [ContabilidadController::class, 'storeGasto']);
         Route::get('/contabilidad/mayor', [ContabilidadController::class, 'mayor']);
         Route::get('/contabilidad/resultados', [ContabilidadController::class, 'resultados'])->name('contabilidad.resultados');
         Route::get('/contabilidad/balance', [PeriodoContableController::class, 'balanceGeneral'])->name('contabilidad.balance');
-        
+
         // Catálogo de Cuentas
         Route::prefix('catalogo')->name('catalogo.')->group(function () {
             Route::get('/', [CuentaContableController::class, 'index'])->name('index');
@@ -222,6 +180,85 @@ Route::middleware(['auth'])->group(function () {
             Route::get('/{periodo}', [PeriodoContableController::class, 'show'])->name('show');
             Route::post('/{periodo}/cierre', [PeriodoContableController::class, 'cierreFiscal'])->name('cierre');
         });
+    });
+
+    // -------------------------------------------------------------
+    // NIVEL 4: EXCLUSIVO DEL ADMINISTRADOR
+    // -------------------------------------------------------------
+    // Operaciones críticas del negocio que ningún otro empleado debe ver:
+    // recursos humanos, inventario, catálogos operativos y respaldos.
+    Route::middleware(['role:admin'])->group(function () {
+
+        // Recursos Humanos y Nómina (HRMS corporativo)
+        Route::get('/empleados', [EmpleadoController::class, 'index']);
+        Route::post('/empleados', [EmpleadoController::class, 'store']);
+        Route::put('/empleados/{id}', [EmpleadoController::class, 'update']);
+        Route::delete('/empleados/{id}', [EmpleadoController::class, 'destroy']);
+
+        // Dashboard RRHH, Perfil 360, Turnos y Propinas
+        Route::get('/rrhh', [RrhhController::class, 'index']);
+        Route::get('/rrhh/colaborador/{id}', [RrhhController::class, 'perfil']);
+        Route::get('/rrhh/turnos', [RrhhController::class, 'turnos']);
+        Route::post('/rrhh/turnos', [RrhhController::class, 'turnosStore']);
+        Route::put('/rrhh/turnos/{id}', [RrhhController::class, 'turnosUpdate']);
+        Route::post('/rrhh/turnos/asignar', [RrhhController::class, 'turnosAsignar']);
+        Route::get('/rrhh/propinas', [RrhhController::class, 'propinas']);
+        Route::post('/rrhh/propinas', [RrhhController::class, 'propinasStore']);
+
+        // Gestión de Permisos (Leave Management)
+        Route::get('/ausencias', [AusenciaController::class, 'index']);
+        Route::post('/ausencias', [AusenciaController::class, 'store']);
+        Route::post('/ausencias/{id}/aprobar', [AusenciaController::class, 'aprobar']);
+        Route::post('/ausencias/{id}/rechazar', [AusenciaController::class, 'rechazar']);
+        Route::post('/ausencias/{id}/cancelar', [AusenciaController::class, 'cancelar']);
+
+        // Nómina: wizard con previsualización, corridas, colillas y estructuras
+        Route::get('/nomina', [NominaController::class, 'index']);
+        Route::get('/nomina/wizard', [NominaController::class, 'wizard']);
+        Route::post('/nomina/previsualizar', [NominaController::class, 'previsualizar']);
+        Route::post('/nomina/procesar', [NominaController::class, 'procesar']);
+        Route::get('/nomina/estructuras', [NominaController::class, 'estructuras']);
+        Route::post('/nomina/estructuras', [NominaController::class, 'estructurasStore']);
+        Route::post('/nomina/estructuras/{id}/toggle', [NominaController::class, 'estructurasToggle']);
+        Route::get('/nomina/corrida/{id}', [NominaController::class, 'corrida']);
+        Route::post('/nomina/corrida/{id}/anular', [NominaController::class, 'anular']);
+        Route::get('/nomina/colilla/{id}', [NominaController::class, 'colilla']);
+        // Colilla de planillas legacy (pre-HRMS), solo lectura
+        Route::get('/nomina/legacy/{id}/ticket', [NominaController::class, 'ticketLegacy']);
+
+        // Control de Inventario y Proveedores
+        Route::get('/inventario', [InventarioController::class, 'index']);
+        Route::post('/inventario', [InventarioController::class, 'store']);
+        Route::put('/inventario/{id}', [InventarioController::class, 'update']);
+        Route::delete('/inventario/{id}', [InventarioController::class, 'destroy']);
+        Route::get('/inventario/comprar', [InventarioController::class, 'createCompra']);
+        Route::post('/inventario/comprar', [InventarioController::class, 'registrarCompra']);
+        Route::get('/mermas', [MermaController::class, 'index']);
+        Route::post('/mermas', [MermaController::class, 'store']);
+        Route::get('/inventario/kardex', [InventarioController::class, 'kardex']);
+        Route::get('/inventario/kardex/excel', [InventarioController::class, 'kardexExcel'])->name('inventario.kardex.excel');
+        Route::get('/inventario/kardex/pdf', [InventarioController::class, 'kardexPdf'])->name('inventario.kardex.pdf');
+        Route::get('/inventario/alertas-caducidad', [InventarioController::class, 'alertasCaducidad'])->name('inventario.alertas.caducidad');
+
+        Route::get('/proveedores', [ProveedorController::class, 'index']);
+        Route::post('/proveedores', [ProveedorController::class, 'store']);
+        Route::put('/proveedores/{id}', [ProveedorController::class, 'update']);
+        Route::delete('/proveedores/{id}', [ProveedorController::class, 'destroy']);
+
+        // Configuración de Catálogos y Fórmulas
+        Route::get('/servicios', [ServicioController::class, 'index']);
+        Route::post('/servicios', [ServicioController::class, 'store']);
+        Route::put('/servicios/{id}', [ServicioController::class, 'update']);
+        Route::delete('/servicios/{id}', [ServicioController::class, 'destroy']);
+
+        Route::get('/formulas', [FormulaController::class, 'index']);
+        Route::post('/formulas', [FormulaController::class, 'store']);
+        Route::delete('/formulas/{id}', [FormulaController::class, 'destroy']);
+
+        // Seguridad del Sistema
+        Route::get('/backups', [RespaldoController::class, 'index']);
+        Route::get('/backups/descargar', [RespaldoController::class, 'download']);
+        Route::post('/backups/restaurar', [RespaldoController::class, 'restore']);
     });
 
         Route::prefix('portal')->name('portal.')->group(function () {

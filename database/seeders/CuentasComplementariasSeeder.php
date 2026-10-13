@@ -15,8 +15,11 @@ use Illuminate\Support\Facades\DB;
  *
  *  - 1.1.1.1  Caja Córdobas (NIO)          (fase 1, se conserva por compatibilidad)
  *  - 1.1.1.2  Caja Dólares (USD)           (fase 1)
+ *  - 1.1.1.3  Propinas en Custodia         (HRMS nómina)
  *  - 1.1.2.3  Banco BAC Dólares (USD)
  *  - 1.1.2.4  Banco Lafise Dólares (USD)
+ *  - 2.1.5    Retenciones por Pagar (INSS/IR)  (nómina)
+ *  - 2.1.6    Propinas por Pagar               (HRMS nómina)
  *  - 4.6      Ganancia por Diferencial de Cambio
  *  - 4.7      Ingresos por Intereses y Rendimientos
  *  - 6.9      Comisiones y Cargos Bancarios
@@ -28,8 +31,11 @@ class CuentasComplementariasSeeder extends Seeder
     {
         $this->asegurar('1.1.1.1', 'Caja Córdobas (NIO)', 'activo', 'deudora', '1.1.1');
         $this->asegurar('1.1.1.2', 'Caja Dólares (USD)', 'activo', 'deudora', '1.1.1');
+        $this->asegurar('1.1.1.3', 'Propinas en Custodia', 'activo', 'deudora', '1.1.1');
         $this->asegurar('1.1.2.3', 'Banco BAC Dólares (USD)', 'activo', 'deudora', '1.1.2');
         $this->asegurar('1.1.2.4', 'Banco Lafise Dólares (USD)', 'activo', 'deudora', '1.1.2');
+        $this->asegurar('2.1.5', 'Retenciones por Pagar (INSS/IR)', 'pasivo', 'acreedora', '2.1');
+        $this->asegurar('2.1.6', 'Propinas por Pagar', 'pasivo', 'acreedora', '2.1');
         $this->asegurar('4.6', 'Ganancia por Diferencial de Cambio', 'ingreso', 'acreedora', '4');
         $this->asegurar('4.7', 'Ingresos por Intereses y Rendimientos', 'ingreso', 'acreedora', '4');
         $this->asegurar('6.9', 'Comisiones y Cargos Bancarios', 'gasto', 'deudora', '6');
@@ -43,7 +49,7 @@ class CuentasComplementariasSeeder extends Seeder
         }
 
         $padre = DB::table('cuentas_contables')->where('codigo', $codigoPadre)->first();
-        if (!$padre) {
+        if (! $padre) {
             return; // sin padre en el catálogo todavía: se insertará en la próxima corrida
         }
 
