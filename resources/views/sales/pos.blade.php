@@ -49,13 +49,26 @@
         <!-- Grid de Tarjetas de Artículos (Actualizado con los datos reales del Seeder) -->
         <div class="grid grid-cols-2 md:grid-cols-3 gap-4">
     
-            <!-- Imprimir los Servicios -->
+            <!-- Imprimir los Servicios (con variantes de precio y fórmulas) -->
             @foreach($servicios as $servicio)
-            <div @click="addItem({ id: {{ $servicio->id }}, producto: '{{ $servicio->name }}', precio_c: {{ $servicio->price }}, type: 'servicio' })" 
+            @php
+                $rango = $servicio->rangoPrecios();
+                $tieneVariantes = $rango !== null;
+            @endphp
+            <div @click="clicServicio({{ $servicio->id }})"
                 class="bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg p-4 cursor-pointer transition shadow-sm">
                 <span class="text-xs font-semibold text-emerald-600 uppercase">Servicio</span>
                 <h3 class="font-bold text-gray-800 mt-1">{{ $servicio->name }}</h3>
-                <p class="text-emerald-700 font-bold mt-2">C$ {{ number_format($servicio->price, 2) }}</p>
+                <p class="text-emerald-700 font-bold mt-2">
+                    @if ($tieneVariantes)
+                        Desde C$ {{ number_format($rango[0], 2) }}
+                    @else
+                        C$ {{ number_format($servicio->price, 2) }}
+                    @endif
+                </p>
+                @if ($tieneVariantes)
+                    <p class="text-[10px] text-emerald-600 font-bold uppercase mt-0.5">{{ $servicio->variantes->where('is_active', true)->count() }} variantes · haz clic para elegir</p>
+                @endif
             </div>
             @endforeach
 
@@ -85,6 +98,12 @@
                         <div>
                             <h4 class="font-bold text-sm text-gray-800" x-text="item.producto"></h4>
                             <p class="text-xs text-gray-500" x-text="'C$ ' + item.precio_c + ' x ' + item.quantity"></p>
+                            <!-- BOM DINÁMICO: editor de consumo real de insumos -->
+                            <button x-show="item.type === 'servicio' && servicioInfo(item.id) !== null"
+                                    @click="abrirConsumo(index)" type="button"
+                                    class="mt-1 text-[10px] font-bold rounded px-1.5 py-0.5 border transition"
+                                    :class="item.consumo ? 'bg-blue-50 text-blue-700 border-blue-300' : 'bg-white text-gray-500 border-gray-300 hover:border-blue-300 hover:text-blue-600'"
+                                    x-text="'Insumos' + (item.consumo ? ' ✓' : ' (estándar)')"></button>
                         </div>
                         <div class="flex items-center space-x-3">
                             <span class="font-bold text-sm text-gray-900" x-text="'C$ ' + (item.precio_c * item.quantity).toFixed(2)"></span>
@@ -319,7 +338,108 @@
             </div>
         </div>
     </div>
+
+    <!-- ===== MODAL: SELECTOR DE VARIANTE (Fase 1 Administración) ===== -->
+    <div x-show="modalVariante.open" style="display: none;" class="fixed inset-0 z-[85] overflow-y-auto bg-gray-900/60 backdrop-blur-sm">
+        <div class="flex items-center justify-center min-h-screen px-4">
+            <div class="relative bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+                <div class="bg-emerald-800 text-white px-6 py-4">
+                    <h3 class="text-lg font-bold" x-text="modalVariante.servicio?.name"></h3>
+                    <p class="text-emerald-200 text-xs">Elige la variante para el precio</p>
+                </div>
+
+                <div class="p-4 space-y-2">
+                    <button type="button" @click="agregarBase()"
+                            class="w-full flex items-center justify-between bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-lg px-4 py-3 transition">
+                        <span class="font-bold text-sm text-gray-800">Precio base</span>
+                        <span class="font-bold text-emerald-700" x-text="'C$ ' + parseFloat(modalVariante.servicio?.price || 0).toFixed(2)"></span>
+                    </button>
+
+                    <template x-for="variante in (modalVariante.servicio?.variantes || [])" :key="variante.id">
+                        <button type="button" @click="agregarConVariante(variante)"
+                                class="w-full flex items-center justify-between bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg px-4 py-3 transition">
+                            <span class="font-bold text-sm text-gray-800" x-text="variante.name"></span>
+                            <span class="font-bold text-emerald-700" x-text="'C$ ' + parseFloat(variante.price).toFixed(2)"></span>
+                        </button>
+                    </template>
+                </div>
+
+                <div class="px-6 py-3 bg-gray-50 border-t border-gray-100 text-right">
+                    <button @click="modalVariante = { open: false, servicio: null }" type="button" class="btn btn-secondary">Cancelar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== MODAL: CONSUMO REAL DE INSUMOS (BOM dinámico) ===== -->
+    <div x-show="modalConsumo.open" style="display: none;" class="fixed inset-0 z-[85] overflow-y-auto bg-gray-900/60 backdrop-blur-sm">
+        <div class="flex items-center justify-center min-h-screen px-4 py-8">
+            <div class="relative bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+                <div class="bg-blue-700 text-white px-6 py-4">
+                    <h3 class="text-lg font-bold">Consumo Real de Insumos</h3>
+                    <p class="text-blue-200 text-xs" x-text="modalConsumo.item?.producto || ''"></p>
+                </div>
+
+                <div class="p-5 space-y-3">
+                    <p class="text-xs text-gray-500">
+                        Ajusta cuánto producto <strong>realmente</strong> gastó el estilista. El inventario se descontará con estos valores exactos (la fórmula estándar queda como referencia).
+                    </p>
+
+                    <template x-for="(fila, i) in modalConsumo.filas" :key="fila.item_id">
+                        <div class="flex items-center justify-between gap-3 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+                            <div class="flex-1">
+                                <div class="text-sm font-bold text-gray-800" x-text="fila.producto"></div>
+                                <div class="text-[11px] text-gray-400" x-text="'Estándar: ' + fila.estandar + ' ' + fila.unit_measure"></div>
+                            </div>
+                            <input type="number" step="0.1" min="0" x-model.number="fila.real"
+                                   class="w-24 text-center shadow-sm border border-gray-300 rounded py-1 px-2 text-sm font-bold text-blue-700">
+                            <span class="text-xs text-gray-500" x-text="fila.unit_measure"></span>
+                        </div>
+                    </template>
+
+                    <p x-show="modalConsumo.filas.length === 0" class="text-center text-sm text-gray-400 py-4">
+                        Este servicio no tiene fórmula de insumos configurada.
+                    </p>
+                </div>
+
+                <div class="px-6 py-4 bg-gray-50 border-t border-gray-100 flex flex-row-reverse gap-2">
+                    <button @click="guardarConsumo()" type="button" class="btn btn-primary">Aplicar Consumo</button>
+                    <button @click="modalConsumo = { open: false, index: null, item: null, filas: [] }" type="button" class="btn btn-secondary">Cancelar</button>
+                </div>
+            </div>
+        </div>
+    </div>
 </div>
+
+@php
+    // Datos para Alpine: variantes de precio y fórmulas (BOM) por servicio.
+    $serviciosData = $servicios->map(function ($servicio) {
+        return [
+            'id' => $servicio->id,
+            'name' => $servicio->name,
+            'price' => (float) $servicio->price,
+            'variantes' => $servicio->variantes->where('is_active', true)->map(function ($variante) {
+                return [
+                    'id' => $variante->id,
+                    'name' => $variante->name,
+                    'price' => (float) $variante->price,
+                ];
+            })->values(),
+            'formulas' => $servicio->formulas->map(function ($formula) {
+                return [
+                    'item_id' => $formula->item_id,
+                    'producto' => $formula->articulo?->producto ?? '',
+                    'unit_measure' => $formula->articulo?->unit_measure ?: 'ml',
+                    'quantity_used' => (float) $formula->quantity_used,
+                ];
+            })->values(),
+        ];
+    })->values();
+@endphp
+
+<script>
+    window.posServicios = @json($serviciosData);
+</script>
 
 <script>
     function posSystem() {
@@ -327,6 +447,11 @@
             cart: [],
             discount: 0,
             clientId: '',
+
+            // FASE 1 ADMINISTRACIÓN: catálogo con variantes y fórmulas para el POS
+            serviciosData: window.posServicios || [],
+            modalVariante: { open: false, servicio: null },
+            modalConsumo: { open: false, index: null, item: null, filas: [] },
 
             // CICLO DE VIDA DEL DOCUMENTO
             esCredito: false,
@@ -563,12 +688,104 @@
                 this.cobroId = null;
             },
 
+            // =========================================================
+            // FASE 1 ADMINISTRACIÓN: VARIANTES DE PRECIO Y CONSUMO REAL
+            // =========================================================
+
+            // Info del servicio (variantes/fórmulas); null para productos
+            servicioInfo(id) {
+                return this.serviciosData.find(s => s.id === id) || null;
+            },
+
+            clicServicio(id) {
+                if (this.cobroId) {
+                    window.dispatchEvent(new CustomEvent('notify', { detail: 'Al cobrar una factura a crédito el detalle no puede modificarse.' }));
+                    return;
+                }
+                const servicio = this.servicioInfo(id);
+                if (!servicio) return;
+
+                // Servicio con variantes: primero se elige Corto/Medio/Largo
+                if (servicio.variantes && servicio.variantes.length > 0) {
+                    this.modalVariante = { open: true, servicio: servicio };
+                    return;
+                }
+
+                this.addItem({ id: servicio.id, producto: servicio.name, precio_c: servicio.price, type: 'servicio' });
+            },
+
+            agregarBase() {
+                const servicio = this.modalVariante.servicio;
+                if (!servicio) return;
+                this.addItem({ id: servicio.id, producto: servicio.name, precio_c: servicio.price, type: 'servicio' });
+                this.modalVariante = { open: false, servicio: null };
+            },
+
+            agregarConVariante(variante) {
+                const servicio = this.modalVariante.servicio;
+                if (!servicio) return;
+                this.addItem({
+                    id: servicio.id,
+                    producto: servicio.name + ' (' + variante.name + ')',
+                    precio_c: variante.price,
+                    type: 'servicio',
+                    variant_id: variante.id
+                });
+                this.modalVariante = { open: false, servicio: null };
+            },
+
+            abrirConsumo(index) {
+                if (this.cobroId) {
+                    window.dispatchEvent(new CustomEvent('notify', { detail: 'Al cobrar una factura a crédito el detalle no puede modificarse.' }));
+                    return;
+                }
+                const item = this.cart[index];
+                const servicio = item ? this.servicioInfo(item.id) : null;
+
+                if (!servicio || !servicio.formulas || servicio.formulas.length === 0) {
+                    window.dispatchEvent(new CustomEvent('notify', { detail: 'Este servicio no tiene fórmula de insumos configurada.' }));
+                    return;
+                }
+
+                // Precargar: consumos ya guardados (cotización cargada) o estándar
+                const previos = item.consumo || [];
+                this.modalConsumo = {
+                    open: true,
+                    index: index,
+                    item: item,
+                    filas: servicio.formulas.map(function (f) {
+                        const previo = previos.find(c => c.item_id === f.item_id);
+                        return {
+                            item_id: f.item_id,
+                            producto: f.producto,
+                            unit_measure: f.unit_measure,
+                            estandar: f.quantity_used,
+                            real: previo ? previo.cantidad : f.quantity_used
+                        };
+                    })
+                };
+            },
+
+            guardarConsumo() {
+                const item = this.cart[this.modalConsumo.index];
+                if (item) {
+                    item.consumo = this.modalConsumo.filas.map(function (f) {
+                        return { item_id: f.item_id, cantidad: parseFloat(f.real) || 0 };
+                    });
+                }
+                this.modalConsumo = { open: false, index: null, item: null, filas: [] };
+            },
+
             addItem(product) {
                 if (this.cobroId) {
                     window.dispatchEvent(new CustomEvent('notify', { detail: 'Al cobrar una factura a crédito el detalle no puede modificarse.' }));
                     return;
                 }
-                let existingItem = this.cart.find(item => item.id === product.id && item.type === product.type);
+                // Dos líneas con misma variante se acumulan; variantes distintas son líneas separadas
+                let existingItem = this.cart.find(item =>
+                    item.id === product.id && item.type === product.type &&
+                    (item.variant_id || null) === (product.variant_id || null)
+                );
                 if (existingItem) {
                     existingItem.quantity++;
                 } else {
@@ -577,7 +794,9 @@
                         producto: product.producto,
                         precio_c: product.precio_c,
                         type: product.type,
-                        quantity: 1
+                        quantity: 1,
+                        variant_id: product.variant_id || null,
+                        consumo: product.consumo || null
                     });
                 }
             },

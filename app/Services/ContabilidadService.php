@@ -291,9 +291,18 @@ class ContabilidadService
     }
     
     /**
-     * Desglose del ingreso de una venta: subtotales brutos, reparto proporcional
-     * del descuento entre servicios y productos, y costos (insumos y mercadería).
-     * Todos los importes se devuelven en moneda base según la $tasa indicada.
+     * Desglose del ingreso de una venta: subtotales BRUTOS por tipo, reparto
+     * proporcional del descuento entre servicios y productos, y costos (insumos
+     * y mercadería). Todos los importes se devuelven en moneda base según la
+     * $tasa indicada.
+     *
+     * CORRECCIÓN DE CUADRE (octubre 2026): el HABER de ingresos debe ser el
+     * BRUTO. El descuento ya se registra como DEBE contra-ingreso (4.5) en
+     * registrarLineasIngreso(); si el HABER fuera neto, el descuento se
+     * restaría dos veces y el asiento descuadraría exactamente por el
+     * descuento. Con HABER bruto: DEBE (pagos + descuento) == HABER (bruto +
+     * vuelto) en venta cobrada, y DEBE (CxC + descuento) == HABER bruto en
+     * venta a crédito.
      */
     protected function desgloseIngresoVenta($sale, float $tasa): array
     {
@@ -344,8 +353,8 @@ class ContabilidadService
         }
 
         return [
-            'servicios_neto' => $subtotalBrutoServicios - $descuentoServicios,
-            'productos_neto' => $subtotalBrutoProductos - $descuentoProductos,
+            'servicios_bruto' => $subtotalBrutoServicios,
+            'productos_bruto' => $subtotalBrutoProductos,
             'descuento_servicios' => $descuentoServicios,
             'descuento_productos' => $descuentoProductos,
             'costo_insumos' => $costoInsumosConsumidos,
@@ -359,27 +368,27 @@ class ContabilidadService
      */
     protected function registrarLineasIngreso($asientoIngreso, array $d, int $monedaBase, $sale): void
     {
-        // HABER: Ingreso por Servicios (neto de descuento)
-        if ($d['servicios_neto'] > 0) {
+        // HABER: Ingreso BRUTO por Servicios (el descuento baja por 4.5 en DEBE)
+        if ($d['servicios_bruto'] > 0) {
             DetalleAsiento::create([
                 'asiento_id' => $asientoIngreso->id,
                 'cuenta_id' => $this->getCuentaIdByCodigo('4.1'),
                 'moneda_id' => $monedaBase,
                 'debe' => 0,
-                'haber' => round($d['servicios_neto'], 2),
-                'descripcion' => 'Ingreso neto por servicios brindados',
+                'haber' => round($d['servicios_bruto'], 2),
+                'descripcion' => 'Ingreso bruto por servicios brindados',
             ]);
         }
 
-        // HABER: Ingreso por Productos (neto de descuento)
-        if ($d['productos_neto'] > 0) {
+        // HABER: Ingreso BRUTO por Productos (el descuento baja por 4.5 en DEBE)
+        if ($d['productos_bruto'] > 0) {
             DetalleAsiento::create([
                 'asiento_id' => $asientoIngreso->id,
                 'cuenta_id' => $this->getCuentaIdByCodigo('4.4'),
                 'moneda_id' => $monedaBase,
                 'debe' => 0,
-                'haber' => round($d['productos_neto'], 2),
-                'descripcion' => 'Ingreso neto por venta directa de productos',
+                'haber' => round($d['productos_bruto'], 2),
+                'descripcion' => 'Ingreso bruto por venta directa de productos',
             ]);
         }
 

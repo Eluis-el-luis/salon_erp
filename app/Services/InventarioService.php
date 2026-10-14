@@ -40,20 +40,63 @@ class InventarioService
 
     protected function descontarInsumosDeServicio($detalle, array &$stockCritico): void
     {
-        $servicio = Servicio::with('formulas.articulo')->find($detalle->service_id);
-        if (!$servicio) {
-            return;
+        // BOM DINÁMICO: consume lo capturado como consumo real (POS) o la
+        // fórmula estándar si la línea no guardó consumos.
+        foreach ($this->consumosDeDetalle($detalle) as $consumo) {
+            $cantidadADescontar = $consumo['cantidad'] * (float) $detalle->quantity;
+            $this->consumirVolumen($consumo['articulo'], $cantidadADescontar, $stockCritico);
         }
+    }
 
-        foreach ($servicio->formulas as $formula) {
-            $articulo = $formula->articulo;
-            if (!$articulo) {
-                continue;
+    /**
+     * FASE 1 ADMINISTRACIÓN - CONSUMO REAL vs ESTÁNDAR (BOM dinámico):
+     * Resuelve los insumos a descontar de una línea de venta de servicio.
+     *  1. Si la línea guardó consumos reales (sale_detail_consumptions,
+     *     editados por recepción antes de facturar), ESA ES LA FUENTE DE VERDAD
+     *     tanto para descontar como para revertir el inventario.
+     *  2. Si no hay consumos guardados, aplica la fórmula estándar del servicio.
+     *
+     * @return array<int, array{articulo: Articulo, cantidad: float}> (cantidad por cada unidad de servicio)
+     */
+    public function consumosDeDetalle($detalle): array
+    {
+        $detalle->loadMissing('consumos.articulo');
+
+        if ($detalle->consumos->isNotEmpty()) {
+            $consumos = [];
+
+            foreach ($detalle->consumos as $consumo) {
+                if ($consumo->articulo && (float) $consumo->quantity_actual > 0) {
+                    $consumos[] = [
+                        'articulo' => $consumo->articulo,
+                        'cantidad' => (float) $consumo->quantity_actual,
+                    ];
+                }
             }
 
-            $cantidadADescontar = $formula->quantity_used * $detalle->quantity;
-            $this->consumirVolumen($articulo, $cantidadADescontar, $stockCritico);
+            if (count($consumos) > 0) {
+                return $consumos;
+            }
         }
+
+        // Fallback: receta estándar (BOM) vigente del servicio
+        $servicio = Servicio::with('formulas.articulo')->find($detalle->service_id);
+        if (!$servicio) {
+            return [];
+        }
+
+        $consumos = [];
+
+        foreach ($servicio->formulas as $formula) {
+            if ($formula->articulo && (float) $formula->quantity_used > 0) {
+                $consumos[] = [
+                    'articulo' => $formula->articulo,
+                    'cantidad' => (float) $formula->quantity_used,
+                ];
+            }
+        }
+
+        return $consumos;
     }
 
     /**
@@ -229,19 +272,12 @@ class InventarioService
             }
 
             if ($detalle->service_id != null) {
-                $servicio = Servicio::with('formulas.articulo')->find($detalle->service_id);
-                if (!$servicio) {
-                    continue;
-                }
-
-                foreach ($servicio->formulas as $formula) {
-                    $articulo = $formula->articulo;
-                    if (!$articulo) {
-                        continue;
-                    }
-
-                    $volumenDevuelto = (float) $formula->quantity_used * (float) $detalle->quantity;
-                    $this->revertirVolumen($articulo, $volumenDevuelto);
+                // La reversión usa la MISMA fuente de verdad que el descuento
+                // (consumo real fotografiado o fórmula estándar), garantizando
+                // exactitud aunque la fórmula del catálogo cambie a posteriori.
+                foreach ($this->consumosDeDetalle($detalle) as $consumo) {
+                    $volumenDevuelto = $consumo['cantidad'] * (float) $detalle->quantity;
+                    $this->revertirVolumen($consumo['articulo'], $volumenDevuelto);
                 }
             }
         }

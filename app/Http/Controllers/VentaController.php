@@ -5,6 +5,11 @@ namespace App\Http\Controllers;
 use App\Models\Venta;
 use App\Models\DetalleVenta;
 use App\Models\Cita;
+use App\Models\Cliente;
+use App\Models\ClienteGrupo;
+use App\Models\ConsumoVenta;
+use App\Models\FormulaServicio;
+use App\Models\ServicioVariante;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
@@ -155,7 +160,13 @@ class VentaController extends Controller
 
         $request->validate([
             'cart' => 'required|array',
-            'discount' => 'numeric|min:0',
+            // nullable: si el POS omite el descuento, se aplica el % del grupo del cliente
+            'discount' => 'nullable|numeric|min:0',
+            'cart.*.variant_id' => 'nullable|integer',
+            // BOM DINÁMICO: consumo real editado por recepción antes de facturar
+            'cart.*.consumo' => 'nullable|array',
+            'cart.*.consumo.*.item_id' => 'required|integer|exists:items,id',
+            'cart.*.consumo.*.cantidad' => 'required|numeric|min:0',
             // PAGOS MIXTOS: arreglo de pagos. Si no viene, se usa el pago único legacy.
             'payments' => 'nullable|array',
             'payments.*.metodo' => 'required|in:efectivo,bac,lafise',
@@ -205,13 +216,32 @@ class VentaController extends Controller
                 return $item['precio_c'] * $item['quantity'];
             });
 
-            $total = $subtotal - $request->discount;
+            // FIDELIZACIÓN: si el POS no envía descuento manual, se aplica el %
+            // del grupo del cliente (VIP/Mayorista). Con descuento explícito,
+            // manda el capturado en pantalla.
+            $descuento = $request->filled('discount')
+                ? (float) $request->discount
+                : $this->descuentoPorGrupo($request->client_id, $subtotal);
+
+            $total = $subtotal - $descuento;
 
             $nuevoEstado = match ($accion) {
                 'cotizar' => Venta::ESTADO_BORRADOR,
                 'credito' => Venta::ESTADO_EMITIDA,
                 default => Venta::ESTADO_PAGADA,
             };
+
+            // REGLA DE CxC (Fase 1 Administración): una factura a crédito se
+            // bloquea si el cliente excede su límite o tiene facturas vencidas.
+            // Se evalúa con lockForUpdate DENTRO de la transacción para evitar
+            // carreras entre cajas simultáneas.
+            if ($nuevoEstado === Venta::ESTADO_EMITIDA && $request->client_id) {
+                $cliente = Cliente::where('id', $request->client_id)->lockForUpdate()->firstOrFail();
+
+                if ($motivo = $cliente->motivoBloqueoCredito((float) $total)) {
+                    throw new \App\Exceptions\ContabilidadException($motivo);
+                }
+            }
 
             $appointmentId = collect($request->cart)->pluck('appointment_id')->filter()->first();
 
@@ -230,7 +260,7 @@ class VentaController extends Controller
                 $venta->update([
                     'client_id' => $request->client_id,
                     'subtotal' => $subtotal,
-                    'discount' => $request->discount,
+                    'discount' => $descuento,
                     'total' => $total > 0 ? $total : 0,
                     'currency' => $currency,
                     'exchange_rate' => $exchangeRate,
@@ -243,7 +273,7 @@ class VentaController extends Controller
                     'client_id' => $request->client_id,
                     'appointment_id' => $appointmentId,
                     'subtotal' => $subtotal,
-                    'discount' => $request->discount,
+                    'discount' => $descuento,
                     'total' => $total > 0 ? $total : 0,
 
                     // Método principal derivado del primer pago
@@ -255,16 +285,34 @@ class VentaController extends Controller
                 ]);
             }
 
-            foreach ($request->cart as $cartItem) {
+            $detallesCreados = [];
+
+            foreach ($request->cart as $index => $cartItem) {
                 $esServicio = $cartItem['type'] === 'servicio';
 
-                \App\Models\DetalleVenta::create([
+                // VARIANTES DE PRECIO: validar que la variante pertenezca al
+                // servicio facturado (no confiar en el payload del navegador).
+                $variantId = null;
+                if ($esServicio && !empty($cartItem['variant_id'])) {
+                    $variante = ServicioVariante::find($cartItem['variant_id']);
+
+                    if (!$variante || (int) $variante->service_id !== (int) $cartItem['id']) {
+                        throw new \App\Exceptions\ContabilidadException(
+                            'La variante seleccionada no pertenece al servicio facturado.'
+                        );
+                    }
+
+                    $variantId = $variante->id;
+                }
+
+                $detallesCreados[$index] = \App\Models\DetalleVenta::create([
                     'sale_id' => $venta->id,
                     'service_id' => $esServicio ? $cartItem['id'] : null,
                     'item_id' => $esServicio ? null : $cartItem['id'],
-                    'stylist_id' => isset($cartItem['stylist_id']) ? $cartItem['stylist_id'] : null, 
+                    'service_variant_id' => $variantId,
+                    'stylist_id' => isset($cartItem['stylist_id']) ? $cartItem['stylist_id'] : null,
                     'quantity' => $cartItem['quantity'],
-                    'unit_price' => $cartItem['precio_c'] 
+                    'unit_price' => $cartItem['precio_c']
                 ]);
 
                 if (isset($cartItem['appointment_id']) && $accion !== 'cotizar') {
@@ -272,6 +320,10 @@ class VentaController extends Controller
                         ->update(['status' => 'completada']);
                 }
             }
+
+            // BOM DINÁMICO: persistir el consumo real editado por recepción
+            // (fuente de verdad del descuento de inventario y su reversión).
+            $this->registrarConsumosReales($request->cart, $detallesCreados);
 
             $venta->load('detalles');
 
@@ -339,6 +391,71 @@ class VentaController extends Controller
                 'request' => $request->all(),
             ]);
             return response()->json(['error' => 'Error al guardar la venta. Contacte al administrador.'], 500);
+        }
+    }
+
+    /**
+     * FIDELIZACIÓN (Fase 1): descuento automático por grupo del cliente
+     * (VIP/Mayorista) sobre el subtotal. Solo aplica cuando el POS NO envía
+     * un descuento explícito; el descuento capturado en pantalla manda.
+     */
+    private function descuentoPorGrupo($clientId, float $subtotal): float
+    {
+        if (!$clientId) {
+            return 0.0;
+        }
+
+        $cliente = Cliente::find($clientId);
+        $porcentaje = (float) ($cliente?->grupo?->discount_percent ?? 0);
+
+        return $porcentaje > 0 ? round($subtotal * $porcentaje / 100, 2) : 0.0;
+    }
+
+    /**
+     * BOM DINÁMICO (Fase 1): persiste el consumo REAL de insumos editado por
+     * recepción antes de facturar. Cada registro guarda también el consumo de
+     * la fórmula estándar (quantity_standard) para auditar la desviación.
+     * Solo se aceptan insumos que pertenecen a la fórmula del servicio;
+     * InventarioService usará estos valores como fuente de verdad para
+     * descontar inventario y revertirlo exactamente al anular.
+     */
+    protected function registrarConsumosReales(array $cart, array $detalles): void
+    {
+        foreach ($cart as $index => $cartItem) {
+            $consumos = $cartItem['consumo'] ?? null;
+
+            if (($cartItem['type'] ?? null) !== 'servicio' || !is_array($consumos) || count($consumos) === 0) {
+                continue;
+            }
+
+            $detalle = $detalles[$index] ?? null;
+
+            if (!$detalle || !$detalle->service_id) {
+                continue;
+            }
+
+            $formulas = FormulaServicio::where('service_id', $detalle->service_id)
+                ->withTrashed()
+                ->get()
+                ->keyBy('item_id');
+
+            foreach ($consumos as $consumo) {
+                $itemId = (int) ($consumo['item_id'] ?? 0);
+                $formula = $formulas->get($itemId);
+
+                if (!$formula) {
+                    throw new \App\Exceptions\ContabilidadException(
+                        'El insumo seleccionado no pertenece a la fórmula del servicio facturado. No se puede registrar el consumo real.'
+                    );
+                }
+
+                ConsumoVenta::create([
+                    'sale_detail_id' => $detalle->id,
+                    'item_id' => $itemId,
+                    'quantity_standard' => (float) $formula->quantity_used,
+                    'quantity_actual' => round((float) ($consumo['cantidad'] ?? 0), 2),
+                ]);
+            }
         }
     }
 
@@ -642,7 +759,7 @@ class VentaController extends Controller
      */
     public function documento($id)
     {
-        $venta = Venta::with(['detalles.servicio', 'detalles.articulo', 'cliente'])->findOrFail($id);
+        $venta = Venta::with(['detalles.servicio', 'detalles.articulo', 'detalles.consumos', 'detalles.variante', 'cliente'])->findOrFail($id);
 
         if (!in_array($venta->status, [Venta::ESTADO_BORRADOR, Venta::ESTADO_EMITIDA])) {
             return response()->json(['error' => 'Solo se pueden cargar cotizaciones o facturas pendientes de cobro.'], 422);
@@ -657,11 +774,18 @@ class VentaController extends Controller
             'items' => $venta->detalles->map(function ($d) {
                 return [
                     'id' => $d->service_id ?? $d->item_id,
-                    'producto' => $d->servicio?->name ?? $d->articulo?->producto ?? 'Artículo',
+                    'producto' => trim(($d->servicio?->name ?? $d->articulo?->producto ?? 'Artículo')
+                        . ($d->variante ? ' (' . $d->variante->name . ')' : '')),
                     'precio_c' => (float) $d->unit_price,
                     'type' => $d->service_id ? 'servicio' : 'producto',
                     'quantity' => (int) $d->quantity,
                     'stylist_id' => $d->stylist_id,
+                    'variant_id' => $d->service_variant_id,
+                    // BOM dinámico: consumos reales ya guardados de esta línea
+                    'consumo' => $d->consumos->map(fn ($c) => [
+                        'item_id' => $c->item_id,
+                        'cantidad' => (float) $c->quantity_actual,
+                    ])->values(),
                 ];
             })->values(),
         ]);

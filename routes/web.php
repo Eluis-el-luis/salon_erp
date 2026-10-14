@@ -72,6 +72,8 @@ Route::middleware(['auth'])->group(function () {
     Route::post('/clientes', [ClienteController::class, 'store']);
     Route::put('/clientes/{id}', [ClienteController::class, 'update']);
     Route::delete('/clientes/{id}', [ClienteController::class, 'destroy']);
+    // CUSTOMER 360: perfil financiero del cliente (citas, facturas, CxC)
+    Route::get('/clientes/{id}', [ClienteController::class, 'show']);
 
 
     // -------------------------------------------------------------
@@ -82,10 +84,15 @@ Route::middleware(['auth'])->group(function () {
     Route::middleware(['role:recepcion,contador'])->group(function () {
         
         Route::get('/pos', function () {
-            $servicios = \App\Models\Servicio::where('is_active', true)->orderBy('name', 'asc')->get();
+            // Fase 1 Administración: variantes de precio y fórmulas (BOM) para
+            // el selector de variantes y el editor de consumo real en el POS.
+            $servicios = \App\Models\Servicio::with(['variantes', 'formulas.articulo'])
+                ->where('is_active', true)
+                ->orderBy('name', 'asc')
+                ->get();
             $productos = \App\Models\Articulo::where('type', '!=', 'servicio')->orderBy('producto', 'asc')->get();
-            $clientes = \App\Models\Cliente::orderBy('name', 'asc')->get();
-            
+            $clientes = \App\Models\Cliente::with('grupo')->orderBy('name', 'asc')->get();
+
             return view('sales.pos', compact('servicios', 'productos', 'clientes'));
         });
 
@@ -250,10 +257,16 @@ Route::middleware(['auth'])->group(function () {
         Route::post('/servicios', [ServicioController::class, 'store']);
         Route::put('/servicios/{id}', [ServicioController::class, 'update']);
         Route::delete('/servicios/{id}', [ServicioController::class, 'destroy']);
+        // Fase 1: alta rápida de categorías de servicios
+        Route::post('/servicios/categorias', [ServicioController::class, 'storeCategoria']);
 
         Route::get('/formulas', [FormulaController::class, 'index']);
         Route::post('/formulas', [FormulaController::class, 'store']);
+        Route::put('/formulas/{id}', [FormulaController::class, 'update']);
         Route::delete('/formulas/{id}', [FormulaController::class, 'destroy']);
+
+        // Fase 1: grupos de clientes (fidelización y descuento automático)
+        Route::post('/clientes/grupos', [ClienteController::class, 'storeGrupo']);
 
         // Seguridad del Sistema
         Route::get('/backups', [RespaldoController::class, 'index']);

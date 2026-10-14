@@ -18,6 +18,7 @@ class DatabaseSeeder extends Seeder
             FormulaSeeder::class,
             ContabilidadBaseSeeder::class,
             CuentasComplementariasSeeder::class,
+            AdminCatalogoSeeder::class, // Grupos de clientes, categorías de servicios y plantillas de impuestos
             RrhhBaseSeeder::class, // Tipos de ausencia, turnos y estructura salarial estándar
         ]);
     }
