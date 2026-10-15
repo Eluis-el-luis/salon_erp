@@ -18,6 +18,7 @@
     },
     "dependencies": {
         "alpinejs": "^3.15.12",
+        "chart.js": "^4.4.1",
         "cloudflared": "^0.7.3"
     }
 }

@@ -52,7 +52,22 @@ Route::middleware(['auth'])->group(function () {
     // son operaciones básicas que todo el equipo necesita hacer.
     
     Route::get('/', [PanelController::class, 'index']);
-    
+
+    // -------------------------------------------------------------
+    // DASHBOARD BI (SPA asíncrona): endpoints JSON del Centro de Mando.
+    // Viven en web.php (no en api.php) a propósito: la sesión web + CSRF
+    // protege estos datos y el frontend del panel no usa tokens Sanctum.
+    // Fuente de datos: Libro Mayor vía DashboardService.
+    // -------------------------------------------------------------
+    Route::prefix('panel/api')->name('panel.')->group(function () {
+        // Payload BI del rango (KPIs del mayor, serie, métodos, ranking, meta)
+        Route::get('datos', [PanelController::class, 'datos'])->name('datos');
+        // Quick View (modal) de un movimiento de caja con su asiento
+        Route::get('movimientos/{id}', [PanelController::class, 'movimiento'])->name('movimiento');
+        // Meta mensual dinámica (solo administrador)
+        Route::post('meta', [PanelController::class, 'guardarMeta'])->middleware('role:admin')->name('meta');
+    });
+
     Route::get('/agenda', function () {
         $citas = Cita::with(['cliente', 'servicio'])
                             ->whereDate('appointment_date', today())

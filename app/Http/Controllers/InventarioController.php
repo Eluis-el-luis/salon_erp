@@ -19,15 +19,19 @@ use Maatwebsite\Excel\Facades\Excel;
 class InventarioController extends Controller
 {
     // 1. Leer: Mostrar la tabla de inventario
-    public function index()
+    // Drill-down del Dashboard: ?stock=critico filtra los artículos en o bajo
+    // su mínimo (mismo criterio que el KPI "Inventario crítico" del panel).
+    public function index(Request $request)
     {
+        $soloCriticos = $request->query('stock') === 'critico';
 
         $articulos = Articulo::where('type', '!=', 'servicio')
+            ->when($soloCriticos, fn ($q) => $q->whereColumn('existencia_actual', '<=', 'stock_min'))
             ->orderBy('producto', 'asc')
             ->get();
         $proveedores = Proveedor::all();
 
-        return view('inventory.index', compact('articulos', 'proveedores'));
+        return view('inventory.index', compact('articulos', 'proveedores', 'soloCriticos'));
     }
 
     public function store(Request $request)
