@@ -13,6 +13,7 @@ class Lote extends Model
 
     protected $fillable = [
         'item_id',
+        'purchase_invoice_line_id',
         'lote',
         'fecha_entrada',
         'fecha_vencimiento',

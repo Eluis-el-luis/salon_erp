@@ -16,6 +16,7 @@ use App\Http\Controllers\RespaldoController;
 use App\Http\Controllers\NominaController;
 use App\Http\Controllers\FormulaController;
 use App\Http\Controllers\ProveedorController;
+use App\Http\Controllers\FacturaCompraController;
 use App\Http\Controllers\ReporteController;
 use App\Http\Controllers\AutenticacionController;
 use App\Http\Controllers\ContabilidadController;
@@ -245,9 +246,15 @@ Route::middleware(['auth'])->group(function () {
         Route::get('/inventario/kardex', [InventarioController::class, 'kardex']);
         Route::get('/inventario/kardex/excel', [InventarioController::class, 'kardexExcel'])->name('inventario.kardex.excel');
         Route::get('/inventario/kardex/pdf', [InventarioController::class, 'kardexPdf'])->name('inventario.kardex.pdf');
+        Route::post('/inventario/kardex/apertura', [InventarioController::class, 'registrarApertura'])->name('inventario.kardex.apertura');
         Route::get('/inventario/alertas-caducidad', [InventarioController::class, 'alertasCaducidad'])->name('inventario.alertas.caducidad');
 
+        // Facturas de compra: detalle auditable y anulación con reversión
+        Route::get('/compras/{id}', [FacturaCompraController::class, 'show'])->name('compras.show');
+        Route::post('/compras/{id}/anular', [FacturaCompraController::class, 'anular'])->name('compras.anular');
+
         Route::get('/proveedores', [ProveedorController::class, 'index']);
+        Route::get('/proveedores/{id}', [ProveedorController::class, 'show'])->name('proveedores.show');
         Route::post('/proveedores', [ProveedorController::class, 'store']);
         Route::put('/proveedores/{id}', [ProveedorController::class, 'update']);
         Route::delete('/proveedores/{id}', [ProveedorController::class, 'destroy']);

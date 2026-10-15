@@ -3,17 +3,20 @@
 namespace App\Exports;
 
 use App\Models\Articulo;
-use App\Models\DetalleVenta;
-use App\Models\Lote;
-use App\Models\Merma;
+use App\Models\StockLedger;
 use Maatwebsite\Excel\Concerns\FromCollection;
 use Maatwebsite\Excel\Concerns\WithHeadings;
 use Maatwebsite\Excel\Concerns\WithMapping;
-use Maatwebsite\Excel\Concerns\WithTitle;
 use Maatwebsite\Excel\Concerns\WithStyles;
+use Maatwebsite\Excel\Concerns\WithTitle;
+use PhpOffice\PhpSpreadsheet\Style\Fill;
 use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
 
-class KardexExport implements FromCollection, WithHeadings, WithMapping, WithTitle, WithStyles
+/**
+ * Exportación del KÁRDEX corporativo: lee directamente del stock ledger
+ * inmutable (misma fuente de verdad que la vista web), con saldo corrido.
+ */
+class KardexExport implements FromCollection, WithHeadings, WithMapping, WithStyles, WithTitle
 {
     protected $itemId;
 
@@ -24,51 +27,39 @@ class KardexExport implements FromCollection, WithHeadings, WithMapping, WithTit
 
     public function collection()
     {
-        $articulo = Articulo::with('lotes')->findOrFail($this->itemId);
-        
-        $movimientos = collect();
+        return StockLedger::with('usuario')
+            ->where('item_id', $this->itemId)
+            ->orderBy('fecha')
+            ->orderBy('id')
+            ->get()
+            ->map(function (StockLedger $entrada) {
+                return [
+                    'fecha' => $entrada->fecha?->format('d/m/Y H:i'),
+                    'tipo' => ucfirst($entrada->movimiento),
+                    'concepto' => $this->concepto($entrada),
+                    'cantidad_unidades' => (float) $entrada->cantidad,
+                    'volumen_ml' => $entrada->volumen !== null ? (float) $entrada->volumen : '',
+                    'costo_unitario' => (float) $entrada->costo_unitario,
+                    'valor' => (float) $entrada->valor,
+                    'saldo_unidades' => (float) $entrada->saldo_cantidad,
+                    'saldo_valor' => (float) $entrada->saldo_valor,
+                    'costo_promedio' => (float) $entrada->costo_promedio,
+                    'usuario' => $entrada->usuario?->name ?? '',
+                ];
+            });
+    }
 
-        // ENTRADAS: lotes (compras)
-        foreach ($articulo->lotes as $lote) {
-            $volumenEntrada = $lote->cantidad_entrada * $lote->articulo->total_volume;
-            yield [
-                'fecha' => $lote->fecha_entrada,
-                'tipo' => 'Entrada',
-                'concepto' => 'Compra / Lote ' . $lote->lote,
-                'cantidad_unidades' => (float) $lote->cantidad_entrada,
-                'volumen_ml' => round($lote->cantidad_entrada * $articulo->total_volume, 2),
-                'costo_unitario' => (float) $lote->costo_unitario,
-                'valor' => round($lote->cantidad_entrada * $lote->costo_unitario, 2),
-            ];
-        }
-
-        // SALIDAS: ventas de producto físico
-        $detalles = DetalleVenta::with('venta')->where('item_id', $this->itemId)->get();
-        foreach ($detalles as $d) {
-            $volumenMl = $d->quantity * ($d->articulo->total_volume ?? 0);
-            yield [
-                'fecha' => $d->venta?->created_at ?? $d->created_at,
-                'tipo' => 'Salida',
-                'concepto' => 'Venta #' . $d->sale_id,
-                'cantidad' => -$d->quantity,
-                'volumen_ml' => round($volumenMl, 2),
-                'costo_unitario' => $articulo->costo_promedio,
-                'valor' => round(-$d->quantity * $articulo->costo_promedio, 2),
-            ];
-        }
-
-        // SALIDAS: mermas
-        foreach (Merma::where('item_id', $this->itemId)->get() as $m) {
-            yield [
-                'fecha' => $m->fecha,
-                'tipo' => 'Salida (Merma)',
-                'concepto' => 'Merma: ' . $m->motivo,
-                'cantidad' => -$m->cantidad,
-                'volumen_ml' => $m->tipo === 'volumen' ? round($m->cantidad * ($m->articulo->total_volume ?? 0), 2) : 0,
-                'costo_unitario' => $m->cantidad > 0 ? ($m->valor / $m->cantidad) : 0,
-                'valor' => -$m->valor,
-            ];
-        }
+    protected function concepto(StockLedger $entrada): string
+    {
+        return match ($entrada->origen) {
+            StockLedger::ORIGEN_COMPRA => 'Compra (DOC '.$entrada->referencia_id.')',
+            StockLedger::ORIGEN_VENTA => 'Venta #'.$entrada->referencia_id,
+            StockLedger::ORIGEN_MERMA => 'Merma #'.$entrada->referencia_id,
+            StockLedger::ORIGEN_REVERSION_VENTA => 'Reversión venta #'.$entrada->referencia_id,
+            StockLedger::ORIGEN_ANULACION_COMPRA => 'Anulación compra (DOC '.$entrada->referencia_id.')',
+            StockLedger::ORIGEN_APERTURA => 'Apertura de kárdex',
+            default => ucfirst(str_replace('_', ' ', $entrada->origen)),
+        };
     }
 
     public function headings(): array
@@ -81,6 +72,10 @@ class KardexExport implements FromCollection, WithHeadings, WithMapping, WithTit
             'Volumen (ml)',
             'Costo Unitario',
             'Valor (C$)',
+            'Saldo (Und.)',
+            'Saldo Valor (C$)',
+            'Costo Promedio',
+            'Usuario',
         ];
     }
 
@@ -94,19 +89,24 @@ class KardexExport implements FromCollection, WithHeadings, WithMapping, WithTit
             $row['volumen_ml'],
             $row['costo_unitario'],
             $row['valor'],
+            $row['saldo_unidades'],
+            $row['saldo_valor'],
+            $row['costo_promedio'],
+            $row['usuario'],
         ];
     }
 
     public function title(): string
     {
         $articulo = Articulo::find($this->itemId);
-        return 'Kardex ' . ($articulo->producto ?? $this->itemId);
+
+        return 'Kardex '.($articulo->producto ?? $this->itemId);
     }
 
     public function styles(Worksheet $sheet)
     {
         return [
-            1 => ['font' => ['bold' => true], 'fill' => ['fillType' => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID, 'startColor' => ['rgb' => '047857']]],
+            1 => ['font' => ['bold' => true], 'fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '047857']]],
         ];
     }
 }

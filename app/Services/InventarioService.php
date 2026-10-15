@@ -3,15 +3,16 @@
 namespace App\Services;
 
 use App\Models\Articulo;
-use App\Models\Servicio;
 use App\Models\Lote;
+use App\Models\Servicio;
+use App\Models\StockLedger;
 
 /**
  * MANDAMIENTO DE INVENTARIO FRACCIONADO:
  * Centraliza el descuento de inventario físico. Los servicios consumen
  * insumos por mililitros/onzas vía las tablas pivote (service_formulas),
  * y los productos físicos decrementan unidades. Devuelve alertas de stock crítico.
- * 
+ *
  * FASE 4 AVANZADA: FIFO por volumen + costo promedio móvil por ml/oz
  */
 class InventarioService
@@ -24,27 +25,33 @@ class InventarioService
     public function descontarPorVenta($venta): array
     {
         $stockCritico = [];
+        // Contexto de trazabilidad para el Kárdex inmutable (stock_ledger_entries)
+        $contexto = [
+            'origen' => StockLedger::ORIGEN_VENTA,
+            'referencia_tipo' => 'venta',
+            'referencia_id' => $venta->id,
+        ];
 
         foreach ($venta->detalles as $detalle) {
             if ($detalle->service_id != null) {
-                $this->descontarInsumosDeServicio($detalle, $stockCritico);
+                $this->descontarInsumosDeServicio($detalle, $stockCritico, $contexto);
             }
 
             if ($detalle->item_id != null) {
-                $this->descontarProductoFisico($detalle->item_id, $detalle->quantity, $stockCritico);
+                $this->descontarProductoFisico($detalle->item_id, $detalle->quantity, $stockCritico, $contexto);
             }
         }
 
         return $stockCritico;
     }
 
-    protected function descontarInsumosDeServicio($detalle, array &$stockCritico): void
+    protected function descontarInsumosDeServicio($detalle, array &$stockCritico, ?array $contexto = null): void
     {
         // BOM DINÁMICO: consume lo capturado como consumo real (POS) o la
         // fórmula estándar si la línea no guardó consumos.
         foreach ($this->consumosDeDetalle($detalle) as $consumo) {
             $cantidadADescontar = $consumo['cantidad'] * (float) $detalle->quantity;
-            $this->consumirVolumen($consumo['articulo'], $cantidadADescontar, $stockCritico);
+            $this->consumirVolumen($consumo['articulo'], $cantidadADescontar, $stockCritico, $contexto);
         }
     }
 
@@ -81,7 +88,7 @@ class InventarioService
 
         // Fallback: receta estándar (BOM) vigente del servicio
         $servicio = Servicio::with('formulas.articulo')->find($detalle->service_id);
-        if (!$servicio) {
+        if (! $servicio) {
             return [];
         }
 
@@ -105,14 +112,25 @@ class InventarioService
      * unidad nueva (total_volume).
      * FASE 4 AVANZADA: También descuenta del lote correspondiente (FIFO por volumen).
      */
-    protected function consumirVolumen(Articulo $articulo, float $cantidad, array &$stockCritico): void
+    protected function consumirVolumen(Articulo $articulo, float $cantidad, array &$stockCritico, ?array $contexto = null): void
     {
+        // Insumo NO fraccionable en la receta: se consume por UNIDADES, sin
+        // juego de volumen. (Antes el bucle de volumen drenaba toda la
+        // existencia: integridad de inventario corregida.)
+        if (! $articulo->is_fractionable || (float) $articulo->total_volume <= 0) {
+            $articulo->existencia_actual -= $cantidad;
+            $articulo->save();
+            $this->consumirLotesFIFO($articulo, $cantidad);
+            $this->registrarLedger($articulo, 'salida', -$cantidad, null, $contexto);
+            $this->registrarStockCritico($articulo, $stockCritico);
+
+            return;
+        }
+
         $articulo->current_volume -= $cantidad;
 
         // FIFO AVANZADO: Consumir del lote más antiguo por VOLUMEN
-        if ($articulo->is_fractionable && $articulo->total_volume > 0) {
-            $this->consumirLotesFIFOVolumen($articulo, $cantidad);
-        }
+        $this->consumirLotesFIFOVolumen($articulo, $cantidad);
 
         while ($articulo->current_volume <= 0) {
             if ($articulo->existencia_actual > 0) {
@@ -126,7 +144,37 @@ class InventarioService
         }
 
         $articulo->save();
+
+        // KÁRDEX INMUTABLE: salida por volumen; las unidades equivalentes son
+        // el espejo exacto del volumen consumido (ml / volumen por frasco).
+        $this->registrarLedger(
+            $articulo,
+            'salida',
+            -($cantidad / (float) $articulo->total_volume),
+            -$cantidad,
+            $contexto
+        );
         $this->registrarStockCritico($articulo, $stockCritico);
+    }
+
+    /**
+     * Registra un movimiento en el Kárdex inmutable (stock_ledger_entries).
+     * En salidas el costo se resuelve solo: promedio móvil vigente del ledger.
+     * Debe ejecutarse dentro de la transacción del caso de uso.
+     */
+    protected function registrarLedger(Articulo $articulo, string $movimiento, float $unidades, ?float $volumenMl, ?array $contexto): void
+    {
+        StockLedger::registrar(
+            $articulo,
+            $movimiento,
+            $contexto['origen'] ?? StockLedger::ORIGEN_VENTA,
+            $unidades,
+            $volumenMl,
+            null,
+            $contexto['referencia_tipo'] ?? null,
+            $contexto['referencia_id'] ?? null,
+            auth()->id(),
+        );
     }
 
     /**
@@ -143,22 +191,22 @@ class InventarioService
             $minimoVolumen = $minimo * (float) $articulo->total_volume;
 
             if ($disponible <= $minimoVolumen) {
-                $stockCritico[$articulo->id] = $articulo->producto . ' (queda '
-                    . number_format($disponible, 2, '.', '') . ' ' . ($articulo->unit_measure ?: 'ml') . ')';
+                $stockCritico[$articulo->id] = $articulo->producto.' (queda '
+                    .number_format($disponible, 2, '.', '').' '.($articulo->unit_measure ?: 'ml').')';
             }
 
             return;
         }
 
         if ((float) $articulo->existencia_actual <= $minimo) {
-            $stockCritico[$articulo->id] = $articulo->producto . ' (queda ' . (int) $articulo->existencia_actual . ')';
+            $stockCritico[$articulo->id] = $articulo->producto.' (queda '.(int) $articulo->existencia_actual.')';
         }
     }
 
-    protected function descontarProductoFisico($itemId, $cantidad, array &$stockCritico): void
+    protected function descontarProductoFisico($itemId, $cantidad, array &$stockCritico, ?array $contexto = null): void
     {
         $articulo = Articulo::find($itemId);
-        if (!$articulo) {
+        if (! $articulo) {
             return;
         }
 
@@ -167,6 +215,10 @@ class InventarioService
 
         // FIFO: consumir la cantidad desde los lotes más antiguos primero
         $this->consumirLotesFIFO($articulo, $cantidad);
+
+        // KÁRDEX: salida por unidades (si es fraccionable, el volumen equivale
+        // a botellas completas y lo calcula StockLedger automáticamente)
+        $this->registrarLedger($articulo, 'salida', -(float) $cantidad, null, $contexto);
         $this->registrarStockCritico($articulo, $stockCritico);
     }
 
@@ -207,7 +259,7 @@ class InventarioService
      */
     public function consumirLotesFIFOVolumen(Articulo $articulo, float $volumenMl): void
     {
-        if ($volumenMl <= 0 || !$articulo->is_fractionable) {
+        if ($volumenMl <= 0 || ! $articulo->is_fractionable) {
             return;
         }
 
@@ -227,28 +279,28 @@ class InventarioService
 
             // El lote tiene cantidad_disponible en UNIDADES, cada una con total_volume ml
             $volumenDisponibleLote = $lote->cantidad_disponible * $articulo->total_volume;
-            
+
             if ($volumenDisponibleLote <= 0) {
                 continue;
             }
 
             $aDescontarMl = min($volumenDisponibleLote, $pendienteMl);
-            
+
             // Calcular cuántas UNIDADES completas y ml parciales se consumen
             $unidadesCompletas = floor($aDescontarMl / $articulo->total_volume);
             $mlParcial = $aDescontarMl - ($unidadesCompletas * $articulo->total_volume);
-            
+
             if ($unidadesCompletas > 0) {
                 $aDescontarUnidades = min($unidadesCompletas, $lote->cantidad_disponible);
                 $lote->cantidad_disponible -= $aDescontarUnidades;
             }
-            
+
             // Si quedan ml parciales y no hay unidades completas, marcamos el lote como parcialmente consumido
             // (en la práctica, el current_volume del artículo ya refleja esto)
             if ($mlParcial > 0 && $lote->cantidad_disponible > 0) {
                 // El lote queda con una unidad "parcial" - el current_volume del artículo lo refleja
             }
-            
+
             $lote->save();
             $pendienteMl -= $aDescontarMl;
         }
@@ -266,9 +318,16 @@ class InventarioService
      */
     public function revertirPorVenta($venta): void
     {
+        // Contexto de trazabilidad para el Kárdex inmutable
+        $contexto = [
+            'origen' => StockLedger::ORIGEN_REVERSION_VENTA,
+            'referencia_tipo' => 'venta',
+            'referencia_id' => $venta->id,
+        ];
+
         foreach ($venta->detalles as $detalle) {
             if ($detalle->item_id != null) {
-                $this->revertirProductoFisico($detalle->item_id, (float) $detalle->quantity);
+                $this->revertirProductoFisico($detalle->item_id, (float) $detalle->quantity, $contexto);
             }
 
             if ($detalle->service_id != null) {
@@ -276,17 +335,25 @@ class InventarioService
                 // (consumo real fotografiado o fórmula estándar), garantizando
                 // exactitud aunque la fórmula del catálogo cambie a posteriori.
                 foreach ($this->consumosDeDetalle($detalle) as $consumo) {
-                    $volumenDevuelto = $consumo['cantidad'] * (float) $detalle->quantity;
-                    $this->revertirVolumen($consumo['articulo'], $volumenDevuelto);
+                    $cantidadDevuelta = $consumo['cantidad'] * (float) $detalle->quantity;
+                    $articulo = $consumo['articulo'];
+
+                    // Espejo exacto del descuento: insumos fraccionables por
+                    // volumen; el resto por unidades.
+                    if ($articulo->is_fractionable && (float) $articulo->total_volume > 0) {
+                        $this->revertirVolumen($articulo, $cantidadDevuelta, $contexto);
+                    } else {
+                        $this->revertirProductoFisico($articulo->id, $cantidadDevuelta, $contexto);
+                    }
                 }
             }
         }
     }
 
-    protected function revertirProductoFisico(int $itemId, float $cantidad): void
+    protected function revertirProductoFisico(int $itemId, float $cantidad, ?array $contexto = null): void
     {
         $articulo = Articulo::find($itemId);
-        if (!$articulo || $cantidad <= 0) {
+        if (! $articulo || $cantidad <= 0) {
             return;
         }
 
@@ -294,9 +361,12 @@ class InventarioService
         $articulo->save();
 
         $this->devolverUnidadesALoteReciente($articulo, $cantidad);
+
+        // KÁRDEX: entrada espejo valorada al promedio móvil vigente
+        $this->registrarLedger($articulo, 'entrada', $cantidad, null, $contexto);
     }
 
-    protected function revertirVolumen(Articulo $articulo, float $volumenMl): void
+    protected function revertirVolumen(Articulo $articulo, float $volumenMl, ?array $contexto = null): void
     {
         if ($volumenMl <= 0) {
             return;
@@ -320,6 +390,44 @@ class InventarioService
             $unidadesPorVolumen = (int) floor($volumenMl / $articulo->total_volume);
             $this->devolverUnidadesALoteReciente($articulo, $unidadesPorVolumen + $unidadesRearmadas);
         }
+
+        // KÁRDEX: entrada por volumen; unidades equivalentes exactas (ml/volumen)
+        if ($articulo->is_fractionable && (float) $articulo->total_volume > 0) {
+            $this->registrarLedger(
+                $articulo,
+                'entrada',
+                $volumenMl / (float) $articulo->total_volume,
+                $volumenMl,
+                $contexto
+            );
+        }
+    }
+
+    /**
+     * REGISTRO DE MERMA (centralizado): descuenta el stock físico (unidades o
+     * volumen), consume lotes FIFO, escribe el KÁRDEX inmutable con la
+     * referencia a la merma y devuelve el VALOR de la baja al costo real de
+     * valoración (promedio móvil del ledger; nunca el precio de venta).
+     * Debe ejecutarse dentro de la transacción del caso de uso.
+     */
+    public function registrarMerma(Articulo $articulo, string $tipo, float $cantidad, ?int $mermaId = null): float
+    {
+        $contexto = [
+            'origen' => StockLedger::ORIGEN_MERMA,
+            'referencia_tipo' => 'merma',
+            'referencia_id' => $mermaId,
+        ];
+        $stockCritico = [];
+
+        if ($tipo === 'volumen') {
+            $this->consumirVolumen($articulo, $cantidad, $stockCritico, $contexto);
+        } else {
+            $this->descontarProductoFisico($articulo->id, $cantidad, $stockCritico, $contexto);
+        }
+
+        $entrada = StockLedger::where('item_id', $articulo->id)->orderByDesc('id')->first();
+
+        return (float) abs($entrada?->valor ?? 0);
     }
 
     /**
@@ -350,7 +458,7 @@ class InventarioService
      */
     public function calcularCostoPromedioVolumen(Articulo $articulo): float
     {
-        if (!$articulo->is_fractionable || $articulo->total_volume <= 0) {
+        if (! $articulo->is_fractionable || $articulo->total_volume <= 0) {
             return 0;
         }
 
@@ -365,7 +473,7 @@ class InventarioService
         foreach ($lotes as $lote) {
             $volumenLote = $lote->cantidad_disponible * $articulo->total_volume;
             $valorLote = $volumenLote * $lote->costo_unitario;
-            
+
             $volumenTotalMl += $volumenLote;
             $valorTotal += $valorLote;
         }

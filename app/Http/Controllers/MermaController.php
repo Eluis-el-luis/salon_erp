@@ -2,9 +2,10 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\Merma;
 use App\Models\Articulo;
+use App\Models\Merma;
 use App\Services\ContabilidadService;
+use App\Services\InventarioService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -35,45 +36,30 @@ class MermaController extends Controller
             $articulo = Articulo::findOrFail($validated['item_id']);
             $cantidad = (float) $validated['cantidad'];
 
-            if ($validated['tipo'] === 'volumen') {
-                // Merma de insumo fraccionable: se descuenta volumen (ml/oz)
-                $articulo->current_volume -= $cantidad;
-                while ($articulo->current_volume <= 0) {
-                    if ($articulo->existencia_actual > 0) {
-                        $articulo->existencia_actual -= 1;
-                        $articulo->current_volume += $articulo->total_volume;
-                        (new \App\Services\InventarioService())->consumirLotesFIFO($articulo, 1);
-                    } else {
-                        break;
-                    }
-                }
-                $articulo->save();
-
-                $valor = $articulo->total_volume > 0 ? ($articulo->precio_c / $articulo->total_volume) * $cantidad : 0;
-                $codigoInventario = '1.1.5';
-            } else {
-                // Merma de unidades (producto físico)
-                $articulo->existencia_actual -= $cantidad;
-                $articulo->save();
-
-                (new \App\Services\InventarioService())->consumirLotesFIFO($articulo, $cantidad);
-
-                $valor = $articulo->precio_c * $cantidad;
-                $codigoInventario = $articulo->is_fractionable ? '1.1.5' : '1.1.4';
-            }
-
+            // La merma se registra PRIMERO (para trazabilidad en el kárdex);
+            // el descuento físico, lotes FIFO y valor al costo real los resuelve
+            // el InventarioService (misma ruta que ventas y reversiones).
             $merma = Merma::create([
                 'item_id' => $articulo->id,
                 'fecha' => $validated['fecha'],
                 'tipo' => $validated['tipo'],
                 'cantidad' => $cantidad,
-                'valor' => round($valor, 2),
+                'valor' => 0,
                 'motivo' => $validated['motivo'],
                 'user_id' => auth()->id(),
             ]);
 
-            $contabilidad = new ContabilidadService();
-            $contabilidad->contabilizarMerma($merma, $codigoInventario);
+            $inventario = new InventarioService;
+            $valor = $inventario->registrarMerma($articulo, $validated['tipo'], $cantidad, $merma->id);
+
+            $merma->update(['valor' => round($valor, 2)]);
+
+            $codigoInventario = ($validated['tipo'] === 'volumen' || $articulo->is_fractionable || $articulo->type !== 'producto_venta')
+                ? '1.1.5'
+                : '1.1.4';
+
+            $contabilidad = new ContabilidadService;
+            $contabilidad->contabilizarMerma($merma->fresh(), $codigoInventario);
 
             DB::commit();
 
@@ -85,6 +71,7 @@ class MermaController extends Controller
                 'trace' => $e->getTraceAsString(),
                 'request' => $request->all(),
             ]);
+
             return back()->withErrors(['error' => 'Error al registrar la merma. Contacte al administrador.']);
         }
     }

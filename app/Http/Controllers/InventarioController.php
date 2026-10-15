@@ -2,31 +2,29 @@
 
 namespace App\Http\Controllers;
 
-use Illuminate\Http\Request;
+use App\Exports\KardexExport;
 use App\Models\Articulo;
-use App\Models\Proveedor;
-use App\Models\CuentaPorPagar;
 use App\Models\Lote;
-use App\Models\DetalleVenta;
-use App\Models\Merma;
-use App\Services\ContabilidadService;
+use App\Models\Proveedor;
+use App\Models\StockLedger;
+use App\Services\CompraService;
 use App\Services\InventarioService;
+use Barryvdh\DomPDF\Facade\Pdf;
+use Carbon\Carbon;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use Carbon\Carbon;
 use Maatwebsite\Excel\Facades\Excel;
-use App\Exports\KardexExport;
-use Barryvdh\DomPDF\Facade\Pdf;
 
 class InventarioController extends Controller
 {
     // 1. Leer: Mostrar la tabla de inventario
     public function index()
     {
-        
+
         $articulos = Articulo::where('type', '!=', 'servicio')
-                        ->orderBy('producto', 'asc')
-                        ->get();
+            ->orderBy('producto', 'asc')
+            ->get();
         $proveedores = Proveedor::all();
 
         return view('inventory.index', compact('articulos', 'proveedores'));
@@ -37,7 +35,7 @@ class InventarioController extends Controller
         // Validamos usando los nombres reales de las columnas
         $request->validate([
             'producto' => 'required|string|max:255',
-            'type' => 'required|string', 
+            'type' => 'required|string',
             'precio_c' => 'required|numeric|min:0',
             'existencia_actual' => 'required|integer|min:0',
         ]);
@@ -77,178 +75,147 @@ class InventarioController extends Controller
     {
         $request->validate([
             'provider_id' => 'required|exists:providers,id',
-            'tipo_pago' => 'required|in:contado,credito',
-            'monto_total' => 'required|numeric|min:1',
-            'articulos' => 'required|array', // Los productos que estamos comprando
+            'condicion_pago' => 'required|in:contado,credito',
+            'metodo_pago_contado' => 'nullable|in:efectivo,banco',
+            'fecha_factura' => 'nullable|date',
+            'numero_documento' => 'nullable|string|max:60',
+            'descuento' => 'nullable|numeric|min:0',
+            'gastos_envio' => 'nullable|numeric|min:0',
+            'articulos' => 'required|array|min:1',
+            'articulos.*.id' => 'required|integer|exists:items,id',
+            'articulos.*.cantidad' => 'required|numeric|min:0.0001',
+            'articulos.*.costo' => 'required|numeric|min:0',
+            'articulos.*.impuesto_porcentaje' => 'nullable|numeric|min:0|max:100',
         ]);
 
-        DB::beginTransaction();
-
         try {
-            // 1. ACTUALIZAR EL INVENTARIO FÍSICO + COSTO PROMEDIO MÓVIL + LOTES (FIFO)
-            foreach ($request->articulos as $linea) {
-                $articulo = Articulo::findOrFail($linea['id']);
-                $cantidad = (float) $linea['cantidad'];
-                $costoUnitario = (float) ($linea['costo'] ?? $linea['precio_c'] ?? $articulo->precio_c);
-
-                // Costo promedio móvil (igual concepto que la Mesa de Cambio)
-                $stockAnterior = (float) $articulo->existencia_actual;
-                $promedioAnterior = (float) $articulo->costo_promedio;
-                $nuevaExistencia = $stockAnterior + $cantidad;
-
-                if ($nuevaExistencia > 0) {
-                    $articulo->costo_promedio = round(($stockAnterior * $promedioAnterior + $cantidad * $costoUnitario) / $nuevaExistencia, 6);
-                } elseif ($articulo->costo_promedio == 0) {
-                    $articulo->costo_promedio = round($costoUnitario, 6);
-                }
-
-                // Sumamos las botellas o unidades físicas
-                $articulo->existencia_actual = $nuevaExistencia;
-
-                // Si el producto es líquido (ej. Shampoo), sumamos también los mililitros
-                if (isset($articulo->total_volume) && $articulo->total_volume > 0) {
-                    $articulo->current_volume += ($articulo->total_volume * $cantidad);
-                }
-
-                $articulo->save();
-
-                // Lote (FIFO): registrar entrada de mercadería
-                Lote::create([
-                    'item_id' => $articulo->id,
-                    'lote' => $linea['lote'] ?? ('L' . date('ymd')),
-                    'fecha_entrada' => Carbon::now(),
-                    'fecha_vencimiento' => $linea['fecha_vencimiento'] ?? null,
-                    'cantidad_entrada' => $cantidad,
-                    'cantidad_disponible' => $cantidad,
-                    'costo_unitario' => round($costoUnitario, 6),
-                ]);
-            }
-
-            $referenciaCompra = time(); // Generamos un folio único para esta transacción
-
-            // 2. GENERAR LA DEUDA SI ES A CRÉDITO (Módulo CxP)
-            if ($request->tipo_pago == 'credito') {
-                CuentaPorPagar::create([
-                    'provider_id' => $request->provider_id,
-                    'fecha_emision' => Carbon::now(),
-                    'fecha_vencimiento' => Carbon::now()->addDays(30), // Por defecto 30 días, o puedes pedirlo en el Request
-                    'monto_original' => $request->monto_total,
-                    'saldo_pendiente' => $request->monto_total,
-                    'estado' => 'pendiente'
-                ]);
-            }
-
-            // 3. DISPARAR EL MOTOR CONTABLE
-            $contabilidad = new ContabilidadService();
-            $contabilidad->contabilizarCompraInventario(
-                $request->monto_total, 
-                $request->tipo_pago, 
-                $referenciaCompra,
-                $request->metodo_pago_contado ?? 'efectivo'
-            );
-
-            DB::commit();
+            $factura = (new CompraService)->registrarFactura([
+                'provider_id' => (int) $request->provider_id,
+                'condicion_pago' => $request->condicion_pago ?? $request->tipo_pago,
+                'metodo_pago_contado' => $request->metodo_pago_contado ?? 'efectivo',
+                'numero_documento' => $request->numero_documento,
+                'fecha_factura' => $request->fecha_factura,
+                'descuento' => (float) ($request->descuento ?? 0),
+                'gastos_envio' => (float) ($request->gastos_envio ?? 0),
+                'notas' => $request->notas,
+                'articulos' => $request->articulos,
+            ]);
 
             return response()->json([
-                'message' => 'Compra registrada. Inventario y contabilidad actualizados.'
+                'message' => 'Compra registrada: inventario, kárdex, lotes y contabilidad actualizados.',
+                'factura_id' => $factura->id,
             ], 201);
-
         } catch (\Exception $e) {
-            DB::rollBack();
             Log::error('Error al procesar compra de inventario', [
                 'exception' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
                 'request' => $request->all(),
             ]);
-            return response()->json(['error' => 'Error al procesar la compra. Contacte al administrador.'], 500);
+
+            return response()->json(['error' => $e->getMessage()], 422);
         }
     }
 
     public function createCompra()
     {
-        // Traemos todos los proveedores activos
-        $proveedores = Proveedor::orderBy('name', 'asc')->get();
-        
-        // Solo traemos productos físicos o insumos, NO servicios
+        // Proveedores activos con sus condiciones de crédito
+        $proveedores = Proveedor::where('is_active', true)->orderBy('name', 'asc')->get();
+
+        // Solo productos físicos o insumos, NO servicios, con costo actual
+        // de valoración para prellenar el formulario (promedio de lotes).
         $articulos = Articulo::where('type', '!=', 'servicio')->orderBy('producto', 'asc')->get();
-        
+
+        $mapaCostos = Articulo::mapaCostosActuales($articulos->pluck('id')->all());
+        foreach ($articulos as $articulo) {
+            $articulo->costo_actual = $mapaCostos[$articulo->id]['costo_unitario'] ?? 0;
+        }
+
         return view('inventory.purchases', compact('proveedores', 'articulos'));
     }
 
     /**
-     * Kárdex Físico-Valorado AVANZADO: estado de cuenta del inventario de un producto.
-     * Entradas (compras/lotes) - Salidas (ventas y mermas) = saldo final.
-     * Incluye tracking por VOLUMEN (ml/oz) y costo promedio móvil.
+     * APERTURA DE KÁRDEX: fija el saldo inicial de un artículo que existía
+     * antes del ledger corporativo. Registro real y auditable; solo aplica
+     * si el artículo no tiene movimientos aún.
+     */
+    public function registrarApertura(Request $request)
+    {
+        $request->validate(['item_id' => 'required|exists:items,id']);
+
+        $articulo = Articulo::findOrFail($request->item_id);
+
+        DB::beginTransaction();
+        try {
+            $entrada = StockLedger::registrarApertura($articulo, auth()->id());
+
+            if (! $entrada) {
+                DB::rollBack();
+
+                return back()->withErrors(['error' => 'Este artículo ya tiene movimientos en el kárdex; no requiere apertura.']);
+            }
+
+            DB::commit();
+
+            return back()->with('success', 'Saldo de apertura registrado en el kárdex.');
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Error al registrar apertura de kárdex', ['exception' => $e->getMessage()]);
+
+            return back()->withErrors(['error' => 'No se pudo registrar la apertura. Contacte al administrador.']);
+        }
+    }
+
+    /**
+     * KÁRDEX CORPORATIVO: estado de cuenta del inventario de un producto leído
+     * del stock ledger inmutable (stock_ledger_entries): entradas (compras/
+     * ajustes) y salidas (ventas/mermas) con saldo corrido valorado a costo
+     * promedio móvil. Incluye lotes próximos a vencer y datos de valoración.
      */
     public function kardex(Request $request)
     {
         $articulos = Articulo::where('type', '!=', 'servicio')->orderBy('producto', 'asc')->get();
         $articulo = null;
-        $movimientos = collect();
+        $entradas = collect();
+        $lotes = collect();
+        $requiereApertura = false;
         $resumenVolumen = null;
 
         if ($request->item_id) {
-            $articulo = Articulo::with('lotes')->find($request->item_id);
+            $articulo = Articulo::find($request->item_id);
 
             if ($articulo) {
-                // ENTRADAS: lotes (compras)
-                foreach ($articulo->lotes as $lote) {
-                    $volumenEntrada = $lote->cantidad_entrada * $lote->articulo->total_volume;
-                    $movimientos->push([
-                        'fecha' => $lote->fecha_entrada,
-                        'tipo' => 'entrada',
-                        'concepto' => 'Compra / Lote ' . $lote->lote,
-                        'cantidad' => (float) $lote->cantidad_entrada,
-                        'volumen_ml' => round($volumenEntrada, 2),
-                        'costo' => (float) $lote->costo_unitario,
-                    ]);
-                }
-
-                // SALIDAS: ventas de producto físico (solo documentos vigentes:
-                // borradores nunca salieron y anuladas ya devolvieron el stock)
-                $detalles = DetalleVenta::with('venta')
+                $entradas = StockLedger::with('usuario')
                     ->where('item_id', $articulo->id)
-                    ->whereHas('venta', fn ($q) => $q->whereIn('status', \App\Models\Venta::ESTADOS_DEVENGADOS))
+                    ->orderBy('fecha')
+                    ->orderBy('id')
                     ->get();
-                foreach ($detalles as $d) {
-                    $movimientos->push([
-                        'fecha' => $d->venta?->created_at ?? $d->created_at,
-                        'tipo' => 'salida',
-                        'concepto' => 'Venta #' . $d->sale_id,
-                        'cantidad' => (float) -$d->quantity,
-                        'volumen_ml' => ($d->quantity * ($d->articulo->total_volume ?? 0)),
-                        'costo' => (float) $articulo->costo_promedio,
-                    ]);
-                }
 
-                // SALIDAS: mermas
-                foreach (Merma::where('item_id', $articulo->id)->get() as $m) {
-                    $movimientos->push([
-                        'fecha' => $m->fecha,
-                        'tipo' => 'salida',
-                        'concepto' => 'Merma: ' . $m->motivo,
-                        'cantidad' => (float) -$m->cantidad,
-                        'volumen_ml' => $m->tipo === 'volumen' ? round($m->cantidad * ($m->articulo->total_volume ?? 0), 2) : 0,
-                        'costo' => $m->cantidad > 0 ? (float) ($m->valor / $m->cantidad) : 0,
-                    ]);
-                }
+                // Artículos con stock físico previo al ledger corporativo
+                $requiereApertura = $entradas->isEmpty()
+                    && ((float) $articulo->existencia_actual > 0 || (float) $articulo->current_volume > 0);
 
-                $movimientos = $movimientos->sortBy('fecha')->values();
+                // Lotes abiertos con caducidad (FIFO + vencimiento)
+                $lotes = Lote::where('item_id', $articulo->id)
+                    ->where('cantidad_disponible', '>', 0)
+                    ->orderBy('fecha_entrada')
+                    ->orderBy('id')
+                    ->get();
 
-                // Resumen de volumen actual
                 if ($articulo->is_fractionable && $articulo->total_volume > 0) {
-                    $inventarioService = new InventarioService();
+                    $inventarioService = new InventarioService;
                     $resumenVolumen = [
                         'existencia_unidades' => $articulo->existencia_actual,
                         'volumen_total_ml' => round($articulo->existencia_actual * $articulo->total_volume + $articulo->current_volume, 2),
                         'costo_promedio_ml' => round($inventarioService->calcularCostoPromedioVolumen($articulo), 6),
-                        'lotes_activos' => $articulo->lotes()->where('cantidad_disponible', '>', 0)->count(),
+                        'lotes_activos' => $lotes->count(),
                     ];
                 }
             }
         }
 
-        return view('inventory.kardex', compact('articulos', 'articulo', 'movimientos', 'resumenVolumen'));
+        return view('inventory.kardex', compact(
+            'articulos', 'articulo', 'entradas', 'lotes', 'requiereApertura', 'resumenVolumen'
+        ));
     }
 
     /**
@@ -257,66 +224,28 @@ class InventarioController extends Controller
     public function kardexExcel(Request $request)
     {
         $request->validate(['item_id' => 'required|exists:items,id']);
-        
-        return Excel::download(new KardexExport($request->item_id), 'kardex_' . now()->format('Ymd_His') . '.xlsx');
+
+        return Excel::download(new KardexExport($request->item_id), 'kardex_'.now()->format('Ymd_His').'.xlsx');
     }
 
     /**
-     * Exportar Kárdex a PDF
+     * Exportar Kárdex a PDF (lectura directa del ledger inmutable)
      */
     public function kardexPdf(Request $request)
     {
         $request->validate(['item_id' => 'required|exists:items,id']);
-        
-        $articulo = Articulo::with('lotes')->findOrFail($request->item_id);
-        
-        $movimientos = collect();
-        
-        // ENTRADAS: lotes (compras)
-        foreach ($articulo->lotes as $lote) {
-            $volumenEntrada = $lote->cantidad_entrada * $lote->articulo->total_volume;
-            $movimientos->push([
-                'fecha' => $lote->fecha_entrada,
-                'tipo' => 'entrada',
-                'concepto' => 'Compra / Lote ' . $lote->lote,
-                'cantidad' => (float) $lote->cantidad_entrada,
-                'volumen_ml' => round($volumenEntrada, 2),
-                'costo' => (float) $lote->costo_unitario,
-            ]);
-        }
 
-        // SALIDAS: ventas de producto físico (solo documentos vigentes)
-        $detalles = DetalleVenta::with('venta')
-            ->where('item_id', $request->item_id)
-            ->whereHas('venta', fn ($q) => $q->whereIn('status', \App\Models\Venta::ESTADOS_DEVENGADOS))
+        $articulo = Articulo::findOrFail($request->item_id);
+
+        $entradas = StockLedger::with('usuario')
+            ->where('item_id', $articulo->id)
+            ->orderBy('fecha')
+            ->orderBy('id')
             ->get();
-        foreach ($detalles as $d) {
-            $movimientos->push([
-                'fecha' => $d->venta?->created_at ?? $d->created_at,
-                'tipo' => 'salida',
-                'concepto' => 'Venta #' . $d->sale_id,
-                'cantidad' => (float) -$d->quantity,
-                'volumen_ml' => ($d->quantity * ($d->articulo->total_volume ?? 0)),
-                'costo' => (float) $articulo->costo_promedio,
-            ]);
-        }
 
-        // SALIDAS: mermas
-        foreach (Merma::where('item_id', $request->item_id)->get() as $m) {
-            $movimientos->push([
-                'fecha' => $m->fecha,
-                'tipo' => 'salida',
-                'concepto' => 'Merma: ' . $m->motivo,
-                'cantidad' => (float) -$m->cantidad,
-                'volumen_ml' => $m->tipo === 'volumen' ? round($m->cantidad * ($m->articulo->total_volume ?? 0), 2) : 0,
-                'costo' => $m->cantidad > 0 ? (float) ($m->valor / $m->cantidad) : 0,
-            ]);
-        }
+        $pdf = Pdf::loadView('inventory.kardex_pdf', compact('articulo', 'entradas'));
 
-        $movimientos = $movimientos->sortBy('fecha')->values();
-
-        $pdf = \Barryvdh\DomPDF\Facade\Pdf::loadView('inventory.kardex_pdf', compact('articulo', 'movimientos'));
-        return $pdf->download('kardex_' . $request->item_id . '_' . now()->format('Ymd_His') . '.pdf');
+        return $pdf->download('kardex_'.$request->item_id.'_'.now()->format('Ymd_His').'.pdf');
     }
 
     /**
@@ -326,7 +255,7 @@ class InventarioController extends Controller
     {
         $dias = $request->query('dias', 30);
         $fechaLimite = Carbon::now()->addDays($dias);
-        
+
         $lotesProximos = Lote::with('articulo')
             ->where('cantidad_disponible', '>', 0)
             ->whereNotNull('fecha_vencimiento')
@@ -336,6 +265,7 @@ class InventarioController extends Controller
             ->groupBy('articulo_id')
             ->map(function ($lotes, $articuloId) {
                 $articulo = $lotes->first()->articulo;
+
                 return [
                     'articulo' => $lotes->first()->articulo,
                     'lotes' => $lotes->map(function ($lote) {
@@ -348,7 +278,7 @@ class InventarioController extends Controller
                     }),
                 ];
             });
-        
+
         return response()->json([
             'alertas' => $lotesProximos->values(),
             'total_alertas' => $lotesProximos->sum('cantidad_disponible'),

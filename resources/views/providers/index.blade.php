@@ -7,7 +7,7 @@
     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
         <div>
             <h2 class="page-title">Directorio de Proveedores</h2>
-            <p class="page-subtitle">Administra las marcas, distribuidoras y contactos comerciales.</p>
+            <p class="page-subtitle">Administra las marcas, distribuidoras y contactos comerciales con su posición de Cuentas por Pagar.</p>
         </div>
         <button @click="openCreateModal()" class="btn btn-primary">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
@@ -24,6 +24,8 @@
                         <th class="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Empresa / Marca</th>
                         <th class="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Contacto</th>
                         <th class="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Teléfono / Correo</th>
+                        <th class="px-6 py-3 text-center text-xs font-bold text-gray-500 uppercase tracking-wider">Crédito</th>
+                        <th class="px-6 py-3 text-right text-xs font-bold text-gray-500 uppercase tracking-wider">Saldo por Pagar</th>
                         <th class="px-6 py-3 text-center text-xs font-bold text-gray-500 uppercase tracking-wider">Acciones</th>
                     </tr>
                 </thead>
@@ -32,7 +34,7 @@
                     <tr class="hover:bg-gray-50 transition">
                         <td class="px-6 py-4 whitespace-nowrap">
                             <div class="text-sm font-bold text-gray-900">{{ $proveedor->name }}</div>
-                            <div class="text-xs text-gray-500 mt-1 truncate max-w-xs" title="{{ $proveedor->address }}">{{ $proveedor->address ?? 'Sin dirección registrada' }}</div>
+                            <div class="text-xs text-gray-500 mt-1 truncate max-w-xs" title="{{ $proveedor->address }}">{{ $proveedor->tax_id ? 'RUC: ' . $proveedor->tax_id . ' · ' : '' }}{{ $proveedor->address ?? 'Sin dirección registrada' }}</div>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap">
                             <div class="text-sm text-gray-700 font-medium">{{ $proveedor->contact_name ?? 'N/A' }}</div>
@@ -41,14 +43,27 @@
                             <div class="text-sm font-medium text-gray-900">{{ $proveedor->phone ?? '-' }}</div>
                             <div class="text-xs text-blue-600">{{ $proveedor->email ?? '-' }}</div>
                         </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-center text-sm text-gray-600">
+                            {{ $proveedor->credit_days }} días
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-right">
+                            @if($proveedor->saldo_pendiente > 0)
+                                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-800">
+                                    C$ {{ number_format($proveedor->saldo_pendiente, 2) }}
+                                </span>
+                            @else
+                                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800">Al día</span>
+                            @endif
+                        </td>
                         <td class="px-6 py-4 whitespace-nowrap text-center text-sm font-medium">
+                            <a href="{{ route('proveedores.show', $proveedor->id) }}" class="text-emerald-600 hover:text-emerald-900 mr-3 font-bold transition">Perfil 360</a>
                             <button @click="editProvider({{ $proveedor }})" class="text-blue-600 hover:text-blue-900 mr-3 font-bold transition">Editar</button>
                             <button @click="deleteProvider({{ $proveedor->id }})" class="text-red-600 hover:text-red-900 font-bold transition">Eliminar</button>
                         </td>
                     </tr>
                     @empty
                     <tr>
-                        <td colspan="4" class="px-6 py-10 text-center text-gray-500 text-sm">
+                        <td colspan="6" class="px-6 py-10 text-center text-gray-500 text-sm">
                             No tienes proveedores registrados.
                         </td>
                     </tr>
@@ -76,8 +91,17 @@
                             <input type="text" x-model="form.name" class="input" required>
                         </div>
                         <div class="col-span-2 md:col-span-1">
+                            <label class="label">RUC / Cédula Fiscal</label>
+                            <input type="text" x-model="form.tax_id" placeholder="Ej. J0310000123456" class="input">
+                        </div>
+                        <div class="col-span-2 md:col-span-1">
                             <label class="label">Nombre del Contacto (Vendedor)</label>
                             <input type="text" x-model="form.contact_name" placeholder="Ej. Juan Pérez" class="input">
+                        </div>
+                        <div class="col-span-2 md:col-span-1">
+                            <label class="label">Días de Crédito</label>
+                            <input type="number" x-model.number="form.credit_days" min="0" max="365" class="input" placeholder="30">
+                            <p class="text-xs text-gray-400 mt-1">Las compras a crédito vencen a fecha + estos días.</p>
                         </div>
                         <div class="col-span-2 md:col-span-1">
                             <label class="label">Teléfono</label>
@@ -114,14 +138,14 @@
             editId: null,    
             
             form: {
-                name: '', contact_name: '', phone: '', email: '', address: '', notes: ''
+                name: '', tax_id: '', contact_name: '', phone: '', email: '', address: '', notes: '', credit_days: 30
             },
 
             resetForm() {
                 this.editMode = false;
                 this.editId = null;
                 this.form = {
-                    name: '', contact_name: '', phone: '', email: '', address: '', notes: ''
+                    name: '', tax_id: '', contact_name: '', phone: '', email: '', address: '', notes: '', credit_days: 30
                 };
             },
             
@@ -135,18 +159,20 @@
                 this.editId = provider.id;
                 this.form = {
                     name: provider.name || '',
+                    tax_id: provider.tax_id || '',
                     contact_name: provider.contact_name || '',
                     phone: provider.phone || '',
                     email: provider.email || '',
                     address: provider.address || '',
-                    notes: provider.notes || ''
+                    notes: provider.notes || '',
+                    credit_days: provider.credit_days || 30
                 };
                 this.openModal = true;
             },
 
             async saveProvider() {
                 if(this.form.name === '') {
-                   
+                    
                     window.dispatchEvent(new CustomEvent('notify', { detail: 'El nombre de la empresa es obligatorio.' }));
                     return;
                 }
@@ -182,7 +208,7 @@
         
                 window.dispatchEvent(new CustomEvent('open-confirm', {
                     detail: {
-                        message: '¿Estás seguro de eliminar este proveedor? Asegúrate de que no tenga productos asignados.',
+                        message: '¿Estás seguro de eliminar este proveedor? No se permite si tiene CxP, facturas de compra o artículos vinculados.',
                         action: async () => {
                             try {
                                 let response = await fetch(`/proveedores/${id}`, {
@@ -197,7 +223,8 @@
                                     window.dispatchEvent(new CustomEvent('notify', { detail: 'Proveedor eliminado correctamente.' }));
                                     setTimeout(() => { window.location.reload(); }, 1000);
                                 } else {
-                                    window.dispatchEvent(new CustomEvent('notify', { detail: 'Error al eliminar el proveedor.' }));
+                                    let data = await response.json().catch(() => ({}));
+                                    window.dispatchEvent(new CustomEvent('notify', { detail: data.error || 'Error al eliminar el proveedor.' }));
                                 }
                             } catch (error) {
                                 console.error('Error:', error);
