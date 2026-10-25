@@ -1,37 +1,40 @@
-﻿<?php
+<?php
 
-use Illuminate\Support\Facades\Route;
-use App\Models\Cita;
-use App\Http\Controllers\InventarioController;
-use App\Http\Controllers\PanelController;
-use App\Http\Controllers\EmpleadoController;
+use App\Http\Controllers\AdelantoController;
+use App\Http\Controllers\AsientoManualController;
 use App\Http\Controllers\AsistenciaController;
 use App\Http\Controllers\AusenciaController;
-use App\Http\Controllers\RrhhController;
-use App\Http\Controllers\AdelantoController;
+use App\Http\Controllers\AutenticacionController;
+use App\Http\Controllers\BancoController;
+use App\Http\Controllers\CajaChicaController;
+use App\Http\Controllers\CajaController;
 use App\Http\Controllers\ClienteController;
+use App\Http\Controllers\ContabilidadController;
+use App\Http\Controllers\CuentaContableController;
+use App\Http\Controllers\CuentaPorPagarController;
+use App\Http\Controllers\EmpleadoController;
+use App\Http\Controllers\FacturaCompraController;
+use App\Http\Controllers\FormulaController;
+use App\Http\Controllers\InventarioController;
+use App\Http\Controllers\MermaController;
+use App\Http\Controllers\MesaCambioController;
+use App\Http\Controllers\NominaController;
+use App\Http\Controllers\PanelController;
+use App\Http\Controllers\PeriodoContableController;
+use App\Http\Controllers\PortalColaboradorController;
+use App\Http\Controllers\ProveedorController;
+use App\Http\Controllers\ReporteController;
+use App\Http\Controllers\RespaldoController;
+use App\Http\Controllers\RetiroController;
+use App\Http\Controllers\RrhhController;
 use App\Http\Controllers\ServicioController;
 use App\Http\Controllers\VentaController;
-use App\Http\Controllers\RespaldoController;
-use App\Http\Controllers\NominaController;
-use App\Http\Controllers\FormulaController;
-use App\Http\Controllers\ProveedorController;
-use App\Http\Controllers\FacturaCompraController;
-use App\Http\Controllers\ReporteController;
-use App\Http\Controllers\AutenticacionController;
-use App\Http\Controllers\ContabilidadController;
-use App\Http\Controllers\CajaController;
-use App\Http\Controllers\CuentaPorPagarController;
-use App\Http\Controllers\CajaChicaController;
-use App\Http\Controllers\BancoController;
-use App\Http\Controllers\MesaCambioController;
-use App\Http\Controllers\RetiroController;
-use App\Http\Controllers\MermaController;
-use App\Http\Controllers\PortalColaboradorController;
-use App\Http\Controllers\CuentaContableController;
-use App\Http\Controllers\AsientoManualController;
-use App\Http\Controllers\CentroCostoController;
-use App\Http\Controllers\PeriodoContableController;
+use App\Models\Articulo;
+use App\Models\Cita;
+use App\Models\Cliente;
+use App\Models\Servicio;
+use App\Models\Usuario;
+use Illuminate\Support\Facades\Route;
 
 // =================================================================
 // RUTAS PÚBLICAS (No requieren sesión)
@@ -48,9 +51,9 @@ Route::middleware(['auth'])->group(function () {
     // -------------------------------------------------------------
     // NIVEL 1: GENERAL (Todos los roles: Admin, Recepción, Caja)
     // -------------------------------------------------------------
-    // El dashboard, agendar citas, ver clientes y marcar asistencia 
+    // El dashboard, agendar citas, ver clientes y marcar asistencia
     // son operaciones básicas que todo el equipo necesita hacer.
-    
+
     Route::get('/', [PanelController::class, 'index']);
 
     // -------------------------------------------------------------
@@ -70,13 +73,13 @@ Route::middleware(['auth'])->group(function () {
 
     Route::get('/agenda', function () {
         $citas = Cita::with(['cliente', 'servicio'])
-                            ->whereDate('appointment_date', today())
-                            ->orderBy('appointment_date', 'asc')
-                            ->get();
+            ->whereDate('appointment_date', today())
+            ->orderBy('appointment_date', 'asc')
+            ->get();
 
-        $clientes = \App\Models\Cliente::orderBy('name', 'asc')->get();
-        $servicios = \App\Models\Servicio::where('is_active', true)->orderBy('name', 'asc')->get();
-        $estilistas = \App\Models\Usuario::where('role', 'estilista')->where('is_active', true)->get();
+        $clientes = Cliente::orderBy('name', 'asc')->get();
+        $servicios = Servicio::where('is_active', true)->orderBy('name', 'asc')->get();
+        $estilistas = Usuario::where('role', 'estilista')->where('is_active', true)->get();
 
         return view('appointments.index', compact('citas', 'clientes', 'servicios', 'estilistas'));
     });
@@ -91,23 +94,22 @@ Route::middleware(['auth'])->group(function () {
     // CUSTOMER 360: perfil financiero del cliente (citas, facturas, CxC)
     Route::get('/clientes/{id}', [ClienteController::class, 'show']);
 
-
     // -------------------------------------------------------------
     // NIVEL 2: CAJA Y RECEPCIÓN (Accede 'recepcion' y 'admin')
     // -------------------------------------------------------------
     // Manejo de dinero, punto de venta y cuentas por cobrar.
-    
+
     Route::middleware(['role:recepcion,contador'])->group(function () {
-        
+
         Route::get('/pos', function () {
             // Fase 1 Administración: variantes de precio y fórmulas (BOM) para
             // el selector de variantes y el editor de consumo real en el POS.
-            $servicios = \App\Models\Servicio::with(['variantes', 'formulas.articulo'])
+            $servicios = Servicio::with(['variantes', 'formulas.articulo'])
                 ->where('is_active', true)
                 ->orderBy('name', 'asc')
                 ->get();
-            $productos = \App\Models\Articulo::where('type', '!=', 'servicio')->orderBy('producto', 'asc')->get();
-            $clientes = \App\Models\Cliente::with('grupo')->orderBy('name', 'asc')->get();
+            $productos = Articulo::where('type', '!=', 'servicio')->orderBy('producto', 'asc')->get();
+            $clientes = Cliente::with('grupo')->orderBy('name', 'asc')->get();
 
             return view('sales.pos', compact('servicios', 'productos', 'clientes'));
         });
@@ -137,7 +139,6 @@ Route::middleware(['auth'])->group(function () {
         Route::post('/mesa-cambio/operar', [MesaCambioController::class, 'store']);
         Route::post('/mesa-cambio/tasa-oficial', [MesaCambioController::class, 'registrarTasaOficial'])->name('mesa.tasa.oficial');
     });
-
 
     // -------------------------------------------------------------
     // NIVEL 3: FINANZAS (Administrador + Contador)
@@ -296,7 +297,7 @@ Route::middleware(['auth'])->group(function () {
         Route::post('/backups/restaurar', [RespaldoController::class, 'restore']);
     });
 
-        Route::prefix('portal')->name('portal.')->group(function () {
+    Route::prefix('portal')->name('portal.')->group(function () {
         Route::get('/login', [PortalColaboradorController::class, 'showLogin'])->name('login');
         Route::post('/login', [PortalColaboradorController::class, 'login'])->name('login.post');
         Route::post('/logout', [PortalColaboradorController::class, 'logout'])->name('logout');

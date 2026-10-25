@@ -77,7 +77,7 @@ $fuentesMeta = [
             </div>
             <div>
                 <p class="text-xs font-bold text-gray-500 uppercase tracking-wide">Ingresos del Periodo</p>
-                <p class="text-2xl font-black text-gray-900">C$ <span x-text="money(datos.kpis.ingresos)"></span></p>
+                <p class="text-2xl font-black text-gray-900">C$ <span x-text="money(datos.kpis.ingresos)">{{ number_format($estado['kpis']['ingresos'], 2) }}</span></p>
                 <p class="text-[10px] text-gray-400 font-medium">HABER clase 4 del Libro Mayor</p>
             </div>
         </{{ $tagIngresos }}>
@@ -90,8 +90,8 @@ $fuentesMeta = [
             </div>
             <div>
                 <p class="text-xs font-bold text-gray-500 uppercase tracking-wide">Utilidad Bruta</p>
-                <p class="text-2xl font-black text-emerald-600">C$ <span x-text="money(datos.kpis.utilidad_bruta)"></span></p>
-                <p class="text-[10px] text-gray-400 font-medium">Margen: <span x-text="datos.kpis.margen_bruto"></span>% — clase 4 vs clase 5</p>
+                <p class="text-2xl font-black text-emerald-600">C$ <span x-text="money(datos.kpis.utilidad_bruta)">{{ number_format($estado['kpis']['utilidad_bruta'], 2) }}</span></p>
+                <p class="text-[10px] text-gray-400 font-medium">Margen: <span x-text="datos.kpis.margen_bruto">{{ $estado['kpis']['margen_bruto'] }}</span>% — clase 4 vs clase 5</p>
             </div>
         </{{ $tagIngresos }}>
 
@@ -163,7 +163,7 @@ $fuentesMeta = [
             <div class="flex items-center justify-between mb-3">
                 <h3 class="text-lg font-bold text-gray-800">Meta Mensual</h3>
                 <div class="flex items-center gap-2">
-                    <span class="text-xs font-bold text-emerald-700 bg-emerald-50 px-2 py-1 rounded"><span x-text="datos.meta.progreso"></span>%</span>
+                    <span class="text-xs font-bold text-emerald-700 bg-emerald-50 px-2 py-1 rounded"><span x-text="datos.meta.progreso">{{ $estado['meta']['progreso'] }}</span>%</span>
                     @if($puedeEditarMeta)
                         <button type="button" @click="iniciarEdicionMeta()" title="Editar meta del mes"
                             class="p-1.5 rounded-lg text-gray-400 hover:text-emerald-700 hover:bg-emerald-50 transition cursor-pointer">
@@ -175,11 +175,11 @@ $fuentesMeta = [
 
             <!-- Barra de progreso -->
             <div class="h-3 bg-gray-100 rounded-full overflow-hidden mb-3">
-                <div class="h-full bg-emerald-600 rounded-full transition-all" :style="'width:' + (datos.meta.progreso ?? 0) + '%'"></div>
+                <div class="h-full bg-emerald-600 rounded-full transition-all" style="width: {{ $estado['meta']['progreso'] }}%" :style="'width:' + (datos.meta.progreso ?? 0) + '%'"></div>
             </div>
             <div class="flex justify-between text-sm">
-                <span class="font-bold text-gray-900">C$ <span x-text="money(datos.meta.avance)"></span></span>
-                <span class="text-gray-500">de C$ <span x-text="money(datos.meta.monto)"></span></span>
+                <span class="font-bold text-gray-900">C$ <span x-text="money(datos.meta.avance)">{{ number_format($estado['meta']['avance'], 2) }}</span></span>
+                <span class="text-gray-500">de C$ <span x-text="money(datos.meta.monto)">{{ number_format($estado['meta']['monto'], 2) }}</span></span>
             </div>
 
             <!-- Edición inline (solo admin) -->
@@ -240,32 +240,32 @@ $fuentesMeta = [
         <div class="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-4 text-sm">
             <div class="bg-gray-50 p-4 rounded-lg border border-gray-100">
                 <p class="text-xs font-bold text-gray-500 uppercase">Efectivo</p>
-                <p class="text-lg font-black text-gray-900 mt-1">C$ <span x-text="money(datos.metodo.efectivo)"></span></p>
+                <p class="text-lg font-black text-gray-900 mt-1">C$ <span x-text="money(datos.metodo.efectivo)">{{ number_format($estado['metodo']['efectivo'], 2) }}</span></p>
             </div>
             <div class="bg-gray-50 p-4 rounded-lg border border-gray-100">
                 <p class="text-xs font-bold text-gray-500 uppercase">BAC</p>
-                <p class="text-lg font-black text-gray-900 mt-1">C$ <span x-text="money(datos.metodo.bac)"></span></p>
+                <p class="text-lg font-black text-gray-900 mt-1">C$ <span x-text="money(datos.metodo.bac)">{{ number_format($estado['metodo']['bac'], 2) }}</span></p>
             </div>
             <div class="bg-gray-50 p-4 rounded-lg border border-gray-100">
                 <p class="text-xs font-bold text-gray-500 uppercase">LAFISE</p>
-                <p class="text-lg font-black text-gray-900 mt-1">C$ <span x-text="money(datos.metodo.lafise)"></span></p>
+                <p class="text-lg font-black text-gray-900 mt-1">C$ <span x-text="money(datos.metodo.lafise)">{{ number_format($estado['metodo']['lafise'], 2) }}</span></p>
             </div>
             <div class="bg-orange-50 p-4 rounded-lg border border-orange-100">
                 <p class="text-xs font-bold text-orange-600 uppercase">Costo Ventas (5.x)</p>
-                <p class="text-lg font-black text-orange-700 mt-1">C$ <span x-text="money(datos.kpis.costos)"></span></p>
+                <p class="text-lg font-black text-orange-700 mt-1">C$ <span x-text="money(datos.kpis.costos)">{{ number_format($estado['kpis']['costos'], 2) }}</span></p>
             </div>
             <div class="bg-red-50 p-4 rounded-lg border border-red-100">
                 <p class="text-xs font-bold text-red-600 uppercase">Gastos Oper. (6.x)</p>
-                <p class="text-lg font-black text-red-700 mt-1">C$ <span x-text="money(datos.kpis.gastos_operativos)"></span></p>
+                <p class="text-lg font-black text-red-700 mt-1">C$ <span x-text="money(datos.kpis.gastos_operativos)">{{ number_format($estado['kpis']['gastos_operativos'], 2) }}</span></p>
             </div>
             <div class="bg-red-50 p-4 rounded-lg border border-red-100">
                 <p class="text-xs font-bold text-red-600 uppercase">Otros Egresos (7.x)</p>
-                <p class="text-lg font-black text-red-700 mt-1">C$ <span x-text="money(datos.kpis.otros_egresos)"></span></p>
+                <p class="text-lg font-black text-red-700 mt-1">C$ <span x-text="money(datos.kpis.otros_egresos)">{{ number_format($estado['kpis']['otros_egresos'], 2) }}</span></p>
             </div>
             <div class="bg-emerald-50 p-4 rounded-lg border border-emerald-100">
                 <p class="text-xs font-bold text-emerald-700 uppercase">Utilidad Neta</p>
                 <p class="text-lg font-black text-emerald-700 mt-1">
-                    C$ <span x-text="money((datos.kpis.utilidad_bruta ?? 0) - (datos.kpis.gastos_operativos ?? 0) - (datos.kpis.otros_egresos ?? 0))"></span>
+                    C$ <span x-text="money((datos.kpis.utilidad_bruta ?? 0) - (datos.kpis.gastos_operativos ?? 0) - (datos.kpis.otros_egresos ?? 0))">{{ number_format(($estado['kpis']['utilidad_bruta'] ?? 0) - ($estado['kpis']['gastos_operativos'] ?? 0) - ($estado['kpis']['otros_egresos'] ?? 0), 2) }}</span>
                 </p>
             </div>
         </div>

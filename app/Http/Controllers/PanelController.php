@@ -24,9 +24,7 @@ use Illuminate\Http\Request;
  */
 class PanelController extends Controller
 {
-    public function __construct(private DashboardService $bi)
-    {
-    }
+    public function __construct(private DashboardService $bi) {}
 
     /**
      * Resuelve el rango de fechas según el filtro global (?rango=).
@@ -36,7 +34,7 @@ class PanelController extends Controller
     protected function resolverRango(Request $request): array
     {
         $rango = $request->query('rango', 'hoy');
-        if (!in_array($rango, ['hoy', 'semana', 'mes', 'año', 'anio'])) {
+        if (! in_array($rango, ['hoy', 'semana', 'mes', 'año', 'anio'])) {
             $rango = 'hoy';
         }
         if ($rango === 'año') {
@@ -154,7 +152,7 @@ class PanelController extends Controller
             'items' => $venta->detalles->map(function ($d) {
                 return [
                     'producto' => trim(($d->servicio?->name ?? $d->articulo?->producto ?? 'Ítem')
-                        . ($d->variante ? ' ('.$d->variante->name.')' : '')),
+                        .($d->variante ? ' ('.$d->variante->name.')' : '')),
                     'estilista' => $d->estilista?->name,
                     'cantidad' => (int) $d->quantity,
                     'precio' => (float) $d->unit_price,

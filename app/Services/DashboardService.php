@@ -188,8 +188,8 @@ class DashboardService
             ->groupBy('sd.service_id', 's.name')
             ->orderByDesc('monto')
             ->limit($take)
-            ->selectRaw("sd.service_id as id, s.name as servicio,
-                SUM(sd.quantity) as unidades, SUM(sd.quantity * sd.unit_price) as monto")
+            ->selectRaw('sd.service_id as id, s.name as servicio,
+                SUM(sd.quantity) as unidades, SUM(sd.quantity * sd.unit_price) as monto')
             ->get()
             ->map(fn ($f) => [
                 'id' => (int) $f->id,

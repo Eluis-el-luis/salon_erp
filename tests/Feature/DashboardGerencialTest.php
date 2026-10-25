@@ -159,13 +159,15 @@ class DashboardGerencialTest extends TestCase
 
         $respuesta = $this->getJson('/panel/api/datos?rango=mes');
 
+        // assertJsonPath compara IDENTIDAD: los números enteros del JSON se
+        // decodifican como int, así que las expectativas deben ser int.
         $respuesta->assertStatus(200)
-            ->assertJsonPath('kpis.ingresos', 1000.0)
-            ->assertJsonPath('kpis.costos', 300.0)
-            ->assertJsonPath('kpis.gastos_operativos', 200.0)
-            ->assertJsonPath('kpis.otros_egresos', 50.0)
-            ->assertJsonPath('kpis.utilidad_bruta', 700.0)
-            ->assertJsonPath('kpis.margen_bruto', 70.0);
+            ->assertJsonPath('kpis.ingresos', 1000)
+            ->assertJsonPath('kpis.costos', 300)
+            ->assertJsonPath('kpis.gastos_operativos', 200)
+            ->assertJsonPath('kpis.otros_egresos', 50)
+            ->assertJsonPath('kpis.utilidad_bruta', 700)
+            ->assertJsonPath('kpis.margen_bruto', 70);
 
         // La compra (activo) ni el cierre fiscal distorsionan el panel
         $this->assertNotEquals(6000.0, $respuesta->json('kpis.ingresos'));
@@ -193,34 +195,57 @@ class DashboardGerencialTest extends TestCase
 
         $this->getJson('/panel/api/datos?rango=mes')
             ->assertStatus(200)
-            ->assertJsonPath('kpis.ingresos', 0.0)
-            ->assertJsonPath('kpis.utilidad_bruta', 0.0);
+            ->assertJsonPath('kpis.ingresos', 0)
+            ->assertJsonPath('kpis.utilidad_bruta', 0);
     }
 
-    public function test_la_serie_temporal_se_agrupa_por_dia_y_por_mes(): void
+    public function test_la_serie_diaria_cubre_la_semana_completa(): void
     {
         $this->actingAs($this->admin);
 
-        $this->crearAsiento('ING-T1', now()->toDateString(), [
-            ['1.1.1', 1000, 0],
-            ['4.1', 0, 1000],
-        ]);
-        $this->crearAsiento('ING-T2', now()->subDay()->toDateString(), [
+        // 500 el lunes de esta semana y 1000 hoy
+        $this->crearAsiento('ING-T1', now()->startOfWeek()->toDateString(), [
             ['1.1.1', 500, 0],
             ['4.1', 0, 500],
         ]);
+        $this->crearAsiento('ING-T2', now()->toDateString(), [
+            ['1.1.1', 1000, 0],
+            ['4.1', 0, 1000],
+        ]);
 
-        // Semana: 7 días (hoy y ayer con datos, resto en cero)
         $semana = $this->getJson('/panel/api/datos?rango=semana')->json('serie');
-        $this->assertCount(7, $semana['labels']);
-        $this->assertEquals(1000.0, (float) end($semana['ingresos']));
-        $this->assertEquals(500.0, (float) $semana['ingresos'][5]);
 
-        // Año: 12 meses (ambos asientos caen en el mes en curso)
+        // La semana se dibuja COMPLETA (lunes → domingo, días futuros en cero)
+        $this->assertCount(7, $semana['labels']);
+
+        $indiceHoy = (int) now()->dayOfWeekIso - 1; // lunes = 0
+        if ($indiceHoy === 0) {
+            $this->assertEquals(1500.0, (float) $semana['ingresos'][0]);
+        } else {
+            $this->assertEquals(500.0, (float) $semana['ingresos'][0]);
+            $this->assertEquals(1000.0, (float) $semana['ingresos'][$indiceHoy]);
+        }
+    }
+
+    public function test_la_serie_anual_se_agrupa_por_mes(): void
+    {
+        $this->actingAs($this->admin);
+
+        // 500 el día 1 del mes en curso y 1000 hoy: ambos caen en el mismo mes
+        $this->crearAsiento('ING-T1', now()->startOfMonth()->toDateString(), [
+            ['1.1.1', 500, 0],
+            ['4.1', 0, 500],
+        ]);
+        $this->crearAsiento('ING-T2', now()->toDateString(), [
+            ['1.1.1', 1000, 0],
+            ['4.1', 0, 1000],
+        ]);
+
         $anio = $this->getJson('/panel/api/datos?rango=anio')->json('serie');
+
         $this->assertCount(12, $anio['labels']);
         $this->assertEquals(1500.0, (float) $anio['ingresos'][now()->month - 1]);
-        $this->assertEquals(0.0, (float) $anio['ingresos'][now()->month - 2]);
+        $this->assertEquals(1500.0, (float) array_sum($anio['ingresos']));
     }
 
     public function test_los_cobros_por_metodo_se_leen_de_las_cuentas_de_fondos(): void
@@ -262,7 +287,7 @@ class DashboardGerencialTest extends TestCase
         $this->actingAs($this->admin);
         $this->postJson('/panel/api/meta', ['monto' => 250000])
             ->assertStatus(200)
-            ->assertJsonPath('meta.monto', 250000.0)
+            ->assertJsonPath('meta.monto', 250000)
             ->assertJsonPath('meta.fuente', 'exacta');
 
         $this->assertDatabaseHas('company_targets', [
@@ -322,8 +347,8 @@ class DashboardGerencialTest extends TestCase
         $respuesta->assertStatus(200)
             ->assertJsonPath('id', $ventaId)
             ->assertJsonPath('estado', 'pagada')
-            ->assertJsonPath('total', 6900.0)
-            ->assertJsonPath('descuento', 100.0);
+            ->assertJsonPath('total', 6900)
+            ->assertJsonPath('descuento', 100);
 
         $this->assertEquals('Maquillaje Social', $respuesta->json('items.0.producto'));
         $this->assertEquals(2, $respuesta->json('items.0.cantidad'));
@@ -349,7 +374,7 @@ class DashboardGerencialTest extends TestCase
 
         Articulo::create([
             'producto' => 'Base Liquida Critica',
-            'type' => 'producto',
+            'type' => 'producto_venta',
             'precio_c' => 500,
             'precio_usd' => 15,
             'existencia_actual' => 1,
@@ -357,7 +382,7 @@ class DashboardGerencialTest extends TestCase
         ]);
         Articulo::create([
             'producto' => 'Sombras abundance',
-            'type' => 'producto',
+            'type' => 'producto_venta',
             'precio_c' => 900,
             'precio_usd' => 25,
             'existencia_actual' => 50,
@@ -382,11 +407,14 @@ class DashboardGerencialTest extends TestCase
 
     public function test_los_endpoints_bi_requieren_sesion(): void
     {
-        // Sin sesión: redirección al login (nunca datos financieros expuestos)
-        $this->get('/panel/api/datos')->assertRedirect(route('login'));
+        // Sin sesión: el SPA recibe 401 JSON en TODOS los endpoints BI (nunca
+        // datos financieros ni un redirect HTML que fetch() seguiría en silencio)
+        $this->get('/panel/api/datos')->assertStatus(401);
         $this->getJson('/panel/api/datos')->assertStatus(401);
-        $this->get('/panel/api/movimientos/1')->assertRedirect(route('login'));
-        $this->post('/panel/api/meta', ['monto' => 1000])->assertRedirect(route('login'));
+        $this->get('/panel/api/movimientos/1')->assertStatus(401);
+        $this->post('/panel/api/meta', ['monto' => 1000])->assertStatus(401);
+
+        // Las vistas web del panel siguen redirigiendo al login
         $this->get('/')->assertRedirect(route('login'));
     }
 }
