@@ -96,11 +96,21 @@ export default function dashboard(estadoInicial, flags = {}) {
                         'X-Requested-With': 'XMLHttpRequest',
                     },
                 });
-                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                if (!resp.ok) {
+                    // 401 = sesión expirada: el mensaje debe guiar, no culpar
+                    // a la conexión. Otros estados se muestran para diagnosticar.
+                    if (resp.status === 401) {
+                        throw new Error('SESION_EXPIRADA');
+                    }
+                    throw new Error(`HTTP ${resp.status}`);
+                }
                 this.datos = await resp.json();
                 this.renderizarGraficos();
             } catch (e) {
-                this.error = 'No se pudo actualizar el panel. Verifica tu conexión e intenta de nuevo.';
+                console.error('[Dashboard BI] Falló /panel/api/datos:', e);
+                this.error = e?.message === 'SESION_EXPIRADA'
+                    ? 'Tu sesión expiró. Recarga la página para iniciar sesión de nuevo.'
+                    : `No se pudo actualizar el panel (${e?.message ?? 'sin respuesta del servidor'}).`;
             } finally {
                 this.cargando = false;
             }
@@ -221,7 +231,10 @@ export default function dashboard(estadoInicial, flags = {}) {
                 if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                 this.modal.movimiento = await resp.json();
             } catch (e) {
-                this.modal.error = 'No se pudo cargar el detalle del movimiento.';
+                console.error('[Dashboard BI] Falló el Quick View:', e);
+                this.modal.error = e?.message === 'HTTP 401'
+                    ? 'Tu sesión expiró. Recarga la página para iniciar sesión de nuevo.'
+                    : 'No se pudo cargar el detalle del movimiento.';
             } finally {
                 this.modal.cargando = false;
             }

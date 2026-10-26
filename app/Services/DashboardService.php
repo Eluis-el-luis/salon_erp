@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\CompanyTarget;
 use App\Models\Venta;
 use Carbon\Carbon;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -151,13 +152,22 @@ class DashboardService
     /**
      * Meta del mes en curso con su avance REAL (ingresos clase 4 del mes
      * según el mayor, no sumas de sales). Siempre independiente del rango.
+     *
+     * RESILIENCIA: si la migración de company_targets aún no se ha ejecutado
+     * en esta base, el panel NUNCA debe caerse por la meta: cae al fallback
+     * de config (comportamiento anterior al sistema de metas dinámicas).
      */
     public function metaMes(): array
     {
         $inicioMes = Carbon::now()->startOfMonth();
         $finMes = Carbon::now()->endOfMonth();
 
-        $meta = CompanyTarget::montoParaMes(Carbon::now());
+        try {
+            $meta = CompanyTarget::montoParaMes(Carbon::now());
+        } catch (QueryException) {
+            $meta = ['monto' => (float) config('salon.meta_mensual', 150000), 'fuente' => 'config'];
+        }
+
         $avance = $this->kpisRango($inicioMes, $finMes)['ingresos'];
         $monto = (float) $meta['monto'];
 
