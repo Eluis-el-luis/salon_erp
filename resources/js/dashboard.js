@@ -23,6 +23,13 @@ const ESTADOS_VENTA = {
     anulada: { texto: 'Anulada', clases: 'bg-red-50 text-red-700 border-red-200' },
 };
 
+// Instancias de Chart.js FUERA del estado reactivo de Alpine: si se guardan
+// en `this`, el Proxy reactivo de Alpine intercepta los objetos internos de
+// Chart.js y chart.update() explota con "Maximum call stack size exceeded"
+// o "Cannot set properties of undefined (setting 'fullSize')".
+let chartVentas = null;
+let chartPagos = null;
+
 export default function dashboard(estadoInicial, flags = {}) {
     return {
         // ---------- Estado reactivo ----------
@@ -44,9 +51,6 @@ export default function dashboard(estadoInicial, flags = {}) {
         metaBorrador: 0,
         guardandoMeta: false,
         metaExito: false,
-
-        // ---------- Chart.js (se crean una vez) ----------
-        charts: { linea: null, donut: null },
 
         init() {
             this.$nextTick(() => this.renderizarGraficos());
@@ -124,16 +128,27 @@ export default function dashboard(estadoInicial, flags = {}) {
 
             const serie = this.datos?.serie ?? { labels: [], ingresos: [], costos: [] };
 
+            // Si el canvas fue reemplazado en el DOM, la instancia queda huérfana:
+            // se destruye y se recrea (evita "Canvas is already in use").
+            if (chartVentas && !chartVentas.canvas?.isConnected) {
+                chartVentas.destroy();
+                chartVentas = null;
+            }
+            if (chartPagos && !chartPagos.canvas?.isConnected) {
+                chartPagos.destroy();
+                chartPagos = null;
+            }
+
             // Línea: ingresos vs costos (del mayor)
-            if (this.charts.linea) {
-                this.charts.linea.data.labels = serie.labels;
-                this.charts.linea.data.datasets[0].data = serie.ingresos;
-                this.charts.linea.data.datasets[1].data = serie.costos;
-                this.charts.linea.update();
+            if (chartVentas) {
+                chartVentas.data.labels = serie.labels;
+                chartVentas.data.datasets[0].data = serie.ingresos;
+                chartVentas.data.datasets[1].data = serie.costos;
+                chartVentas.update();
             } else {
                 const ctx = document.getElementById('chartVentas');
                 if (!ctx) return;
-                this.charts.linea = new Chart(ctx, {
+                chartVentas = new Chart(ctx, {
                     type: 'line',
                     data: {
                         labels: serie.labels,
@@ -185,13 +200,13 @@ export default function dashboard(estadoInicial, flags = {}) {
             const metodo = this.datos?.metodo ?? {};
             const donutData = [metodo.efectivo ?? 0, metodo.bac ?? 0, metodo.lafise ?? 0];
 
-            if (this.charts.donut) {
-                this.charts.donut.data.datasets[0].data = donutData;
-                this.charts.donut.update();
+            if (chartPagos) {
+                chartPagos.data.datasets[0].data = donutData;
+                chartPagos.update();
             } else {
                 const ctx = document.getElementById('chartPagos');
                 if (!ctx) return;
-                this.charts.donut = new Chart(ctx, {
+                chartPagos = new Chart(ctx, {
                     type: 'doughnut',
                     data: {
                         labels: ['Efectivo', 'BAC', 'LAFISE'],
