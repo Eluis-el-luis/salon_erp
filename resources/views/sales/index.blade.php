@@ -14,6 +14,7 @@
                     <option value="pagada" {{ request('estado') === 'pagada' ? 'selected' : '' }}>Pagada</option>
                     <option value="emitida" {{ request('estado') === 'emitida' ? 'selected' : '' }}>Emitida (Por cobrar)</option>
                     <option value="borrador" {{ request('estado') === 'borrador' ? 'selected' : '' }}>Cotización (Borrador)</option>
+                    <option value="pendiente_aprobacion" {{ request('estado') === 'pendiente_aprobacion' ? 'selected' : '' }}>Pendiente de Aprobación</option>
                     <option value="anulada" {{ request('estado') === 'anulada' ? 'selected' : '' }}>Anulada</option>
                 </select>
             </form>
@@ -55,12 +56,14 @@
                                     'pagada'   => 'bg-emerald-100 text-emerald-800',
                                     'emitida'  => 'bg-amber-100 text-amber-800',
                                     'borrador' => 'bg-gray-200 text-gray-700',
+                                    'pendiente_aprobacion' => 'bg-purple-100 text-purple-800',
                                     'anulada'  => 'bg-red-100 text-red-800',
                                 ];
                                 $etiquetasEstado = [
                                     'pagada'   => 'Pagada',
                                     'emitida'  => 'Por Cobrar',
                                     'borrador' => 'Cotización',
+                                    'pendiente_aprobacion' => 'Pendiente de Aprobación',
                                     'anulada'  => 'Anulada',
                                 ];
                             @endphp
@@ -102,8 +105,10 @@
                                     Imprimir
                                 </a>
 
-                                {{-- ANULAR: privilegio exclusivo del administrador, nunca borra el documento --}}
-                                @if($esAdmin && in_array($venta->status, ['pagada', 'emitida', 'borrador']))
+                                {{-- ANULAR: doble confirmación con PIN de supervisor.
+                                     Los roles con acceso a la ruta pueden intentar;
+                                     sólo se ejecuta con el PIN de Álvaro/Administrador. --}}
+                                @if($puedeAnular && in_array($venta->status, ['pagada', 'emitida', 'borrador', 'pendiente_aprobacion']))
                                     <button @click="anularId = {{ $venta->id }}" class="text-red-500 hover:text-red-700 font-bold transition">
                                         Anular
                                     </button>
@@ -144,8 +149,11 @@
                         </p>
                     </div>
                     <div class="px-6 py-4 bg-gray-50 border-t border-gray-100 flex flex-row-reverse gap-3">
-                        <button type="submit" class="btn bg-red-600 hover:bg-red-700 text-white font-bold py-2.5 px-4 rounded-xl flex-1">
-                            Confirmar Anulación
+                        {{-- DOBLE CONFIRMACIÓN: abre el modal de PIN de supervisor --}}
+                        <button type="button"
+                                @click="window.dispatchEvent(new CustomEvent('open-pin', { detail: { mensaje: 'Anular una factura exige el PIN de un supervisor (Álvaro / Administrador).', form: $event.target.closest('form') } }))"
+                                class="btn bg-red-600 hover:bg-red-700 text-white font-bold py-2.5 px-4 rounded-xl flex-1">
+                            Continuar a Autorización
                         </button>
                         <button type="button" @click="anularId = null" class="btn btn-secondary">Cancelar</button>
                     </div>

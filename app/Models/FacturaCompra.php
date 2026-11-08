@@ -18,6 +18,8 @@ class FacturaCompra extends Model
 
     protected $table = 'purchase_invoices';
 
+    public const ESTADO_PENDIENTE_APROBACION = 'pendiente_aprobacion';
+
     public const ESTADO_REGISTRADA = 'registrada';
 
     public const ESTADO_ANULADA = 'anulada';
@@ -38,10 +40,13 @@ class FacturaCompra extends Model
         'asiento_contable_id',
         'notas',
         'usuario_id',
+        'aprobada_at',
+        'aprobada_por',
     ];
 
     protected $casts = [
         'fecha_factura' => 'date',
+        'aprobada_at' => 'datetime',
         'subtotal' => 'float',
         'descuento' => 'float',
         'gastos_envio' => 'float',
@@ -67,5 +72,10 @@ class FacturaCompra extends Model
     public function asiento()
     {
         return $this->belongsTo(AsientoContable::class, 'asiento_contable_id');
+    }
+
+    public function aprobadaPor()
+    {
+        return $this->belongsTo(Usuario::class, 'aprobada_por');
     }
 }

@@ -9,6 +9,7 @@ use App\Models\Proveedor;
 use App\Models\StockLedger;
 use App\Services\CompraService;
 use App\Services\InventarioService;
+use App\Services\AprobacionService;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -90,9 +91,25 @@ class InventarioController extends Controller
             'articulos.*.cantidad' => 'required|numeric|min:0.0001',
             'articulos.*.costo' => 'required|numeric|min:0',
             'articulos.*.impuesto_porcentaje' => 'nullable|numeric|min:0|max:100',
+            // GOBERNANZA: fuerza la retención de la compra para aprobación
+            'requiere_aprobacion' => 'nullable|boolean',
         ]);
 
         try {
+            // FLUJO DE PRE-APROBACIÓN: compras sobre el umbral de
+            // config('salon.aprobaciones.monto_compra') (o con flag explícito)
+            // quedan como documento retenido SIN stock, kárdex, CxP ni asiento
+            // hasta que un supervisor las apruebe desde /aprobaciones.
+            $subtotalCompra = round(collect($request->articulos)->sum(
+                fn ($linea) => ((float) $linea['cantidad']) * ((float) ($linea['costo'] ?? 0))
+            ), 2);
+
+            $requiereAprobacion = app(AprobacionService::class)->requiereAprobacionCompra(
+                $subtotalCompra,
+                auth()->user()->role ?? null,
+                $request->boolean('requiere_aprobacion')
+            );
+
             $factura = (new CompraService)->registrarFactura([
                 'provider_id' => (int) $request->provider_id,
                 'condicion_pago' => $request->condicion_pago ?? $request->tipo_pago,
@@ -103,11 +120,15 @@ class InventarioController extends Controller
                 'gastos_envio' => (float) ($request->gastos_envio ?? 0),
                 'notas' => $request->notas,
                 'articulos' => $request->articulos,
+                'requiere_aprobacion' => $requiereAprobacion,
             ]);
 
             return response()->json([
-                'message' => 'Compra registrada: inventario, kárdex, lotes y contabilidad actualizados.',
+                'message' => $requiereAprobacion
+                    ? 'Compra RETENIDA para aprobación: no afecta inventario ni contabilidad hasta que un supervisor la apruebe.'
+                    : 'Compra registrada: inventario, kárdex, lotes y contabilidad actualizados.',
                 'factura_id' => $factura->id,
+                'pendiente_aprobacion' => $requiereAprobacion,
             ], 201);
         } catch (\Exception $e) {
             Log::error('Error al procesar compra de inventario', [

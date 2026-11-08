@@ -84,9 +84,15 @@ class PanelController extends Controller
         // ÚLTIMOS MOVIMIENTOS (eager loading: cajero + cliente + conteo de pagos)
         $ultimasVentas = $this->bi->ultimosMovimientos();
 
-        // FLAGS DE ROL para drill-down condicional (mismo criterio del menú:
-        // el admin tiene bypass, nunca 403 desde el dashboard).
+        // FLAGS DE ROL para drill-down condicional y alertas (mismo criterio del
+        // menú RBAC: 'alvaro' tiene bypass global; 'admin' es operativo y queda
+        // FUERA de la contabilidad; contador = auditoría financiera).
         $rol = auth()->user()->role ?? null;
+        $puedeAprobar = in_array($rol, ['alvaro', 'admin']);
+        $pendientesAprobacion = $puedeAprobar
+            ? Venta::where('status', Venta::ESTADO_PENDIENTE_APROBACION)->count()
+                + \App\Models\FacturaCompra::where('estado', \App\Models\FacturaCompra::ESTADO_PENDIENTE_APROBACION)->count()
+            : 0;
 
         return view('dashboard', [
             'estado' => $estado,
@@ -95,10 +101,12 @@ class PanelController extends Controller
             'citasPendientes' => max(0, $citasTotal - $citasCompletadas),
             'stockCritico' => $stockCritico,
             'ultimasVentas' => $ultimasVentas,
-            'puedeFinanzas' => in_array($rol, ['admin', 'contador']),
-            'puedeCaja' => in_array($rol, ['admin', 'recepcion', 'contador']),
-            'puedeInventario' => $rol === 'admin',
-            'puedeEditarMeta' => $rol === 'admin',
+            'puedeFinanzas' => in_array($rol, ['alvaro', 'contador']),
+            'puedeCaja' => in_array($rol, ['alvaro', 'admin', 'recepcion', 'contador']),
+            'puedeInventario' => in_array($rol, ['alvaro', 'admin']),
+            'puedeEditarMeta' => in_array($rol, ['alvaro', 'admin']),
+            'puedeAprobar' => $puedeAprobar,
+            'pendientesAprobacion' => $pendientesAprobacion,
         ]);
     }
 

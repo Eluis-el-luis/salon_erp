@@ -16,7 +16,7 @@ use Illuminate\Support\Facades\Validator;
 class EmpleadoController extends Controller
 {
     // Roles válidos del sistema (deben coincidir con el enum de users.role)
-    protected const ROLES_VALIDOS = ['admin', 'estilista', 'recepcion', 'contador'];
+    protected const ROLES_VALIDOS = ['alvaro', 'admin', 'estilista', 'recepcion', 'contador'];
 
     // Tipos de contrato del expediente RRHH
     protected const TIPOS_CONTRATO = ['indefinido', 'plazo_fijo', 'obra_labor', 'servicios_profesionales'];
@@ -47,6 +47,7 @@ class EmpleadoController extends Controller
             'cargo' => 'nullable|string|max:120',
             'documento_identidad' => 'nullable|string|max:50',
             'nss' => 'nullable|string|max:50',
+            'pin_seguridad' => 'nullable|string|min:4|max:6|regex:/^\d{4,6}$/',
         ], $this->mensajesValidacion(), $this->atributos());
 
         if ($validator->fails()) {
@@ -59,18 +60,25 @@ class EmpleadoController extends Controller
         DB::beginTransaction();
 
         try {
-            $usuario = Usuario::create([
+            $data = [
                 'name' => $request->name,
                 'email' => $request->email,
                 'password' => Hash::make($request->password),
                 'role' => $request->role,
                 'role_id' => $this->resolverRoleId($request->role),
                 'salario_fijo' => $request->salario_fijo ?? 0,
-                'comision_servicio' => $request->comision_servicio ?? 0, // Se mantiene por retrocompatibilidad
+                'comision_servicio' => $request->comision_servicio ?? 0,
                 'comision_producto' => $request->comision_producto ?? 0,
                 'phone' => $request->phone,
                 'is_active' => true,
-            ]);
+            ];
+
+            // PIN de seguridad (se guarda hasheado)
+            if ($request->filled('pin_seguridad')) {
+                $data['pin_seguridad'] = Hash::make($request->pin_seguridad);
+            }
+
+            $usuario = Usuario::create($data);
 
             // HRMS: expediente Employee (ciclo de vida) separado del User (acceso)
             Empleado::crearParaUsuario($usuario, [
@@ -130,6 +138,7 @@ class EmpleadoController extends Controller
                 'cargo' => 'nullable|string|max:120',
                 'documento_identidad' => 'nullable|string|max:50',
                 'nss' => 'nullable|string|max:50',
+                'pin_seguridad' => 'nullable|string|min:4|max:6|regex:/^\d{4,6}$/',
             ], $this->mensajesValidacion(), $this->atributos());
 
             if ($validator->fails()) {
@@ -167,6 +176,14 @@ class EmpleadoController extends Controller
 
             if ($request->filled('password')) {
                 $data['password'] = Hash::make($request->password);
+            }
+
+            // PIN de seguridad (se guarda hasheado, solo si se envía)
+            if ($request->filled('pin_seguridad')) {
+                $data['pin_seguridad'] = Hash::make($request->pin_seguridad);
+            } else {
+                // No sobrescribir el PIN si no se envía
+                unset($data['pin_seguridad']);
             }
 
             $empleado->update($data);
@@ -243,6 +260,7 @@ class EmpleadoController extends Controller
                 'string' => 'El campo :attribute no debe superar :max caracteres.',
                 'numeric' => 'El campo :attribute no debe ser mayor que :max.',
             ],
+            'regex' => 'El :attribute debe tener entre 4 y 6 dígitos numéricos.',
         ];
     }
 
@@ -265,6 +283,7 @@ class EmpleadoController extends Controller
             'cargo' => 'cargo',
             'documento_identidad' => 'documento de identidad',
             'nss' => 'número INSS',
+            'pin_seguridad' => 'PIN de seguridad',
         ];
     }
 

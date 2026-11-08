@@ -6,12 +6,15 @@ use Illuminate\Http\Request;
 use App\Models\SesionCaja;
 use App\Models\Venta;
 use App\Services\ContabilidadService;
+use App\Traits\AutorizaPinSupervisor;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
 
 class CajaController extends Controller
 {
+    use AutorizaPinSupervisor;
+
     /**
      * MANDAMIENTO: Solo el Administrador y el Contador gestionan los montos
      * de apertura y cierre de forma manual. El resto se calcula automáticamente.
@@ -67,7 +70,7 @@ class CajaController extends Controller
         ));
     }
 
-    // Abrir Turno
+    // Abrir Turno (requiere doble confirmación con PIN propio o de supervisor)
     public function open(Request $request)
     {
         $privilegiado = $this->puedeGestionarMontos();
@@ -76,6 +79,9 @@ class CajaController extends Controller
             // Solo el privilegiado envía el monto manual; los demás van oculto.
             'monto_apertura' => 'nullable|numeric|min:0',
         ]);
+
+        // DOBLE CONFIRMACIÓN: abrir arqueo exige PIN propio o de supervisor
+        $this->autorizarPin($request);
 
         DB::beginTransaction();
 
@@ -112,7 +118,7 @@ class CajaController extends Controller
         }
     }
 
-    // Cerrar Turno (Arqueo)
+    // Cerrar Turno (Arqueo, con doble confirmación por PIN)
     public function close(Request $request)
     {
         $privilegiado = $this->puedeGestionarMontos();
@@ -121,6 +127,9 @@ class CajaController extends Controller
             // Solo el privilegiado envía el monto físico; los demás se auto-calculan.
             'monto_fisico' => 'nullable|numeric|min:0',
         ]);
+
+        // DOBLE CONFIRMACIÓN: cerrar arqueo exige PIN propio o de supervisor
+        $this->autorizarPin($request);
 
         DB::beginTransaction();
 

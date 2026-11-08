@@ -25,7 +25,7 @@ class CatalogoCuentasTest extends TestCase
 {
     use RefreshDatabase;
 
-    protected Usuario $admin;
+    protected Usuario $contador;  // Contador / Auditoría financiera (acceso a catálogo)
 
     protected function setUp(): void
     {
@@ -37,16 +37,16 @@ class CatalogoCuentasTest extends TestCase
         // Marca las cuentas del catálogo base como protegidas (como en producción)
         DB::table('cuentas_contables')->update(['is_system_account' => true]);
 
-        $this->admin = Usuario::create([
+        $this->contador = Usuario::create([
             'name' => 'Contador Admin',
             'email' => 'contador@test.com',
             'password' => 'password',
-            'role' => 'admin',
-            'role_id' => Rol::where('name', 'Administrador')->first()->id,
+            'role' => 'contador',
+            'role_id' => Rol::where('name', 'Contador')->first()->id,
             'is_active' => true,
         ]);
 
-        $this->actingAs($this->admin);
+        $this->actingAs($this->contador);
     }
 
     protected function xlsx(array $filas, string $nombre = 'import_test.xlsx'): UploadedFile

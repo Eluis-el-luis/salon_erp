@@ -24,6 +24,11 @@ use Illuminate\Support\Facades\DB;
  *  6. Envía el comando al ContabilidadService para el asiento COM-*
  *     (DEBE inventario + IVA crédito fiscal / HABER CxP o caja-banco).
  *
+ * GOBERNANZA (pre-aprobación): con requiere_aprobacion = true la factura se
+ * crea SOLO como documento (líneas sin efectos): sin stock, sin lotes, sin
+ * kárdex, sin CxP y sin asiento. CompraService::aprobarFactura ejecuta los
+ * pasos 2-6 cuando el supervisor aprueba; rechazarFactura anula el documento.
+ *
  * La anulación (anularFactura) sigue §5.3: nunca borra, revierte.
  */
 class CompraService
@@ -41,8 +46,9 @@ class CompraService
     public function registrarFactura(array $datos, ?int $usuarioId = null): FacturaCompra
     {
         $proveedor = Proveedor::findOrFail($datos['provider_id']);
+        $requiereAprobacion = (bool) ($datos['requiere_aprobacion'] ?? false);
 
-        return DB::transaction(function () use ($datos, $proveedor, $usuarioId) {
+        return DB::transaction(function () use ($datos, $proveedor, $usuarioId, $requiereAprobacion) {
             $lineas = $this->valorarLineas($datos['articulos'] ?? []);
 
             $subtotal = round(array_sum(array_column($lineas, 'valor_comprado')), 2);
@@ -92,12 +98,14 @@ class CompraService
                 'gastos_envio' => $envio,
                 'impuestos' => $impuestos,
                 'total' => $total,
-                'estado' => FacturaCompra::ESTADO_REGISTRADA,
+                'estado' => $requiereAprobacion
+                    ? FacturaCompra::ESTADO_PENDIENTE_APROBACION
+                    : FacturaCompra::ESTADO_REGISTRADA,
                 'notas' => $datos['notas'] ?? null,
                 'usuario_id' => $usuarioId ?? auth()->id(),
             ]);
 
-            // LÍNEAS + INVENTARIO + LOTES + KÁRDEX
+            // LÍNEAS DEL DOCUMENTO (sin efectos físicos todavía)
             foreach ($lineas as $linea) {
                 $articulo = Articulo::lockForUpdate()->findOrFail($linea['id']);
 
@@ -105,7 +113,7 @@ class CompraService
                     throw new \Exception('El artículo "'.$articulo->producto.'" es un servicio y no puede comprarse.');
                 }
 
-                $lineaDb = $factura->lineas()->create([
+                $factura->lineas()->create([
                     'item_id' => $articulo->id,
                     'descripcion' => $articulo->producto,
                     'cantidad' => $linea['cantidad'],
@@ -118,32 +126,111 @@ class CompraService
                     'lote' => $linea['lote'] ?? null,
                     'fecha_vencimiento' => $linea['fecha_vencimiento'] ?? null,
                 ]);
-
-                $this->ingresarStock($articulo, $linea, $lineaDb, $factura, $usuarioId);
             }
 
-            // CUENTA POR PAGAR: el pasivo del proveedor con sus días de crédito
-            if ($factura->condicion_pago === 'credito') {
-                $diasCredito = (int) ($proveedor->credit_days ?: 30);
-                $cxp = CuentaPorPagar::create([
-                    'provider_id' => $proveedor->id,
-                    'purchase_invoice_id' => $factura->id,
-                    'numero_documento' => $factura->numero_documento,
-                    'fecha_emision' => $factura->fecha_factura,
-                    'fecha_vencimiento' => $factura->fecha_factura->copy()->addDays($diasCredito),
-                    'monto_original' => $total,
-                    'saldo_pendiente' => $total,
-                    'estado' => 'pendiente',
-                ]);
-                $factura->update(['cuenta_por_pagar_id' => $cxp->id]);
+            // PRE-APROBACIÓN: la compra queda como documento retenido. Inventario,
+            // lotes, kárdex, CxP y asiento se ejecutan al aprobar (aprobarFactura).
+            if ($requiereAprobacion) {
+                return $factura->fresh(['lineas']);
             }
 
-            // MOTOR CONTABLE: asiento COM-* (cuenta con el IVA de compra)
-            $asiento = (new ContabilidadService)->contabilizarFacturaCompra($factura);
-            $factura->update(['asiento_contable_id' => $asiento->id]);
+            $this->ejecutarIngresoMercaderia($factura, $usuarioId);
 
             return $factura->fresh(['lineas']);
         });
+    }
+
+    /**
+     * APRUEBA una compra retenida: ejecuta inventario + lotes FIFO + kárdex +
+     * CxP + asiento COM-* en una transacción atómica y registra la auditoría
+     * del aprobador.
+     */
+    public function aprobarFactura(int $facturaId, ?int $usuarioId = null): FacturaCompra
+    {
+        return DB::transaction(function () use ($facturaId, $usuarioId) {
+            $factura = FacturaCompra::lockForUpdate()
+                ->with(['lineas'])
+                ->findOrFail($facturaId);
+
+            if ($factura->estado !== FacturaCompra::ESTADO_PENDIENTE_APROBACION) {
+                throw new \Exception('Esta compra no está pendiente de aprobación (estado: '.$factura->estado.').');
+            }
+
+            $this->ejecutarIngresoMercaderia($factura, $usuarioId);
+
+            $factura->update([
+                'estado' => FacturaCompra::ESTADO_REGISTRADA,
+                'aprobada_por' => $usuarioId ?? auth()->id(),
+                'aprobada_at' => now(),
+            ]);
+
+            return $factura->fresh();
+        });
+    }
+
+    /**
+     * RECHAZA una compra retenida. Nunca tuvo efectos físicos ni contables:
+     * el documento pasa a 'anulada' con el motivo en las notas de auditoría.
+     */
+    public function rechazarFactura(int $facturaId, string $motivo, ?int $usuarioId = null): FacturaCompra
+    {
+        return DB::transaction(function () use ($facturaId, $motivo, $usuarioId) {
+            $factura = FacturaCompra::lockForUpdate()->findOrFail($facturaId);
+
+            if ($factura->estado !== FacturaCompra::ESTADO_PENDIENTE_APROBACION) {
+                throw new \Exception('Esta compra no está pendiente de aprobación (estado: '.$factura->estado.').');
+            }
+
+            $factura->update([
+                'estado' => FacturaCompra::ESTADO_ANULADA,
+                'aprobada_por' => $usuarioId ?? auth()->id(),
+                'aprobada_at' => now(),
+                'notas' => trim(($factura->notas ? $factura->notas.' | ' : '').'Rechazada en aprobación: '.$motivo),
+            ]);
+
+            return $factura->fresh();
+        });
+    }
+
+    /**
+     * EJECUTA LOS EFECTOS FÍSICOS Y CONTABLES de una factura ya creada:
+     * inventario físico y costo promedio móvil, lotes FIFO, kárdex inmutable,
+     * CxP (si es al crédito) y asiento COM-*. La usan el flujo inmediato y la
+     * aprobación de compras retenidas; debe correr DENTRO de una transacción.
+     */
+    protected function ejecutarIngresoMercaderia(FacturaCompra $factura, ?int $usuarioId): void
+    {
+        // INVENTARIO + LOTES + KÁRDEX (los datos landed viven en las líneas)
+        foreach ($factura->lineas as $lineaDb) {
+            $articulo = Articulo::lockForUpdate()->findOrFail($lineaDb->item_id);
+
+            $this->ingresarStock($articulo, [
+                'cantidad' => (float) $lineaDb->cantidad,
+                'costo_unitario_final' => (float) $lineaDb->costo_unitario_final,
+                'lote' => $lineaDb->lote,
+                'fecha_vencimiento' => $lineaDb->fecha_vencimiento,
+            ], $lineaDb, $factura, $usuarioId);
+        }
+
+        // CUENTA POR PAGAR: el pasivo del proveedor con sus días de crédito
+        if ($factura->condicion_pago === 'credito') {
+            $diasCredito = (int) ($factura->proveedor->credit_days ?: 30);
+            $cxp = CuentaPorPagar::create([
+                'provider_id' => $factura->provider_id,
+                'purchase_invoice_id' => $factura->id,
+                'numero_documento' => $factura->numero_documento,
+                'fecha_emision' => $factura->fecha_factura,
+                'fecha_vencimiento' => $factura->fecha_factura->copy()->addDays($diasCredito),
+                'monto_original' => $factura->total,
+                'saldo_pendiente' => $factura->total,
+                'estado' => 'pendiente',
+            ]);
+            $factura->update(['cuenta_por_pagar_id' => $cxp->id]);
+        }
+
+        // MOTOR CONTABLE: asiento COM-* (cuenta con el IVA de compra)
+        $asiento = (new ContabilidadService)->contabilizarFacturaCompra($factura);
+        $factura->update(['asiento_contable_id' => $asiento->id]);
     }
 
     /**
@@ -161,6 +248,12 @@ class CompraService
 
             if ($factura->estado === FacturaCompra::ESTADO_ANULADA) {
                 throw new \Exception('Esta factura de compra ya está anulada.');
+            }
+
+            // Una compra RETENIDA nunca entró a inventario: no hay stock que
+            // revertir. Debe rechazarse desde Aprobaciones, no anularse.
+            if ($factura->estado === FacturaCompra::ESTADO_PENDIENTE_APROBACION) {
+                throw new \Exception('Esta compra está pendiente de aprobación. Recházala desde Aprobaciones Pendientes.');
             }
 
             $cxp = $factura->cuentaPorPagar;

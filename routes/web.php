@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\AdelantoController;
+use App\Http\Controllers\AprobacionController;
 use App\Http\Controllers\AsientoManualController;
 use App\Http\Controllers\AsistenciaController;
 use App\Http\Controllers\AusenciaController;
@@ -18,6 +19,7 @@ use App\Http\Controllers\FormulaController;
 use App\Http\Controllers\InventarioController;
 use App\Http\Controllers\MermaController;
 use App\Http\Controllers\MesaCambioController;
+use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\NominaController;
 use App\Http\Controllers\PanelController;
 use App\Http\Controllers\PeriodoContableController;
@@ -87,6 +89,17 @@ Route::middleware(['auth'])->group(function () {
     Route::get('/asistencia', [AsistenciaController::class, 'index']);
     Route::post('/asistencia', [AsistenciaController::class, 'store']);
 
+    // Notificaciones (API para campanita en navbar - todos los roles autenticados)
+    Route::prefix('notificaciones/api')->name('notificaciones.api.')->group(function () {
+        Route::get('count', [NotificationController::class, 'count'])->name('count');
+        Route::get('list', [NotificationController::class, 'list'])->name('list');
+        Route::post('{id}/read', [NotificationController::class, 'markRead'])->name('read');
+        Route::post('read-all', [NotificationController::class, 'markAllRead'])->name('read-all');
+    });
+
+    // Vista completa de notificaciones (Ver todas)
+    Route::get('/notificaciones', [NotificationController::class, 'index'])->name('notificaciones.index');
+
     Route::get('/clientes', [ClienteController::class, 'index']);
     Route::post('/clientes', [ClienteController::class, 'store']);
     Route::put('/clientes/{id}', [ClienteController::class, 'update']);
@@ -95,11 +108,13 @@ Route::middleware(['auth'])->group(function () {
     Route::get('/clientes/{id}', [ClienteController::class, 'show']);
 
     // -------------------------------------------------------------
-    // NIVEL 2: CAJA Y RECEPCIÓN (Accede 'recepcion' y 'admin')
+    // NIVEL 2: CAJA Y RECEPCIÓN (Acceso: recepción, contador y admin)
     // -------------------------------------------------------------
-    // Manejo de dinero, punto de venta y cuentas por cobrar.
+    // Manejo de dinero, punto de venta y cuentas por cobrar. Con la
+    // reestructuración RBAC, 'admin' ya no tiene bypass global: se enumera
+    // explícitamente (es gestión operativa de caja). 'alvaro' entra por bypass.
 
-    Route::middleware(['role:recepcion,contador'])->group(function () {
+    Route::middleware(['role:recepcion,contador,admin'])->group(function () {
 
         Route::get('/pos', function () {
             // Fase 1 Administración: variantes de precio y fórmulas (BOM) para
@@ -121,8 +136,13 @@ Route::middleware(['auth'])->group(function () {
         Route::get('/ventas/{id}/ticket', [VentaController::class, 'ticket']);
         Route::get('/ventas/{id}/documento', [VentaController::class, 'documento']);
         Route::post('/ventas/{id}/cobrar', [VentaController::class, 'cobrar']);
-        // MANDAMIENTO: anular facturas es privilegio exclusivo del administrador
-        Route::post('/ventas/{id}/anular', [VentaController::class, 'anular'])->middleware('role:admin');
+        // DOBLE CONFIRMACIÓN: anular requiere PIN de supervisor dentro del
+        // controlador (modo estricto). Recepción/contador pueden intentar la
+        // anulación; sólo se ejecuta con el PIN de un rol supervisor.
+        Route::post('/ventas/{id}/anular', [VentaController::class, 'anular'])->middleware('role:admin,recepcion,contador');
+
+        // Mis aprobaciones pendientes (para cajeros/recepción)
+        Route::get('/mis-aprobaciones', [VentaController::class, 'misAprobaciones'])->name('ventas.mis-aprobaciones');
 
         Route::get('/adelantos', [AdelantoController::class, 'index']);
         Route::post('/adelantos', [AdelantoController::class, 'store']);
@@ -141,17 +161,41 @@ Route::middleware(['auth'])->group(function () {
     });
 
     // -------------------------------------------------------------
-    // NIVEL 3: FINANZAS (Administrador + Contador)
+    // NIVEL 3: FINANZAS
     // -------------------------------------------------------------
-    // Todo lo contable-financiero es territorio del contador (además del admin,
-    // que siempre tiene bypass global): reportes, contabilidad, catálogo,
-    // asientos, periodos, bancos, CxP y retiros.
+    // RBAC reestructurado (octubre 2026):
+    //  - CONTABILIDAD (diario, gasto, mayor, resultados, balance, catálogo,
+    //    asientos manuales y periodos/cierre fiscal): EXCLUSIVA de 'alvaro'
+    //    y del 'contador' (auditoría financiera). El administrador recibe 403
+    //    si intenta acceder por URL directa.
+    //  - REPORTES, BANCOS, CxP Y RETIROS: 'admin' y 'contador' (operación
+    //    financiera diaria); 'alvaro' entra por bypass global.
     Route::middleware(['role:admin,contador'])->group(function () {
 
         // Reportes Financieros
         Route::get('/reportes', [ReporteController::class, 'index']);
         Route::get('/reportes/excel', [ReporteController::class, 'exportExcel']);
         Route::get('/reportes/pdf', [ReporteController::class, 'exportPdf']);
+
+        Route::get('/cuentas-por-pagar', [CuentaPorPagarController::class, 'index']);
+        Route::post('/cuentas-por-pagar/abonar', [CuentaPorPagarController::class, 'store']);
+
+        Route::get('/bancos', [BancoController::class, 'index']);
+        Route::post('/bancos/depositar', [BancoController::class, 'depositar']);
+        Route::post('/bancos/transferir', [BancoController::class, 'transferir']);
+        Route::post('/bancos/cargo', [BancoController::class, 'registrarCargo'])->name('bancos.cargo');
+        Route::post('/bancos/abono', [BancoController::class, 'registrarAbono'])->name('bancos.abono');
+        Route::get('/bancos/{cuenta_bancaria}/libro', [BancoController::class, 'libro'])->name('bancos.libro');
+        Route::get('/bancos/{cuenta_bancaria}/conciliacion', [BancoController::class, 'conciliacion'])->name('bancos.conciliacion');
+        Route::post('/bancos/{cuenta_bancaria}/conciliacion', [BancoController::class, 'guardarConciliacion'])->name('bancos.conciliar');
+
+        Route::get('/retiros', [RetiroController::class, 'index']);
+        Route::post('/retiros', [RetiroController::class, 'depositar']);
+    });
+
+    // CONTABILIDAD: bloque exclusivo del rol Álvaro + Contador (auditoría
+    // financiera). Un administrador que acceda por URL directa obtiene 403.
+    Route::middleware(['role:alvaro,contador'])->group(function () {
 
         // Contabilidad
         Route::get('/contabilidad', [ContabilidadController::class, 'diario']);
@@ -171,21 +215,6 @@ Route::middleware(['auth'])->group(function () {
             Route::post('/importar', [CuentaContableController::class, 'importar'])->name('importar');
             Route::get('/exportar', [CuentaContableController::class, 'exportar'])->name('exportar');
         });
-
-        Route::get('/cuentas-por-pagar', [CuentaPorPagarController::class, 'index']);
-        Route::post('/cuentas-por-pagar/abonar', [CuentaPorPagarController::class, 'store']);
-
-        Route::get('/bancos', [BancoController::class, 'index']);
-        Route::post('/bancos/depositar', [BancoController::class, 'depositar']);
-        Route::post('/bancos/transferir', [BancoController::class, 'transferir']);
-        Route::post('/bancos/cargo', [BancoController::class, 'registrarCargo'])->name('bancos.cargo');
-        Route::post('/bancos/abono', [BancoController::class, 'registrarAbono'])->name('bancos.abono');
-        Route::get('/bancos/{cuenta_bancaria}/libro', [BancoController::class, 'libro'])->name('bancos.libro');
-        Route::get('/bancos/{cuenta_bancaria}/conciliacion', [BancoController::class, 'conciliacion'])->name('bancos.conciliacion');
-        Route::post('/bancos/{cuenta_bancaria}/conciliacion', [BancoController::class, 'guardarConciliacion'])->name('bancos.conciliar');
-
-        Route::get('/retiros', [RetiroController::class, 'index']);
-        Route::post('/retiros', [RetiroController::class, 'depositar']);
 
         // Asientos Manuales
         Route::prefix('asientos')->name('asientos.')->group(function () {
@@ -207,7 +236,21 @@ Route::middleware(['auth'])->group(function () {
     });
 
     // -------------------------------------------------------------
-    // NIVEL 4: EXCLUSIVO DEL ADMINISTRADOR
+    // MESA DE APROBACIONES (gobernanza): SOLO Álvaro (Propietario)
+    // -------------------------------------------------------------
+    // Transacciones retenidas ('pendiente_aprobacion'): al aprobar se ejecutan
+    // los efectos físicos y el asiento contable; al rechazar quedan anuladas
+    // con motivo de auditoría.
+    Route::middleware(['role:alvaro'])->group(function () {
+        Route::get('/aprobaciones', [AprobacionController::class, 'index'])->name('aprobaciones.index');
+        Route::post('/aprobaciones/venta/{id}/aprobar', [AprobacionController::class, 'aprobarVenta'])->name('aprobaciones.venta.aprobar');
+        Route::post('/aprobaciones/venta/{id}/rechazar', [AprobacionController::class, 'rechazarVenta'])->name('aprobaciones.venta.rechazar');
+        Route::post('/aprobaciones/compra/{id}/aprobar', [AprobacionController::class, 'aprobarCompra'])->name('aprobaciones.compra.aprobar');
+        Route::post('/aprobaciones/compra/{id}/rechazar', [AprobacionController::class, 'rechazarCompra'])->name('aprobaciones.compra.rechazar');
+    });
+
+    // -------------------------------------------------------------
+    // NIVEL 4: GESTIÓN DEL NEGOCIO (Administrador; Álvaro entra por bypass)
     // -------------------------------------------------------------
     // Operaciones críticas del negocio que ningún otro empleado debe ver:
     // recursos humanos, inventario, catálogos operativos y respaldos.

@@ -13,12 +13,14 @@ class Venta extends Model
 
     // CICLO DE VIDA DEL DOCUMENTO: workflow de estados de factura
     const ESTADO_BORRADOR = 'borrador'; // Cotización: no afecta inventario ni contabilidad
+    const ESTADO_PENDIENTE_APROBACION = 'pendiente_aprobacion'; // Retenida: sin contabilidad hasta que un supervisor apruebe
     const ESTADO_EMITIDA = 'emitida';   // Por cobrar (crédito): afecta inventario y CxC
     const ESTADO_PAGADA = 'pagada';     // Venta de mostrador cobrada
     const ESTADO_ANULADA = 'anulada';   // Corrección: con reversión contable e inventario
 
     const ESTADOS = [
         self::ESTADO_BORRADOR,
+        self::ESTADO_PENDIENTE_APROBACION,
         self::ESTADO_EMITIDA,
         self::ESTADO_PAGADA,
         self::ESTADO_ANULADA,
@@ -44,6 +46,14 @@ class Venta extends Model
         'anulada_at',
         'anulada_por',
         'motivo_anulacion',
+        'aprobada_at',
+        'aprobada_por',
+        'payload_aprobacion',
+    ];
+
+    protected $casts = [
+        'payload_aprobacion' => 'array',
+        'aprobada_at' => 'datetime',
     ];
 
     public function cajero()
@@ -74,6 +84,11 @@ class Venta extends Model
     public function anuladaPor()
     {
         return $this->belongsTo(Usuario::class, 'anulada_por');
+    }
+
+    public function aprobadaPor()
+    {
+        return $this->belongsTo(Usuario::class, 'aprobada_por');
     }
 
     /**

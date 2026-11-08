@@ -65,7 +65,8 @@
                         <input type="number" name="monto" step="0.01" required min="1" max="{{ $saldoDisponible }}" placeholder="0.00" class="mt-1 w-full border-gray-300 rounded-lg shadow-sm focus:border-emerald-500 font-bold text-lg text-red-600">
                     </div>
 
-                    <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 px-4 rounded-lg shadow transition">
+                    {{-- DOBLE CONFIRMACIÓN: toda salida de efectivo exige PIN propio o de supervisor --}}
+                    <button type="button" onclick="window.dispatchEvent(new CustomEvent('open-pin', { detail: { mensaje: 'Registrar una salida de efectivo de caja chica requiere confirmación con PIN de seguridad.', form: this.closest('form') } }))" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 px-4 rounded-lg shadow transition">
                         Guardar Gasto
                     </button>
                 </form>

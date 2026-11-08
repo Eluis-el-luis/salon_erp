@@ -8,12 +8,15 @@ use App\Models\TipoGasto;
 use App\Models\MovimientoCajaChica;
 use App\Models\CuentaContable;
 use App\Services\ContabilidadService;
+use App\Traits\AutorizaPinSupervisor;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
 
 class CajaChicaController extends Controller
 {
+    use AutorizaPinSupervisor;
+
     public function index()
     {
         // 1. Truco: Crear tipos de gasto de prueba si no existen
@@ -55,6 +58,10 @@ class CajaChicaController extends Controller
             'descripcion' => 'required|string|max:255',
             'monto' => 'required|numeric|min:1'
         ]);
+
+        // DOBLE CONFIRMACIÓN: toda salida de efectivo de caja chica exige PIN
+        // propio o de un supervisor (salida de efectivo no programada).
+        $this->autorizarPin($request);
 
         DB::beginTransaction();
 

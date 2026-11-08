@@ -19,9 +19,17 @@ use App\Models\Usuario;
 use App\Models\SesionCaja;
 use App\Services\InventarioService;
 use App\Services\DivisaService;
+use App\Services\AprobacionService;
+use App\Services\ComisionService;
+use App\Services\LibroPagosService;
+use App\Services\NotificationService;
+use App\Traits\AutorizaPinSupervisor;
 
 class VentaController extends Controller
 {
+    use AutorizaPinSupervisor;
+
+    public function __construct(private NotificationService $notifications) {}
     public function facturarCita(Request $request, $id)
     {
         \Illuminate\Support\Facades\Log::info('facturarCita called', ['user_id' => auth()->id(), 'cookies' => $request->cookie()]);
@@ -49,6 +57,15 @@ class VentaController extends Controller
             $descuento = $request->discount ?? 0;
             $total = $subtotal - $descuento;
 
+            // FLUJO DE PRE-APROBACIÓN: facturas sensibles (monto sobre el umbral
+            // o flag explícito) se RETIENEN sin contabilidad, inventario, divisas
+            // ni comisiones hasta que un supervisor las apruebe.
+            $requiereAprobacion = app(AprobacionService::class)->requiereAprobacionVenta(
+                (float) max(0, $total),
+                auth()->user()->role ?? null,
+                $request->boolean('requiere_aprobacion')
+            );
+
             $venta = \App\Models\Venta::create([
                 'cashier_id' => auth()->id() ?? 1,
                 'client_id' => $cita->client_id,
@@ -62,7 +79,7 @@ class VentaController extends Controller
                 'payment_method' => $request->payment_method ?? 'efectivo',
                 'appointment_id' => $cita->id,
                 
-                'status' => Venta::ESTADO_PAGADA
+                'status' => $requiereAprobacion ? \App\Models\Venta::ESTADO_PENDIENTE_APROBACION : \App\Models\Venta::ESTADO_PAGADA
             ]);
 
             // Soporte multi-estilista: un detalle de venta por estilista,
@@ -94,6 +111,37 @@ class VentaController extends Controller
                 ]);
             }
 
+            // PRE-APROBACIÓN: solo el documento se persiste. La cita se completa,
+            // el inventario se descuenta y el asiento se genera al aprobar.
+            if ($requiereAprobacion) {
+                $venta->update(['payload_aprobacion' => [
+                    'payments' => [[
+                        'metodo' => $venta->payment_method,
+                        'moneda' => $venta->currency,
+                        'monto' => (float) $venta->total,
+                        'tasa' => (float) $venta->exchange_rate,
+                    ]],
+                    'change_currency' => null,
+                ]]);
+
+                // NOTIFICACIÓN: crear alerta para Álvaro (propietario)
+                $this->notifications->createByType(
+                    NotificationService::TYPE_VENTA_PENDIENTE_APROBACION,
+                    'Nueva factura de cita pendiente de aprobación',
+                    "Factura #{$venta->id} (cita) por C$ {$venta->total} requiere tu autorización para contabilizar.",
+                    ['sale_id' => $venta->id, 'url' => "/aprobaciones", 'monto' => $venta->total],
+                    'high'
+                );
+
+                \Illuminate\Support\Facades\DB::commit();
+
+                return response()->json([
+                    'message' => 'Factura retenida para aprobación de un supervisor. No afecta contabilidad hasta su aprobación.',
+                    'sale_id' => $venta->id,
+                    'notificaciones' => [],
+                ], 201);
+            }
+
             $cita->update(['status' => 'completada']);
 
             $venta->load('detalles');
@@ -117,7 +165,7 @@ class VentaController extends Controller
 
             $contabilidad = new \App\Services\ContabilidadService();
             $contabilidad->contabilizarVenta($venta);
-            $this->registrarComisionesVenta($venta);
+            app(ComisionService::class)->registrarPorVenta($venta);
             $notificaciones = $contabilidad->notificaciones();
 
             \Illuminate\Support\Facades\DB::commit();
@@ -184,6 +232,8 @@ class VentaController extends Controller
             'action' => 'nullable|in:pagar,cotizar,credito',
             // Transformar/actualizar una cotización existente (mismo documento, trazable)
             'draft_id' => 'nullable|integer|exists:sales,id',
+            // PRE-APROBACIÓN: fuerza la retención de la venta para supervisión
+            'requiere_aprobacion' => 'nullable|boolean',
         ]);
 
         $accion = $request->action ?? 'pagar';
@@ -225,10 +275,21 @@ class VentaController extends Controller
 
             $total = $subtotal - $descuento;
 
+            // FLUJO DE PRE-APROBACIÓN: ventas de mostrador sensibles (monto sobre
+            // el umbral de config('salon.aprobaciones') o flag explícito) creadas
+            // por un cajero NO supervisor se RETIENEN: documento sin contabilidad,
+            // sin inventario, sin libro de pagos y sin comisiones hasta que un
+            // supervisor (Álvaro/Administrador) las apruebe o rechace.
+            $requiereAprobacion = $accion === 'pagar' && app(AprobacionService::class)->requiereAprobacionVenta(
+                (float) max(0, $total),
+                auth()->user()->role ?? null,
+                $request->boolean('requiere_aprobacion')
+            );
+
             $nuevoEstado = match ($accion) {
                 'cotizar' => Venta::ESTADO_BORRADOR,
                 'credito' => Venta::ESTADO_EMITIDA,
-                default => Venta::ESTADO_PAGADA,
+                default => $requiereAprobacion ? Venta::ESTADO_PENDIENTE_APROBACION : Venta::ESTADO_PAGADA,
             };
 
             // REGLA DE CxC (Fase 1 Administración): una factura a crédito se
@@ -315,7 +376,7 @@ class VentaController extends Controller
                     'unit_price' => $cartItem['precio_c']
                 ]);
 
-                if (isset($cartItem['appointment_id']) && $accion !== 'cotizar') {
+                if (isset($cartItem['appointment_id']) && $accion !== 'cotizar' && !$requiereAprobacion) {
                     \App\Models\Cita::where('id', $cartItem['appointment_id'])
                         ->update(['status' => 'completada']);
                 }
@@ -340,6 +401,35 @@ class VentaController extends Controller
                 ], 201);
             }
 
+            // CICLO DE VIDA - PENDIENTE DE APROBACIÓN: la venta queda retenida
+            // como documento. El libro de pagos original se conserva en
+            // payload_aprobacion y se ejecuta íntegro cuando el supervisor
+            // aprueba (AprobacionService), que genera entonces el asiento.
+            if ($requiereAprobacion) {
+                $venta->update(['payload_aprobacion' => [
+                    'payments' => $pagosRaw,
+                    'change_currency' => $request->input('change_currency'),
+                ]]);
+
+                // NOTIFICACIÓN: crear alerta para Álvaro (propietario)
+                $this->notifications->createByType(
+                    NotificationService::TYPE_VENTA_PENDIENTE_APROBACION,
+                    'Nueva venta pendiente de aprobación',
+                    "Venta #{$venta->id} por C$ {$venta->total} requiere tu autorización para contabilizar.",
+                    ['sale_id' => $venta->id, 'url' => "/aprobaciones", 'monto' => $venta->total],
+                    'high'
+                );
+
+                \Illuminate\Support\Facades\DB::commit();
+
+                return response()->json([
+                    'message' => 'Venta retenida para aprobación de un supervisor. El asiento contable se generará al aprobar.',
+                    'sale_id' => $venta->id,
+                    'pendiente_aprobacion' => true,
+                    'notificaciones' => [],
+                ], 201);
+            }
+
             // Descuento de inventario (insumos fraccionados por fórmulas + productos físicos)
             $stockCritico = (new InventarioService())->descontarPorVenta($venta);
 
@@ -349,7 +439,7 @@ class VentaController extends Controller
             if ($accion === 'credito') {
                 $contabilidad = new \App\Services\ContabilidadService();
                 $contabilidad->contabilizarVentaCredito($venta);
-                $this->registrarComisionesVenta($venta);
+                app(ComisionService::class)->registrarPorVenta($venta);
                 $notificaciones = $contabilidad->notificaciones();
 
                 \Illuminate\Support\Facades\DB::commit();
@@ -362,13 +452,19 @@ class VentaController extends Controller
             }
 
             // PAGOS MIXTOS: libro de pagos, vuelto multimoneda y divisas físicas
-            $this->registrarLibroPagos($request, $venta, $total > 0 ? (float) $total : 0, $pagosRaw, $exchangeRate);
+            app(LibroPagosService::class)->registrar(
+                $venta,
+                $total > 0 ? (float) $total : 0,
+                $pagosRaw,
+                $exchangeRate,
+                $request->input('change_currency')
+            );
 
             $venta->load('detalles', 'pagos');
 
             $contabilidad = new \App\Services\ContabilidadService();
             $contabilidad->contabilizarVenta($venta);
-            $this->registrarComisionesVenta($venta);
+            app(ComisionService::class)->registrarPorVenta($venta);
             $notificaciones = $contabilidad->notificaciones();
 
             \Illuminate\Support\Facades\DB::commit();
@@ -392,6 +488,26 @@ class VentaController extends Controller
             ]);
             return response()->json(['error' => 'Error al guardar la venta. Contacte al administrador.'], 500);
         }
+    }
+
+    /**
+     * Vista: Mis ventas pendientes de aprobación (para cajeros/recepción).
+     * Muestra solo las ventas del usuario actual que están en estado pendiente_aprobacion,
+     * pagada (aprobada) o anulada (rechazada).
+     */
+    public function misAprobaciones()
+    {
+        $misVentasPendientes = Venta::with(['cliente', 'cajero'])
+            ->where('cashier_id', auth()->id())
+            ->whereIn('status', [
+                Venta::ESTADO_PENDIENTE_APROBACION,
+                Venta::ESTADO_PAGADA,
+                Venta::ESTADO_ANULADA,
+            ])
+            ->orderByDesc('created_at')
+            ->paginate(20);
+
+        return view('sales.mis-aprobaciones', compact('misVentasPendientes'));
     }
 
     /**
@@ -460,108 +576,6 @@ class VentaController extends Controller
     }
 
     /**
-     * LIBRO DE PAGOS: registra las líneas de cobro, calcula el vuelto multimoneda
-     * y sincroniza el inventario físico de dólares (entran los pagos en USD en
-     * efectivo, sale el vuelto en USD con validación de saldo).
-     * El vuelto siempre es una línea tipo 'vuelto' con valor_nio EXACTO para que
-     * el asiento contable cuadre al centavo.
-     */
-    protected function registrarLibroPagos(Request $request, Venta $venta, float $total, array $pagosRaw, float $tasaReferencia): void
-    {
-        $totalRecibidoNio = 0;
-        $pagosAInsertar = [];
-
-        foreach ($pagosRaw as $p) {
-            $moneda = $p['moneda'];
-            $tasa = (float) $p['tasa'];
-            $monto = (float) $p['monto'];
-
-            // Legacy: un único pago sin monto -> se cubre el total
-            if ($monto <= 0) {
-                $monto = $total;
-            }
-
-            $valorNio = $moneda === 'usd' ? round($monto * $tasa, 2) : round($monto, 2);
-            $totalRecibidoNio += $valorNio;
-
-            $pagosAInsertar[] = [
-                'metodo' => $p['metodo'],
-                'moneda' => $moneda,
-                'monto' => $monto,
-                'tasa' => $tasa,
-                'valor_nio' => $valorNio,
-                'tipo' => 'pago',
-            ];
-        }
-
-        // Candado de cobertura: el cobro debe cubrir el total (el vuelto parte del exceso)
-        $faltante = round($total - $totalRecibidoNio, 2);
-        if ($faltante > 0) {
-            throw new \App\Exceptions\ContabilidadException(
-                'Los pagos registrados no cubren el total de la factura. Faltan C$ ' . number_format($faltante, 2) . '.'
-            );
-        }
-
-        // Vuelto multimoneda: si el cliente pagó de más, se devuelve en efectivo
-        // en la moneda solicitada (valor_nio exacto para que el asiento cuadre)
-        $vueltoNio = round(max(0, $totalRecibidoNio - $total), 2);
-        if ($vueltoNio > 0) {
-            $monedaVuelto = $request->change_currency === 'usd' ? 'usd' : 'nio';
-            $tasaVuelto = $tasaReferencia > 1 ? $tasaReferencia : 1;
-
-            $pagosAInsertar[] = [
-                'metodo' => 'efectivo',
-                'moneda' => $monedaVuelto,
-                'monto' => $monedaVuelto === 'usd' ? round($vueltoNio / $tasaVuelto, 2) : $vueltoNio,
-                'tasa' => $tasaVuelto,
-                'valor_nio' => $vueltoNio,
-                'tipo' => 'vuelto',
-            ];
-        }
-
-        foreach ($pagosAInsertar as $pp) {
-            \App\Models\Pago::create(['venta_id' => $venta->id] + $pp);
-        }
-
-        // Multimoneda: los pagos en USD en efectivo aumentan el inventario físico
-        // de dólares y el vuelto entregado en USD lo reduce (primero entra, luego sale).
-        $cajaActiva = SesionCaja::where('user_id', auth()->id())->where('estado', 'abierta')->first();
-        $divisaService = new DivisaService();
-
-        foreach ($pagosAInsertar as $pp) {
-            if ($pp['moneda'] !== 'usd' || $pp['metodo'] !== 'efectivo' || !$cajaActiva) {
-                continue;
-            }
-
-            try {
-                if ($pp['tipo'] === 'pago') {
-                    $divisaService->ingresarDivisas(
-                        'USD',
-                        'App\Models\SesionCaja',
-                        $cajaActiva->id,
-                        (float) $pp['monto'],
-                        (float) $pp['tasa']
-                    );
-                } else {
-                    // Vuelto en USD: valida saldo físico disponible en la caja
-                    $divisaService->egresarDivisas(
-                        'USD',
-                        'App\Models\SesionCaja',
-                        $cajaActiva->id,
-                        (float) $pp['monto'],
-                        (float) $pp['tasa']
-                    );
-                }
-            } catch (\Exception $e) {
-                throw new \App\Exceptions\ContabilidadException(
-                    'No hay suficientes dólares físicos en caja para entregar el vuelto en USD. ' .
-                    'Entrega el vuelto en córdobas o registra el ingreso de divisas primero.'
-                );
-            }
-        }
-    }
-
-    /**
      * COBRO DE FACTURA EMITIDA (crédito): registra el libro de pagos, mueve las
      * divisas físicas, cancela la CxC contable y marca la venta como pagada.
      */
@@ -599,7 +613,13 @@ class VentaController extends Controller
             $primario = $pagosRaw[0];
             $exchangeRate = (float) $primario['tasa'];
 
-            $this->registrarLibroPagos($request, $venta, (float) $venta->total, $pagosRaw, $exchangeRate);
+            app(LibroPagosService::class)->registrar(
+                $venta,
+                (float) $venta->total,
+                $pagosRaw,
+                $exchangeRate,
+                $request->input('change_currency')
+            );
 
             // Método principal (informativo) y cambio de estado del documento
             $venta->update([
@@ -638,15 +658,21 @@ class VentaController extends Controller
     }
 
     /**
-     * ANULACIÓN DE FACTURA (solo administrador): el documento NO se borra.
-     * Cambia a estado anulada, revierte el inventario físico, devuelve los
-     * dólares cobrados al cliente y genera asientos de reversión contable.
+     * ANULACIÓN DE FACTURA (doble confirmación con PIN de supervisor): el
+     * documento NO se borra. Cambia a estado anulada, revierte el inventario
+     * físico, devuelve los dólares cobrados al cliente y genera asientos de
+     * reversión contable. Un cajero puede intentar la anulación, pero SOLO se
+     * ejecuta con el PIN de un rol supervisor (Álvaro/Administrador); el PIN
+     * propio del cajero no basta (modo estricto del trait).
      */
     public function anular(Request $request, $id)
     {
         $request->validate([
             'motivo' => 'required|string|min:5|max:255',
         ]);
+
+        // DOBLE CONFIRMACIÓN: exige el PIN de un supervisor antes de tocar datos
+        $this->autorizarPin($request, soloSupervisor: true);
 
         \Illuminate\Support\Facades\DB::beginTransaction();
 
@@ -742,6 +768,10 @@ class VentaController extends Controller
         } catch (\App\Exceptions\ContabilidadException $e) {
             \Illuminate\Support\Facades\DB::rollBack();
             return back()->with('error', $e->getMessage());
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            // El PIN inválido debe llegar a la vista como error de validación
+            \Illuminate\Support\Facades\DB::rollBack();
+            throw $e;
         } catch (\Throwable $e) {
             \Illuminate\Support\Facades\DB::rollBack();
             Log::error('Error al anular factura', [
@@ -756,13 +786,17 @@ class VentaController extends Controller
     /**
      * Documento JSON para hidratar el POS: carga una cotización (borrador) o una
      * factura emitida pendiente de cobro en el carrito del punto de venta.
+     * Permite borrador, emitida, pagada y anulada para visualización en "Mis Aprobaciones".
      */
     public function documento($id)
     {
         $venta = Venta::with(['detalles.servicio', 'detalles.articulo', 'detalles.consumos', 'detalles.variante', 'cliente'])->findOrFail($id);
 
-        if (!in_array($venta->status, [Venta::ESTADO_BORRADOR, Venta::ESTADO_EMITIDA])) {
-            return response()->json(['error' => 'Solo se pueden cargar cotizaciones o facturas pendientes de cobro.'], 422);
+        // Permitir ver detalles de cualquier estado, pero solo borrador/emitida son editables
+        $estadosVisibles = [Venta::ESTADO_BORRADOR, Venta::ESTADO_EMITIDA, Venta::ESTADO_PAGADA, Venta::ESTADO_ANULADA];
+        
+        if (!in_array($venta->status, $estadosVisibles)) {
+            return response()->json(['error' => 'Estado de venta no válido para visualización.'], 422);
         }
 
         return response()->json([
@@ -803,76 +837,17 @@ class VentaController extends Controller
             ->orderBy('created_at', 'desc')
             ->get();
 
-        $esAdmin = auth()->user()->role === 'admin';
+        // El botón Anular abre el modal con doble confirmación por PIN: los
+        // roles con acceso a la ruta pueden intentar; el PIN supervisor decide.
+        $puedeAnular = in_array(auth()->user()->role, ['admin', 'alvaro', 'recepcion', 'contador']);
+        $puedeAprobar = in_array(auth()->user()->role, ['alvaro', 'admin']);
 
-        return view('sales.index', compact('ventas', 'esAdmin'));
+        return view('sales.index', compact('ventas', 'puedeAnular', 'puedeAprobar'));
     }
 
     public function ticket($id)
     {
         $venta = Venta::with(['cliente', 'cajero', 'detalles.servicio', 'detalles.articulo', 'detalles.estilista', 'pagos', 'anuladaPor'])->findOrFail($id);
         return view('sales.ticket', compact('venta'));
-    }
-
-    /**
-     * Calcula y registra las comisiones de los estilistas para una venta específica.
-     * FASE 5 AVANZADA: Soporta comisiones escalonadas (rangos) por esquema.
-     */
-    private function registrarComisionesVenta($venta)
-    {
-        foreach ($venta->detalles as $detalle) {
-            if ($detalle->stylist_id) {
-                $estilista = Usuario::find($detalle->stylist_id);
-                
-                if (!$estilista) {
-                    continue;
-                }
-
-                $esquema = $estilista->esquemaActual;
-                $montoVenta = $detalle->quantity * $detalle->unit_price;
-
-                // Determinar porcentaje aplicable
-                $porcentaje = 0;
-                
-                if ($esquema && $esquema->rangos->count() > 0) {
-                    // COMISIONES ESCALONADAS: buscar el rango correspondiente al monto de venta
-                    $rangoAplicable = $esquema->rangos
-                        ->where('desde', '<=', $montoVenta)
-                        ->where(function ($q) use ($montoVenta) {
-                            $q->where('hasta', '>=', $montoVenta)
-                              ->orWhereNull('hasta');
-                        })
-                        ->orderBy('orden')
-                        ->first();
-                    
-                    if ($rangoAplicable) {
-                        $porcentaje = $rangoAplicable->porcentaje;
-                    } elseif ($esquema->porcentaje_comision) {
-                        // Fallback: porcentaje único del esquema
-                        $porcentaje = $esquema->porcentaje_comision;
-                    }
-                } elseif ($esquema) {
-                    // Esquema sin rangos: usar porcentaje único
-                    $porcentaje = $esquema->porcentaje_comision;
-                } else {
-                    // Fallback: porcentaje del perfil del empleado
-                    $porcentaje = $estilista->comision_servicio ?? 0;
-                }
-
-                if ($porcentaje > 0) {
-                    $montoComision = $montoVenta * ($porcentaje / 100);
-
-                    ComisionGenerada::create([
-                        'empleado_id' => $estilista->id,
-                        'venta_id' => $venta->id,
-                        'monto_venta' => $montoVenta,
-                        'porcentaje_aplicado' => $porcentaje,
-                        'monto_comision' => $montoComision,
-                        'fecha' => \Carbon\Carbon::now(),
-                        'estado' => 'pendiente'
-                    ]);
-                }
-            }
-        }
     }
 }
