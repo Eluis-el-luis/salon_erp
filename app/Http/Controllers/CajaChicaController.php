@@ -28,11 +28,18 @@ class CajaChicaController extends Controller
             }
         }
 
-        // 2. Buscar si el usuario actual tiene una caja chica, si no, crearle una con C$ 2,000 de fondo base
+        // 2. Usar una CAJA CHICA COMPARTIDA (única) para admin, contador y alvaro
+        // Se busca o crea la caja chica general con código fijo
         $caja = CajaChica::firstOrCreate(
-            ['responsable_id' => auth()->id(), 'estado' => 'activa'],
-            ['codigo' => 'CCH-' . auth()->id(), 'monto_fondo' => 2000]
+            ['codigo' => 'CCH-GENERAL', 'estado' => 'activa'],
+            ['responsable_id' => auth()->id(), 'monto_fondo' => 2000]
         );
+
+        // Si la caja existe pero el responsable no es el usuario actual y el usuario es alvaro/admin/contador,
+        // actualizamos el responsable al usuario actual para trazabilidad
+        if (in_array(auth()->user()->role, ['alvaro', 'admin', 'contador']) && $caja->responsable_id !== auth()->id()) {
+            $caja->update(['responsable_id' => auth()->id()]);
+        }
 
         $tiposGasto = TipoGasto::orderBy('nombre', 'asc')->get();
         

@@ -51,12 +51,11 @@ Route::post('/logout', [AutenticacionController::class, 'logout'])->name('logout
 Route::middleware(['auth'])->group(function () {
 
     // -------------------------------------------------------------
-    // NIVEL 1: GENERAL (Todos los roles: Admin, Recepción, Caja)
+    // NIVEL 1: GENERAL (Todos los roles autenticados)
     // -------------------------------------------------------------
-    // El dashboard, agendar citas, ver clientes y marcar asistencia
+    // Agendar citas, ver clientes y marcar asistencia
     // son operaciones básicas que todo el equipo necesita hacer.
-
-    Route::get('/', [PanelController::class, 'index']);
+    // NOTA: El dashboard (/) NO está aquí; requiere rol financiero.
 
     // -------------------------------------------------------------
     // DASHBOARD BI (SPA asíncrona): endpoints JSON del Centro de Mando.
@@ -152,12 +151,17 @@ Route::middleware(['auth'])->group(function () {
         Route::post('/caja/abrir', [CajaController::class, 'open']);
         Route::post('/caja/cerrar', [CajaController::class, 'close']);
 
-        Route::get('/caja-chica', [CajaChicaController::class, 'index']);
-        Route::post('/caja-chica/gasto', [CajaChicaController::class, 'store']);
-
         Route::get('/mesa-cambio', [MesaCambioController::class, 'index']);
         Route::post('/mesa-cambio/operar', [MesaCambioController::class, 'store']);
         Route::post('/mesa-cambio/tasa-oficial', [MesaCambioController::class, 'registrarTasaOficial'])->name('mesa.tasa.oficial');
+    });
+
+    // -------------------------------------------------------------
+    // CAJA CHICA: admin, contador y alvaro (propietario)
+    // -------------------------------------------------------------
+    Route::middleware(['role:admin,contador,alvaro'])->group(function () {
+        Route::get('/caja-chica', [CajaChicaController::class, 'index']);
+        Route::post('/caja-chica/gasto', [CajaChicaController::class, 'store']);
     });
 
     // -------------------------------------------------------------
@@ -190,12 +194,17 @@ Route::middleware(['auth'])->group(function () {
         Route::post('/bancos/{cuenta_bancaria}/conciliacion', [BancoController::class, 'guardarConciliacion'])->name('bancos.conciliar');
 
         Route::get('/retiros', [RetiroController::class, 'index']);
-        Route::post('/retiros', [RetiroController::class, 'depositar']);
+        Route::post('/retiros', [RetiroController::class, 'store']);
     });
 
     // CONTABILIDAD: bloque exclusivo del rol Álvaro + Contador (auditoría
     // financiera). Un administrador que acceda por URL directa obtiene 403.
+    // El Dashboard Gerencial BI (Centro de Mando) también requiere acceso
+    // financiero porque lee exclusivamente del Libro Mayor (§5.10 AGENTS.md).
     Route::middleware(['role:alvaro,contador'])->group(function () {
+
+        // Dashboard Gerencial BI (Centro de Mando)
+        Route::get('/', [PanelController::class, 'index']);
 
         // Contabilidad
         Route::get('/contabilidad', [ContabilidadController::class, 'diario']);

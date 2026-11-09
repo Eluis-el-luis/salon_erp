@@ -91,6 +91,13 @@ class Venta extends Model
         return $this->belongsTo(Usuario::class, 'aprobada_por');
     }
 
+    public function asientosContables()
+    {
+        return $this->hasMany(AsientoContable::class, 'referencia_id')
+            ->where('modulo_origen', 'ventas')
+            ->orderBy('fecha', 'desc');
+    }
+
     /**
      * PAGOS MIXTOS: Efectivo físico en NIO neto (cobros efectivo menos vueltos en
      * córdobas) de una consulta de ventas ya filtrada. Las ventas legacy sin líneas

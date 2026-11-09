@@ -24,10 +24,11 @@ use App\Services\ComisionService;
 use App\Services\LibroPagosService;
 use App\Services\NotificationService;
 use App\Traits\AutorizaPinSupervisor;
+use App\Traits\Notificable;
 
 class VentaController extends Controller
 {
-    use AutorizaPinSupervisor;
+    use AutorizaPinSupervisor, Notificable;
 
     public function __construct(private NotificationService $notifications) {}
     public function facturarCita(Request $request, $id)
@@ -124,14 +125,8 @@ class VentaController extends Controller
                     'change_currency' => null,
                 ]]);
 
-                // NOTIFICACIÓN: crear alerta para Álvaro (propietario)
-                $this->notifications->createByType(
-                    NotificationService::TYPE_VENTA_PENDIENTE_APROBACION,
-                    'Nueva factura de cita pendiente de aprobación',
-                    "Factura #{$venta->id} (cita) por C$ {$venta->total} requiere tu autorización para contabilizar.",
-                    ['sale_id' => $venta->id, 'url' => "/aprobaciones", 'monto' => $venta->total],
-                    'high'
-                );
+                // NOTIFICACIÓN: venta de cita pendiente de aprobación (usa trait Notificable)
+                $this->notifyVentaPendiente($venta);
 
                 \Illuminate\Support\Facades\DB::commit();
 
@@ -411,14 +406,8 @@ class VentaController extends Controller
                     'change_currency' => $request->input('change_currency'),
                 ]]);
 
-                // NOTIFICACIÓN: crear alerta para Álvaro (propietario)
-                $this->notifications->createByType(
-                    NotificationService::TYPE_VENTA_PENDIENTE_APROBACION,
-                    'Nueva venta pendiente de aprobación',
-                    "Venta #{$venta->id} por C$ {$venta->total} requiere tu autorización para contabilizar.",
-                    ['sale_id' => $venta->id, 'url' => "/aprobaciones", 'monto' => $venta->total],
-                    'high'
-                );
+                // NOTIFICACIÓN: venta pendiente de aprobación (usa trait Notificable)
+                $this->notifyVentaPendiente($venta);
 
                 \Illuminate\Support\Facades\DB::commit();
 
@@ -790,39 +779,47 @@ class VentaController extends Controller
      */
     public function documento($id)
     {
-        $venta = Venta::with(['detalles.servicio', 'detalles.articulo', 'detalles.consumos', 'detalles.variante', 'cliente'])->findOrFail($id);
+        $venta = Venta::with([
+            'detalles.servicio', 'detalles.articulo', 'detalles.consumos.articulo', 'detalles.variante', 'detalles.estilista',
+            'cliente', 'cajero', 'pagos', 'anuladaPor', 'aprobadaPor', 'asientosContables.detalles'
+        ])->findOrFail($id);
 
-        // Permitir ver detalles de cualquier estado, pero solo borrador/emitida son editables
+        // Permitir ver detalles de cualquier estado
         $estadosVisibles = [Venta::ESTADO_BORRADOR, Venta::ESTADO_EMITIDA, Venta::ESTADO_PAGADA, Venta::ESTADO_ANULADA];
         
         if (!in_array($venta->status, $estadosVisibles)) {
-            return response()->json(['error' => 'Estado de venta no válido para visualización.'], 422);
+            abort(404, 'Estado de venta no válido para visualización.');
         }
 
-        return response()->json([
-            'id' => $venta->id,
-            'status' => $venta->status,
-            'client_id' => $venta->client_id,
-            'discount' => (float) $venta->discount,
-            'total' => (float) $venta->total,
-            'items' => $venta->detalles->map(function ($d) {
-                return [
-                    'id' => $d->service_id ?? $d->item_id,
-                    'producto' => trim(($d->servicio?->name ?? $d->articulo?->producto ?? 'Artículo')
-                        . ($d->variante ? ' (' . $d->variante->name . ')' : '')),
-                    'precio_c' => (float) $d->unit_price,
-                    'type' => $d->service_id ? 'servicio' : 'producto',
-                    'quantity' => (int) $d->quantity,
-                    'stylist_id' => $d->stylist_id,
-                    'variant_id' => $d->service_variant_id,
-                    // BOM dinámico: consumos reales ya guardados de esta línea
-                    'consumo' => $d->consumos->map(fn ($c) => [
-                        'item_id' => $c->item_id,
-                        'cantidad' => (float) $c->quantity_actual,
-                    ])->values(),
-                ];
-            })->values(),
-        ]);
+        // Si es petición API (Accept: application/json), retorna JSON para el POS
+        if (request()->wantsJson()) {
+            return response()->json([
+                'id' => $venta->id,
+                'status' => $venta->status,
+                'client_id' => $venta->client_id,
+                'discount' => (float) $venta->discount,
+                'total' => (float) $venta->total,
+                'items' => $venta->detalles->map(function ($d) {
+                    return [
+                        'id' => $d->service_id ?? $d->item_id,
+                        'producto' => trim(($d->servicio?->name ?? $d->articulo?->producto ?? 'Artículo')
+                            . ($d->variante ? ' (' . $d->variante->name . ')' : '')),
+                        'precio_c' => (float) $d->unit_price,
+                        'type' => $d->service_id ? 'servicio' : 'producto',
+                        'quantity' => (int) $d->quantity,
+                        'stylist_id' => $d->stylist_id,
+                        'variant_id' => $d->service_variant_id,
+                        'consumo' => $d->consumos->map(fn ($c) => [
+                            'item_id' => $c->item_id,
+                            'cantidad' => (float) $c->quantity_actual,
+                        ])->values(),
+                    ];
+                })->values(),
+            ]);
+        }
+
+        // Petición web: retorna vista Blade completa
+        return view('sales.documento', compact('venta'));
     }
 
     public function index(Request $request)

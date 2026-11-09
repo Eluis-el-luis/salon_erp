@@ -178,7 +178,7 @@ Los nombres de tablas y algunos campos conservan nombres heredados en inglés (`
 - **MESA DE APROBACIONES (gobernanza, octubre 2026, grupo `role:alvaro,admin`)**: `GET /aprobaciones`, `POST /aprobaciones/venta/{id}/aprobar`, `POST /aprobaciones/venta/{id}/rechazar`, `POST /aprobaciones/compra/{id}/aprobar`, `POST /aprobaciones/compra/{id}/rechazar`. Las transacciones retenidas en `pendiente_aprobacion` NO tocan contabilidad ni inventario hasta que un supervisor (Álvaro/Administrador) las apruebe con **doble confirmación por PIN**.
 - Dashboard BI (octubre 2026, grupo `auth`, ver §5.10): `GET /panel/api/datos`, `GET /panel/api/movimientos/{id}` (nombres `panel.*`) y `POST /panel/api/meta` con `role:admin`. El drill-down de inventario usa `GET /inventario?stock=critico` (grupo `role:admin`). Los endpoints BI sin sesión devuelven 401 JSON (no redirect). Cobertura: `tests/Feature/DashboardGerencialTest.php`.
 
-## 6.1. Doble Confirmación por PIN (Supervisor Override) — octubre 2026
+### 6.1. Doble Confirmación por PIN (Supervisor Override) — octubre 2026
 
 **Objetivo**: Acciones críticas de caja y finanzas requieren autorización mediante PIN de 4-6 dígitos (hasheado con `Hash::make()`) almacenado en `users.pin_seguridad`. El PIN lo define la administración al crear/editar el perfil del usuario.
 
@@ -200,7 +200,7 @@ Los nombres de tablas y algunos campos conservan nombres heredados en inglés (`
 
 **Configuración**: `config/salon.php` → `seguridad.roles_supervisor` y `aprobaciones.roles_supervisor` (ambos `['alvaro', 'admin']`).
 
-## 6.2. Flujo de Pre-Aprobación de Transacciones Sensibles — octubre 2026
+### 6.2. Flujo de Pre-Aprobación de Transacciones Sensibles — octubre 2026
 
 **Objetivo**: Operaciones sensibles (ventas/compras sobre umbrales configurables o flag explícito) se RETIENEN en estado `pendiente_aprobacion` SIN contabilizar, SIN mover inventario, SIN registrar libro de pagos, SIN mover divisas, SIN generar comisiones. Solo un supervisor (Álvaro/Administrador) las despacha a contabilidad tras doble confirmación por PIN.
 
@@ -220,7 +220,7 @@ Los nombres de tablas y algunos campos conservan nombres heredados en inglés (`
 
 **Rutas**: `GET /aprobaciones` (`aprobaciones.index`), `POST /aprobaciones/venta/{id}/aprobar`, `POST /aprobaciones/venta/{id}/rechazar`, `POST /aprobaciones/compra/{id}/aprobar`, `POST /aprobaciones/compra/{id}/rechazar` — grupo `role:alvaro,admin`.
 
-## 6.3. Reestructuración RBAC: Rol Supremo "Álvaro" y Administrador Operativo — octubre 2026
+### 6.3. Reestructuración RBAC: Rol Supremo "Álvaro" y Administrador Operativo — octubre 2026
 
 **Cambios en `RoleSeeder`**:
 ```php
@@ -254,18 +254,18 @@ Rol::create(['name' => 'Estilista']);             // ID 5 - agenda, servicios, p
 
 **Tests actualizados**: `AccesoFinanzasContadorTest` (ahora usa usuarios `alvaro`, `admin`, `contador`, `recepcion` y verifica que `admin` NO accede a contabilidad), `CatalogoCuentasTest` y `ContabilidadVistasTest` (usan usuario `contador` para rutas contables).
 
-## 6.4. Correcciones Adicionales (noviembre 2026)
+### 6.4. Correcciones Adicionales (noviembre 2026)
 
-### 6.4.1. Campo PIN en Perfil de Colaborador
+#### 6.4.1. Campo PIN en Perfil de Colaborador
 - **EmpleadoController**: Añadido campo `pin_seguridad` (nullable, 4-6 dígitos, hasheado) en validación de `store` y `update`. Solo se actualiza si se envía valor nuevo.
 - **Vista employees/index.blade.php**: Campo "PIN de Seguridad (4-6 dígitos)" en modal de creación/edición con validación solo numérica (`pinKeydown`).
 - El PIN se guarda encriptado con `Hash::make()` y nunca se muestra en edición (campo vacío por seguridad).
 
-### 6.4.2. Umbral de Aprobación Activado por Defecto
+#### 6.4.2. Umbral de Aprobación Activado por Defecto
 - **config/salon.php**: `aprobaciones.monto_venta` cambiado de `0` a `1` (C$), `monto_compra` a `10000`. Esto hace que **cualquier venta de mostrador por un rol no supervisor (recepcion) quede en `pendiente_aprobacion`** automáticamente, requiriendo PIN de Álvaro/Administrador para despachar a contabilidad.
 - Los roles supervisores (`alvaro`, `admin`) siguen exentos del umbral.
 
-### 6.4.3. Fix Botones PIN: `$event.target` vs `$el`
+#### 6.4.3. Fix Botones PIN: `$event.target` vs `$el`
 - **Problema**: En Alpine.js, `$el` refiere al elemento raíz del componente, no al botón clickeado. `$el.closest('form')` fallaba al no encontrar el formulario.
 - **Solución**: Cambiado a `$event.target.closest('form')` en todas las vistas:
   - `resources/views/cash/index.blade.php` (abrir/cerrar caja)
@@ -273,20 +273,20 @@ Rol::create(['name' => 'Estilista']);             // ID 5 - agenda, servicios, p
   - `resources/views/sales/index.blade.php` (anular factura)
   - `resources/views/aprobaciones/index.blade.php` (aprobar/rechazar ventas y compras)
 
-### 6.4.4. Bloqueo de Logout con Caja Abierta
+#### 6.4.4. Bloqueo de Logout con Caja Abierta
 - **AutenticacionController::logout()**: Antes de cerrar sesión, verifica si el usuario tiene una `SesionCaja` abierta (`estado='abierta'`). Si existe, **bloquea el logout** y redirige a `/login` con error: *"Tienes una caja abierta. Debes cerrar tu turno (arqueo) antes de cerrar sesión."*
 - Esto evita que la caja quede abierta en la base de datos sin control y previene confusión al iniciar sesión con otro usuario.
 
-### 6.4.5. Caja NO se Auto-Abre ni Auto-Cierra
+#### 6.4.5. Caja NO se Auto-Abre ni Auto-Cierra
 - **Comportamiento**: La `SesionCaja` permanece en `estado='abierta'` hasta que el usuario hace clic explícito en "Cerrar Turno y Arqueo" (con PIN). No hay lógica de auto-cierre en logout ni auto-apertura en login.
 - Si un usuario cierra sesión sin cerrar caja, la caja sigue abierta en BD. Al intentar entrar otro usuario, ve su propia caja (o formulario para abrirla). El bloqueo de logout (§6.4.4) obliga a cerrar caja antes de salir.
 
-### 6.4.6. Bloqueo Efectivo de Logout con Caja Abierta (noviembre 2026)
+#### 6.4.6. Bloqueo Efectivo de Logout con Caja Abierta (noviembre 2026)
 - **Problema**: `AutenticacionController::logout()` verificaba si había caja abierta y flasheaba un error, pero **seguía cerrando la sesión** y redirigiendo a `/login`.
 - **Corrección**: Ahora el método **previene el logout completamente** si existe una `SesionCaja` con `estado='abierta'` para el usuario. Retorna `redirect()->back()->withErrors(...)` sin llamar a `Auth::logout()`. Solo permite el logout si no hay caja abierta.
 - **Archivo modificado**: `app/Http/Controllers/AutenticacionController.php` (método `logout`).
 
-### 6.4.7. Flujo de Pre-Aprobación Obligatorio para Ventas (noviembre 2026)
+#### 6.4.7. Flujo de Pre-Aprobación Obligatorio para Ventas (noviembre 2026)
 - **Objetivo**: TODA venta de mostrador (rol `recepcion` / `estilista` / `contador`) queda **retenida en `pendiente_aprobacion`** al confirmar el pago. NO se descuenta inventario, NO se registra libro de pagos, NO se mueven divisas, NO hay comisiones y NO hay asiento contable hasta que **Álvaro (Propietario)** la apruebe.
 - **Configuración** (`config/salon.php`):
   - `aprobaciones.monto_venta = 1` (C$) → cualquier venta ≥ 1 C$ se retiene
@@ -308,7 +308,68 @@ Rol::create(['name' => 'Estilista']);             // ID 5 - agenda, servicios, p
   - `routes/web.php` (middleware `role:alvaro` para aprobaciones)
   - `resources/views/layouts/app.blade.php` (visibilidad menú solo `alvaro`)
 
-### 6.4.9. Vista "Mis Aprobaciones" para Cajeros/Recepción (noviembre 2026)
+#### 6.4.8. Sistema de Notificaciones Dinámicas por Rol (noviembre 2026) ⭐ **NUEVO COMPLETO**
+- **Objetivo**: Cada rol recibe notificaciones específicas, relevantes y automáticas. Álvaro tiene control total pero **NO recibe notificaciones de sus propias acciones** (auto-filtrado).
+- **Arquitectura**:
+  - **Tabla**: `notifications` (migración `2026_11_06_191459`)
+  - **Modelo**: `App\Models\Notification` (scopes `unread`, `forType`, relación `user`)
+  - **Servicio**: `App\Services\NotificationService` (centraliza tipos, roles, prioridades, iconos, eventos automáticos)
+  - **Trait**: `App\Traits\Notificable` (métodos `notify*()` listos para usar en controladores/servicios)
+  - **Controlador API**: `App\Http\Controllers\NotificationController` (`/notificaciones/api/*`)
+  - **Componente Alpine**: `resources/js/notification-bell.js` → `Alpine.data('notificationBell')` (helpers dinámicos `getNotificationClasses`, `isVentaType`, `isRechazoType`, etc.)
+  - **Vistas**: Campanita dropdown + Badges contextuales en menú + Vista completa `/notificaciones`
+
+- **Tipos de notificación por rol** (40+ tipos):
+  | Categoría | Tipos clave | Roles | Prioridad |
+  |---|---|---|---|
+  | **Álvaro (Propietario)** | `venta_pendiente_aprobacion`, `compra_pendiente_aprobacion`, `alerta_critica`, `reporte_diario` | `alvaro` (auto-filtrado: NO se notifica a sí mismo) | high/urgent |
+  | **Administrador** | `stock_critico`, `stock_agotado`, `compra_pendiente_aprobacion_admin`, `caja_sin_cerrar`, `caja_diferencia`, `empleado_nuevo`, `ausencia_pendiente`, `nomina_pendiente`, `respaldo_faltante`, `merma_registrada` | `admin`, `alvaro` | normal/high |
+  | **Contador** | `cxp_vencida`, `cxp_por_vencer`, `cxc_vencida`, `cxc_por_vencer`, `conciliacion_pendiente`, `cierre_contable`, `asiento_desbalanceado`, `banco_movimiento`, `iva_declaracion` | `contador`, `admin`, `alvaro` | high |
+  | **Recepción/Caja** | `venta_aprobada`, `venta_rechazada`, `cita_nueva`, `cita_cancelada`, `cliente_cxc_vencida`, `cotizacion_solicitada` | `recepcion`, `contador`, `admin`, `alvaro` | normal/high |
+  | **Estilista** | `cita_asignada`, `cita_modificada`, `comision_ganada`, `comision_pagada`, `propina_recibida` | Estilista específico (vía `createForStylist`) | normal |
+
+- **Eventos automáticos implementados** (vía `Notificable` trait):
+  - **Ventas**: `notifyVentaPendiente()`, `notifyVentaAprobada()`, `notifyVentaRechazada()`
+  - **Compras**: `notifyCompraPendiente()`
+  - **Stock**: `notifyStockCritico()`, `notifyStockAgotado()` (desde `InventarioService`)
+  - **Caja**: `notifyCajaSinCerrar()`, `notifyCajaDiferencia()`
+  - **Citas**: `notifyCitaNueva()`, `notifyCitaCancelada()`, `notifyCitaReagendada()` (+ notifica a estilista)
+  - **CxP/CxC**: `notifyCxpVencida()`, `notifyCxpPorVencer()`, `notifyCxcVencida()`
+  - **RRHH**: `notifyAusenciaPendiente()`, `notifyNominaPendiente()`, `notifyComisionGanada()`, `notifyPropinaRecibida()`
+  - **Sistema**: `notifyRespaldoFaltante()`, `notifyConciliacionPendiente()`, `notifyCierreContable()`, `notifyAlertaCritica()`
+
+- **Filtrado inteligente**:
+  - `createByType(..., excludeActor: true)` → Si el actor es Álvaro, **NO se le notifica** a él mismo
+  - Notificaciones de cajero/estilista van directo al usuario (`createForCashier`, `createForStylist`)
+
+- **Canales duales**:
+  1. **Campanita (Navbar)**: Dropdown con lista, iconos/colores dinámicos, click→marca leída+navega, "Marcar todas"
+  2. **Badges contextuales (Menú)**: Contadores rojos en cada item (`/aprobaciones`, `/inventario`, `/caja/arqueo`, `/adelantos`, `/cuentas-por-pagar`, `/mis-aprobaciones`, etc.)
+  3. **Vista completa**: `/notificaciones` con paginación, iconos SVG por tipo, paginación
+
+- **Endpoints API** (`routes/web.php`, grupo `auth`):
+  - `GET /notificaciones/api/count` → `{ count: N }`
+  - `GET /notificaciones/api/list` → `{ notifications: [...] }`
+  - `POST /notificaciones/api/{id}/read` → marca una como leída
+  - `POST /notificaciones/api/read-all` → marca todas como leídas
+  - `GET /notificaciones` → Vista completa con paginación
+
+- **Archivos nuevos/modificados**:
+  - `database/migrations/2026_11_06_191459_create_notifications_table.php`
+  - `app/Models/Notification.php`
+  - `app/Services/NotificationService.php` (40+ tipos, prioridades, iconos, eventos automáticos)
+  - `app/Traits/Notificable.php` (trait reutilizable con métodos `notify*()`)
+  - `app/Http/Controllers/NotificationController.php`
+  - `resources/js/notification-bell.js` (helpers dinámicos: `getNotificationClasses`, `isVentaType`, `isRechazoType`, `isStockType`, `isCxType`, `isCitaType`, `isComisionType`, `isRRHHType`, `isBancoType`, `isAlertaType`, `isDefaultType`)
+  - `resources/js/app.js` (registro componente)
+  - `resources/views/layouts/app.blade.php` (campanita dinámica + badges en menú + ocultar Dashboard + brand URL por rol)
+  - `resources/views/notifications/index.blade.php` (vista completa con 40+ iconos SVG)
+  - `routes/web.php` (rutas API + `/notificaciones` + `/mis-aprobaciones`)
+  - `app/Http/Controllers/VentaController.php` (usa `Notificable`, llama `notifyVentaPendiente()`)
+  - `app/Http/Controllers/AutenticacionController.php` (redirige a `/pos` para caja/recepcion)
+  - `resources/views/layouts/app.blade.php` (brand URL dinámica por rol)
+
+#### 6.4.9. Vista "Mis Aprobaciones" para Cajeros/Recepción (noviembre 2026)
 - **Objetivo**: El vendedor (recepcion/cajera) ve SOLO sus propias ventas retenidas, con estado en tiempo real.
 - **Ruta**: `/mis-aprobaciones` (grupo `role:recepcion,contador,admin`)
 - **Controlador**: `VentaController::misAprobaciones()` → filtra `cashier_id = auth()->id()` y estados `pendiente_aprobacion`, `pagada`, `anulada`
@@ -316,21 +377,15 @@ Rol::create(['name' => 'Estilista']);             // ID 5 - agenda, servicios, p
 - **Menú**: "Finanzas → Mis Aprobaciones" (icono reloj) visible para `recepcion`, `contador`, `admin`
 - **Estados mostrados**:
   - **Pendiente aprobación** (ámbar): "Esperando..." - botón deshabilitado
-  - **Aprobada y contabilizada** (verde): Botones "Ver Ticket" (abre `/ventas/{id}/ticket` en nueva pestaña) y "Detalle"
-  - **Rechazada/Anulada** (rojo): Botón "Ver motivo" (abre `/ventas/{id}/documento`)
+  - **Aprobada y contabilizada** (verde): Botones **"Ver Ticket"** (target="_blank") y "Detalle"
+  - **Rechazada/Anulada** (rojo): Botón "Ver motivo"
 - **Flujo completo**:
   1. Recepción hace venta en POS → queda `pendiente_aprobacion`
   2. Ve en "Mis Aprobaciones" → estado "Pendiente aprobación"
   3. Álvaro aprueba en `/aprobaciones` → venta pasa a `pagada` (inventario + asiento + ticket)
-  4. Recepción recarga "Mis Aprobaciones" → ve "Aprobada y contabilizada" + botón **"Ver Ticket"**
-  5. Click "Ver Ticket" → genera/imprime ticket normal
-- **Archivos nuevos/modificados**:
-  - `app/Http/Controllers/VentaController.php` (método `misAprobaciones()`)
-  - `resources/views/sales/mis-aprobaciones.blade.php` (nueva vista)
-  - `routes/web.php` (ruta `GET /mis-aprobaciones` nombre `ventas.mis-aprobaciones`)
-  - `resources/views/layouts/app.blade.php` (menú "Mis Aprobaciones")
+  4. Recepción recarga "Mis Aprobaciones" → ve 🟢 **"Ver Ticket"** → Click → **Ticket generado**
 
-### 6.4.10. Sesiones Multi-Rol (Limitación del Navegador)
+#### 6.4.10. Sesiones Multi-Rol (Limitación del Navegador)
 - **Problema**: Cookies de sesión se comparten entre pestañas del mismo navegador. No se pueden mantener dos roles simultáneos (ej. `recepcion` y `alvaro`) en pestañas distintas.
 - **Soluciones para testear**:
   1. **Navegadores distintos**: Chrome (recepcion) + Firefox (alvaro)
@@ -338,53 +393,6 @@ Rol::create(['name' => 'Estilista']);             // ID 5 - agenda, servicios, p
   3. **Perfiles de usuario**: Chrome "Añadir perfil" → perfiles aislados con cookies separadas
   4. **Extensiones**: "SessionBox", "Multi-Account Containers" (Firefox)
 - **En producción**: No es problema real, cada usuario físico usa su propio dispositivo/sesión.
-- **Objetivo**: Informar a cada rol lo que requiere su atención, en dos canales:
-  1. **Campanita general (Navbar)**: dropdown con lista personalizada por usuario/rol
-  2. **Badges contextuales (Menú lateral)**: contadores rojos en cada item del menú indicando cuántas notificaciones pendientes hay para esa vista
-
-- **Arquitectura**:
-  - **Tabla**: `notifications` (migración `2026_11_06_191459`)
-  - **Modelo**: `App\Models\Notification` (scopes `unread`, `forType`, relación `user`)
-  - **Servicio**: `App\Services\NotificationService` (centraliza creación, consulta, badges)
-  - **Controlador API**: `App\Http\Controllers\NotificationController` (`/notificaciones/api/*`)
-  - **Componente Alpine**: `resources/js/notification-bell.js` → `Alpine.data('notificationBell')`
-
-- **Tipos de notificación estándar** (`NotificationService::TYPE_*`):
-  | Tipo | Roles destinatarios | Item de menú (badge) | Prioridad |
-  |---|---|---|---|
-  | `venta_pendiente_aprobacion` | `alvaro` | `/aprobaciones` | high |
-  | `compra_pendiente_aprobacion` | `alvaro` | `/aprobaciones` | high |
-  | `caja_sin_cerrar` | `recepcion, contador, admin, alvaro` | `/caja/arqueo` | normal |
-  | `cxp_vencida` | `admin, contador, alvaro` | `/cuentas-por-pagar` | high |
-  | `cxc_vencida` | `recepcion, contador, admin, alvaro` | `/adelantos` | high |
-  | `stock_critico` | `admin, alvaro` | `/inventario` | high |
-  | `nomina_pendiente` | `admin, alvaro` | `/nomina` | normal |
-  | `ausencia_pendiente` | `admin, alvaro` | `/ausencias` | normal |
-
-- **Flujo automático**: al crear venta en `pendiente_aprobacion` (`VentaController::store` y `facturarCita`), se llama a `$this->notifications->createByType(...)` que:
-  1. Resuelve roles destino según `$typeToRoles`
-  2. Crea una `Notification` por cada usuario activo de esos roles
-  3. Al cargar cualquier página, el componente `notificationBell` hace `fetch('/notificaciones/api/count')` y `fetch('/notificaciones/api/list')`
-  4. El menú lateral (en `layouts/app.blade.php`) llama a `$notificationService->getContextualCounts()` y pinta badges rojos en cada `<a>` según la URL
-
-- **Endpoints API** (`routes/web.php`, grupo `auth`):
-  - `GET /notificaciones/api/count` → `{ count: N }`
-  - `GET /notificaciones/api/list` → `{ notifications: [...] }`
-  - `POST /notificaciones/api/{id}/read` → marca una como leída
-  - `POST /notificaciones/api/read-all` → marca todas como leídas
-
-- **Dashboard oculto para recepción/cajera**: en `layouts/app.blade.php`, el enlace "Dashboard" (`/`) solo se renderiza si `in_array($rolUsuario, ['alvaro', 'admin', 'contador'])`. Recepción y estilista ven directamente el menú de operaciones.
-
-- **Archivos nuevos/modificados**:
-  - `database/migrations/2026_11_06_191459_create_notifications_table.php`
-  - `app/Models/Notification.php`
-  - `app/Services/NotificationService.php`
-  - `app/Http/Controllers/NotificationController.php`
-  - `resources/js/notification-bell.js`
-  - `resources/js/app.js` (registro componente)
-  - `resources/views/layouts/app.blade.php` (campanita + badges en menú + ocultar Dashboard)
-  - `routes/web.php` (rutas API notificaciones)
-  - `app/Http/Controllers/VentaController.php` (inyecta `NotificationService`, crea notificaciones al retener venta)
 
 ## 7. Datos, migraciones y documentación
 

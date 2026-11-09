@@ -46,12 +46,13 @@ class CajaController extends Controller
             );
         }
 
-        // Monto automático de apertura: el cierre de la última sesión del usuario.
+        // Monto automático de apertura: el cierre de la última sesión de CUALQUIER usuario.
+        // La caja es un recurso físico compartido; el fondo inicial debe ser el último
+        // arqueo cerrado por cualquier cajero, no por el usuario actual.
         // (Solo relevante para usuarios no privilegiados.)
         $autoApertura = 0;
         if (!$puedeGestionarMontos && !$sesion) {
-            $ultimaCerrada = SesionCaja::where('user_id', auth()->id())
-                ->where('estado', 'cerrada')
+            $ultimaCerrada = SesionCaja::where('estado', 'cerrada')
                 ->orderByDesc('fecha_cierre')
                 ->first();
             $autoApertura = $ultimaCerrada ? (float) $ultimaCerrada->monto_fisico : 0;
@@ -89,9 +90,9 @@ class CajaController extends Controller
             if ($privilegiado) {
                 $montoApertura = round((float) ($request->monto_apertura ?? 0), 2);
             } else {
-                // Automático: se hereda el monto con el que se cerró la última sesión.
-                $ultimaCerrada = SesionCaja::where('user_id', auth()->id())
-                    ->where('estado', 'cerrada')
+                // Automático: se hereda el monto con el que se cerró la última sesión de CUALQUIER usuario.
+                // La caja es un recurso físico compartido.
+                $ultimaCerrada = SesionCaja::where('estado', 'cerrada')
                     ->orderByDesc('fecha_cierre')
                     ->first();
                 $montoApertura = $ultimaCerrada ? round((float) $ultimaCerrada->monto_fisico, 2) : 0;

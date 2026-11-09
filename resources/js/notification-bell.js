@@ -132,5 +132,143 @@ export default () => ({
         if (diffHours < 24) return `Hace ${diffHours} h`;
         if (diffDays < 7) return `Hace ${diffDays} d`;
         return date.toLocaleDateString('es-NI', { day: '2-digit', month: '2-digit', year: '2-digit' });
+    },
+
+    // ================================================================
+    // HELPERS PARA UI DINÁMICA (clases CSS e iconos por tipo)
+    // ================================================================
+
+    getNotificationClasses(type) {
+        const base = 'flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ';
+        const classes = {
+            // Ventas/Compras (verde)
+            'venta_pendiente_aprobacion': 'bg-emerald-100 text-emerald-600',
+            'venta_aprobada': 'bg-emerald-100 text-emerald-600',
+            'compra_pendiente_aprobacion': 'bg-emerald-100 text-emerald-600',
+            'compra_pendiente_aprobacion_admin': 'bg-emerald-100 text-emerald-600',
+            
+            // Rechazos (rojo)
+            'venta_rechazada': 'bg-red-100 text-red-600',
+            'venta_rechazada_alvaro': 'bg-red-100 text-red-600',
+            'compra_rechazada_alvaro': 'bg-red-100 text-red-600',
+            
+            // Caja (ámbar)
+            'caja_sin_cerrar': 'bg-amber-100 text-amber-600',
+            'caja_diferencia': 'bg-red-100 text-red-600',
+            
+            // Stock (azul/rojo)
+            'stock_critico': 'bg-blue-100 text-blue-600',
+            'stock_agotado': 'bg-red-100 text-red-600',
+            'merma_registrada': 'bg-red-100 text-red-600',
+            'proveedor_nuevo': 'bg-blue-100 text-blue-600',
+            
+            // Finanzas CxP/CxC (rojo/azul)
+            'cxp_vencida': 'bg-red-100 text-red-600',
+            'cxp_por_vencer': 'bg-amber-100 text-amber-600',
+            'cxc_vencida': 'bg-red-100 text-red-600',
+            'cxc_por_vencer': 'bg-amber-100 text-amber-600',
+            'conciliacion_pendiente': 'bg-blue-100 text-blue-600',
+            'cierre_contable': 'bg-purple-100 text-purple-600',
+            'asiento_desbalanceado': 'bg-red-100 text-red-600',
+            'banco_movimiento': 'bg-blue-100 text-blue-600',
+            'iva_declaracion': 'bg-purple-100 text-purple-600',
+            
+            // Caja
+            'caja_diferencia': 'bg-red-100 text-red-600',
+            
+            // RRHH (púrpura)
+            'empleado_nuevo': 'bg-purple-100 text-purple-600',
+            'ausencia_pendiente': 'bg-amber-100 text-amber-600',
+            'nomina_pendiente': 'bg-purple-100 text-purple-600',
+            'comision_ganada': 'bg-emerald-100 text-emerald-600',
+            'comision_pagada': 'bg-emerald-100 text-emerald-600',
+            'propina_recibida': 'bg-amber-100 text-amber-600',
+            
+            // Agenda (azul)
+            'cita_nueva': 'bg-blue-100 text-blue-600',
+            'cita_asignada': 'bg-blue-100 text-blue-600',
+            'cita_cancelada': 'bg-red-100 text-red-600',
+            'cita_reagendada': 'bg-blue-100 text-blue-600',
+            'cita_modificada': 'bg-blue-100 text-blue-600',
+            
+            // Clientes
+            'cliente_nuevo': 'bg-emerald-100 text-emerald-600',
+            'cliente_cxc_vencida': 'bg-red-100 text-red-600',
+            'cotizacion_solicitada': 'bg-gray-100 text-gray-600',
+            
+            // Comisiones/Propinas (verde/ámbar)
+            'comision_ganada': 'bg-emerald-100 text-emerald-600',
+            'comision_pagada': 'bg-emerald-100 text-emerald-600',
+            'propina_recibida': 'bg-amber-100 text-amber-600',
+            
+            // RRHH
+            'empleado_nuevo': 'bg-purple-100 text-purple-600',
+            'ausencia_pendiente': 'bg-amber-100 text-amber-600',
+            'nomina_pendiente': 'bg-purple-100 text-purple-600',
+            
+            // Sistema
+            'alerta_critica': 'bg-red-100 text-red-600',
+            'reporte_diario': 'bg-blue-100 text-blue-600',
+            'respaldo_faltante': 'bg-gray-100 text-gray-600',
+            'respaldo_completado': 'bg-emerald-100 text-emerald-600',
+            'alerta_critica': 'bg-red-100 text-red-600',
+            
+            // Default
+            'default': 'bg-gray-100 text-gray-600'
+        };
+        return base + (classes[type] || classes.default);
+    },
+
+    // Helpers para iconos SVG (usados en template x-if)
+    isVentaType(type) {
+        return ['venta_pendiente_aprobacion', 'venta_aprobada', 'compra_pendiente_aprobacion', 'compra_pendiente_aprobacion_admin'].includes(type);
+    },
+    
+    isRechazoType(type) {
+        return ['venta_rechazada', 'venta_rechazada_alvaro', 'compra_rechazada_alvaro'].includes(type);
+    },
+    
+    isStockType(type) {
+        return ['stock_critico', 'stock_agotado', 'merma_registrada'].includes(type);
+    },
+    
+    isCxType(type) {
+        return ['cxp_vencida', 'cxp_por_vencer', 'cxc_vencida', 'cxc_por_vencer', 'conciliacion_pendiente', 'cierre_contable', 'asiento_desbalanceado', 'banco_movimiento', 'iva_declaracion'].includes(type);
+    },
+    
+    isCitaType(type) {
+        return ['cita_nueva', 'cita_asignada', 'cita_cancelada', 'cita_reagendada', 'cita_modificada'].includes(type);
+    },
+    
+    isComisionType(type) {
+        return ['comision_ganada', 'comision_pagada', 'propina_recibida'].includes(type);
+    },
+    
+    isRRHHType(type) {
+        return ['empleado_nuevo', 'ausencia_pendiente', 'nomina_pendiente'].includes(type);
+    },
+    
+    isBancoType(type) {
+        return ['banco_movimiento', 'conciliacion_pendiente'].includes(type);
+    },
+    
+    isAlertaType(type) {
+        return ['alerta_critica', 'stock_agotado', 'asiento_desbalanceado', 'caja_diferencia'].includes(type);
+    },
+    
+    isDefaultType(type) {
+        const known = [
+            'venta_pendiente_aprobacion', 'venta_aprobada', 'compra_pendiente_aprobacion', 'compra_pendiente_aprobacion_admin',
+            'venta_rechazada', 'venta_rechazada_alvaro', 'compra_rechazada_alvaro',
+            'caja_sin_cerrar', 'caja_diferencia',
+            'stock_critico', 'stock_agotado', 'merma_registrada', 'proveedor_nuevo',
+            'cxp_vencida', 'cxp_por_vencer', 'cxc_vencida', 'cxc_por_vencer', 'conciliacion_pendiente', 'cierre_contable', 'asiento_desbalanceado', 'banco_movimiento', 'iva_declaracion',
+            'cita_nueva', 'cita_asignada', 'cita_cancelada', 'cita_reagendada', 'cita_modificada',
+            'cliente_nuevo', 'cliente_cxc_vencida', 'cotizacion_solicitada',
+            'comision_ganada', 'comision_pagada', 'propina_recibida',
+            'empleado_nuevo', 'ausencia_pendiente', 'nomina_pendiente',
+            'alerta_critica', 'reporte_diario', 'respaldo_faltante', 'respaldo_completado'
+        ];
+        return !known.includes(type);
     }
 });

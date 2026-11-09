@@ -44,7 +44,7 @@
                         <span class="text-sm text-gray-600 font-medium">Fondo inicial automático (último cierre)</span>
                         <span class="text-lg font-black text-emerald-700">C$ {{ number_format($autoApertura, 2) }}</span>
                     </div>
-                    <p class="text-xs text-gray-400 -mt-2">El fondo se calcula automáticamente según tu último arqueo.</p>
+                    <p class="text-xs text-gray-400 -mt-2">El fondo se calcula automáticamente según el último arqueo cerrado (caja compartida).</p>
                 @endif
 
                 {{-- DOBLE CONFIRMACIÓN: abrir turno exige PIN propio o de supervisor --}}

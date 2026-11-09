@@ -167,31 +167,30 @@
                     <h3 class="text-lg font-bold">Rechazar transacción</h3>
                     <p class="text-red-100 text-xs">Nunca tuvo efectos contables: quedará marcada como anulada con este motivo.</p>
                 </div>
-                <div class="p-6 space-y-4">
-                    <div>
-                        <label class="block text-xs font-bold text-gray-700 mb-1">Motivo del rechazo (obligatorio)</label>
-                        <textarea x-model="motivo" name="motivo" rows="3" maxlength="255"
-                                  class="w-full text-sm shadow-sm border border-gray-300 rounded-lg py-2 px-3 focus:ring-2 focus:ring-red-500"
-                                  placeholder="Ej. Monto no concilia con el comprobante del proveedor..." required></textarea>
+                <form method="POST" class="flex-1"
+                      :action="rechazoVenta ? '/aprobaciones/venta/' + rechazoVenta + '/rechazar' : '/aprobaciones/compra/' + rechazoCompra + '/rechazar'">
+                    @csrf
+                    <div class="p-6 space-y-4">
+                        <div>
+                            <label class="block text-xs font-bold text-gray-700 mb-1">Motivo del rechazo (obligatorio)</label>
+                            <textarea x-model="motivo" name="motivo" rows="3" maxlength="255"
+                                      class="w-full text-sm shadow-sm border border-gray-300 rounded-lg py-2 px-3 focus:ring-2 focus:ring-red-500"
+                                      placeholder="Ej. Monto no concilia con el comprobante del proveedor..." required></textarea>
+                        </div>
+                        <p class="text-[11px] text-gray-400 italic">
+                            Se registrará quién rechazó, cuándo y por qué.
+                        </p>
                     </div>
-                    <p class="text-[11px] text-gray-400 italic">
-                        Se registrará quién rechazó, cuándo y por qué.
-                    </p>
-                </div>
-                <div class="px-6 py-4 bg-gray-50 border-t border-gray-100 flex flex-row-reverse gap-3">
-                    <form method="POST" class="flex-1"
-                          :action="rechazoVenta ? '/aprobaciones/venta/' + rechazoVenta + '/rechazar' : '/aprobaciones/compra/' + rechazoCompra + '/rechazar'">
-                        @csrf
-                        {{-- El motivo ya está en el textarea con name="motivo" --}}
+                    <div class="px-6 py-4 bg-gray-50 border-t border-gray-100 flex flex-row-reverse gap-3">
                         {{-- DOBLE CONFIRMACIÓN: rechazar exige PIN de supervisor --}}
                         <button type="button"
                                 @click="window.dispatchEvent(new CustomEvent('open-pin', { detail: { mensaje: 'Rechazar una transacción retenida exige el PIN de un supervisor (Álvaro / Administrador).', form: $event.target.closest('form') } }))"
                                 class="btn bg-red-600 hover:bg-red-700 text-white font-bold py-2.5 px-4 rounded-xl w-full">
                             Confirmar Rechazo
                         </button>
-                    </form>
-                    <button type="button" @click="rechazo = false; motivo = ''" class="btn btn-secondary">Cancelar</button>
-                </div>
+                        <button type="button" @click="rechazo = false; motivo = ''" class="btn btn-secondary">Cancelar</button>
+                    </div>
+                </form>
             </div>
         </div>
     </div>
@@ -219,16 +218,6 @@
                 this.rechazoVenta = null;
                 this.motivo = '';
                 this.rechazo = true;
-            },
-
-            confirmarRechazo(evento) {
-                if (!this.motivo || this.motivo.trim().length < 5) {
-                    window.dispatchEvent(new CustomEvent('notify', { detail: 'Describe el motivo del rechazo (mínimo 5 caracteres).' }));
-                    return;
-                }
-                // El botón pertenece al formulario con la acción dinámica
-                const formulario = evento.target.closest('form');
-                if (formulario) formulario.submit();
             }
         }
     }
