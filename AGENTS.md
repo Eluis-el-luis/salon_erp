@@ -38,7 +38,7 @@ Los nombres de tablas y algunos campos conservan nombres heredados en inglés (`
 
 | Área | Puntos de entrada principales | Responsabilidad |
 | --- | --- | --- |
-| Panel, agenda y citas | `PanelController`, ruta `/agenda`, `CitaController`, `Cita`, `Cliente`, `Servicio` | Indicadores del negocio, agenda diaria y citas. La agenda web actualmente consulta modelos desde una closure; el API usa `CitaController`. |
+| Panel, agenda y citas | `PanelController`, `DashboardService`, ruta `/agenda`, `CitaController`, `Cita`, `Cliente`, `Servicio` | Dashboard Gerencial BI leído del Libro Mayor (§5.10) con endpoints SPA en `/panel/api/*`, agenda diaria y citas. La agenda web actualmente consulta modelos desde una closure; el API usa `CitaController`. |
 | Clientes (Fase 1 Admin) | `ClienteController`, `Cliente`, `ClienteGrupo` (`customer_groups`) | Directorio comercial con Perfil 360 (`/clientes/{id}`: métricas, citas, facturas y CxC), grupos de fidelización con descuento automático en POS (`discount_percent`), límite de crédito (`credit_limit`), días de crédito (`credit_days`) y bloqueo de facturación a crédito por límite excedido o facturas vencidas (ver §5.8). |
 | POS y ventas | `VentaController`, `Venta`, `DetalleVenta`, `Pago` | Venta de servicios/productos, libro de pagos (pagos mixtos y vuelto multimoneda en `pagos`), ticket, facturación de cita vía redirección al POS, inventario, comisiones y asiento contable. Ciclo de vida del documento (`status`): `borrador` (cotización sin efectos), `emitida` (crédito/CxC, cobro posterior en `/ventas/{id}/cobrar`), `pagada`, `anulada` (`/ventas/{id}/anular`, solo admin). |
 | Caja y caja chica | `CajaController`, `SesionCaja`, `CajaChicaController`, `CajaChica`, `MovimientoCajaChica` | Apertura/cierre, arqueo (el efectivo teórico se calcula desde el libro de pagos, vía `Venta::efectivoNioNeto()`), movimientos de efectivo y gastos menores. |
@@ -145,23 +145,254 @@ Los nombres de tablas y algunos campos conservan nombres heredados en inglés (`
 - GUARDIA DE BORRADO DE PROVEEDORES (§5.3): no se puede eliminar un proveedor con CxP abiertas, historial de CxP, facturas de compra o artículos vinculados.
 - PAGOS DE COMPRA (contado): la salida de caja/banco se registra contablemente en el asiento de compra, pero el flujo NO valida fondos disponibles de la bóveda (igual que el flujo legacy que reemplazó); si se exige control de disponibilidad, integrarlo vía `FondosService` explícitamente.
 
+### 5.10 Dashboard Gerencial BI (Centro de Mando) y metas dinámicas (octubre 2026)
+
+- ÚNICA FUENTE DE LA VERDAD: el financiero del dashboard se lee EXCLUSIVAMENTE del Libro Mayor vía `DashboardService` (`detalle_asientos`), con el MISMO criterio que `ContabilidadController::resultados`: se excluyen SIEMPRE los asientos `modulo_origen = 'cierre_fiscal'`, solo participan cuentas `permite_movimiento = true` de las clases 4-7, y la convención de signo es clase 4 = HABER - DEBE y clases 5/6/7 = DEBE - HABER. Así el panel coincide al 100% con el Estado de Resultados: ventas anuladas restan por su espejo `REV-*`, mermas (6.8) y diferenciales (7.5) pesan en gastos, y las compras de inventario (activo 1.1.x) JAMÁS se confunden con COGS. No regresar a sumas de `sales` menos egresos de caja chica (ignoraba reversiones, mermas y depreciaciones).
+- COBROS POR MÉTODO DESDE EL LEDGER: el donut "Cobros por Método" agrupa el DEBE neto (`debe - haber`) de las cuentas de fondos `1.1.1`/`1.1.1.2` (Efectivo), `1.1.2.1` (LAFISE) y `1.1.2.2` (BAC) dentro de asientos `modulo_origen = 'ventas'`. Las ventas a crédito (CxC) no cuentan hasta su cobro (`COB-*`); es coherente con `Venta::efectivoNioNeto()` del arqueo. Solo el ranking de servicios (unidades/monto por línea, `sale_details`) y los recuentos operativos (agenda, stock crítico) quedan fuera del ledger, porque el mayor no los desagrega.
+- ENDPOINTS SPA (`/panel/api/*`, en `routes/web.php` dentro de `auth`, NO en `api.php` a propósito): `GET /panel/api/datos?rango=hoy|semana|mes|anio` (nombre `panel.datos`: payload completo de KPIs, serie, métodos, ranking y meta), `GET /panel/api/movimientos/{id}` (nombre `panel.movimiento`: Quick View JSON del ticket con items, libro de pagos, anulación y asientos `ING-*`/`COG-*`/`REV-*` vinculados) y `POST /panel/api/meta` (`panel.meta`, solo `role:admin`). Viven en web.php porque la sesión web + CSRF protege los datos y el frontend no usa tokens Sanctum. `bootstrap/app.php` amplió `shouldRenderJsonWhen` a `panel/api/*`: sin sesión el SPA recibe 401 JSON (nunca un redirect HTML que `fetch()` seguiría en silencio).
+- INTERACCIÓN ASÍNCRONA: los filtros Hoy/Semana/Mes/Año son botones Alpine (`x-data="dashboard(@js($estado), @js([...flags]))"`) que hacen `fetch()` y mutan el estado sin recargar; los gráficos Chart.js (dependencia npm `chart.js`, importado en `resources/js/dashboard.js`, SIN CDN) se crean una vez y solo mutan `data` + `update()`. REGLA DE INTEGRACIÓN ALPINE+CHART.JS: las instancias de Chart viven en variables DE MÓDULO (`let chartVentas/chartPagos`), jamás en el estado reactivo del componente — el Proxy de Alpine intercepta los objetos internos de Chart.js y `update()` explota con "Maximum call stack size exceeded" o "Cannot set properties of undefined (setting 'fullSize')" al cambiar de rango. `renderizarGraficos()` destruye y recrea la instancia si el canvas quedó desconectado del DOM. El filtro actualiza la URL con `history.replaceState` (deep-link `?rango=`) y `resolverRango` acepta `año` por compatibilidad y lo normaliza a `anio`. Serie temporal: hoy → últimos 7 días; semana → lunes-domingo; mes → días del mes; año → 12 meses (periodos futuros en cero). Hidratación con `@js()` (nunca `@json` en atributos) y fallbacks SSR dentro de cada `x-text` para evitar destello vacío antes de hidratar. Tras tocar `resources/js/*` correr `npm run build` y recargar con Ctrl+F5 (el bundle cambia de hash).
+- DRILL-DOWN: todo KPI financiero enlaza al Estado de Resultados del mes (`/contabilidad/resultados?mes=YYYY-MM`), Inventario crítico enlaza a `/inventario?stock=critico` (nuevo filtro `whereColumn('existencia_actual','<=','stock_min')` en `InventarioController::index`) y Agenda a `/agenda`. Los enlaces solo se renderizan si el rol tiene acceso (flags `puedeFinanzas`/`puedeCaja`/`puedeInventario`/`puedeEditarMeta` calculados en `PanelController::index`; el admin con bypass nunca ve 403 desde el panel). Clic en una fila de "Últimos Movimientos" abre el modal Quick View con detalle del ticket, pagos (incl. vueltos), motivo de anulación y enlaces a los asientos contables (`/asientos/{id}`, solo finanzas).
+- META MENSUAL DINÁMICA: tabla `company_targets` (migración `2026_10_15_000001_create_company_targets_table`, reversible; `periodo` = primer día del mes, UNIQUE) sustituye el valor fijo de `config('salon.meta_mensual')`. La resolución vive en `CompanyTarget::montoParaMes()` (regla de dominio): meta exacta del mes → última meta anterior heredada → fallback `config` para instalaciones nuevas. El admin la edita inline en el widget (lapiz → `POST /panel/api/meta`), y el AVANCE siempre es ingreso clase 4 del mes según el mayor (no sumas de `sales`), independiente del rango activo.
+- RESILIENCIA Y DIAGNÓSTICO DEL PANEL (octubre 2026): `DashboardService::metaMes()` atrapa `QueryException` y cae al fallback de `config` — el dashboard NUNCA debe devolver 500 por una migración pendiente de `company_targets` (lección del 25/10/2026: la vista 500-eaba en producción local porque la migración existía solo en `salon_erp_test`; el SPA lo mostraba como banner rojo). Al desplegar la rama `feature/panel` en una base nueva o actualizada, correr `php artisan migrate` ANTES de usar el panel. El banner de error del SPA ahora autodiagnostica: 401 → "Tu sesión expiró. Recarga la página…"; otros estados → "No se pudo actualizar el panel (HTTP xxx)"; y deja `console.error('[Dashboard BI] …')` con el detalle para el diagnóstico en consola.
+- Optimizado contra N+1: ranking en UNA consulta agrupada con join (`sale_details` + `services` + `sales` filtradas por `ESTADOS_DEVENGADOS` y rango), Últimos Movimientos con eager loading de columnas mínimas (`cajero:id,name,role`, `cliente:id,name`) + `withCount` de pagos, y KPIs/serie/métodos en consultas únicas con `CASE` por clase contable.
+- Cobertura: `tests/Feature/DashboardGerencialTest.php` (9 pruebas: KPIs del mayor excluyendo compras/cierre fiscal, venta anulada = 0 vía espejo, serie diaria semanal y mensual anual, cobros por método desde cuentas de fondos, meta dinámica con guardia de rol y fallback config, Quick View con ticket/pagos/asientos, filtro de inventario crítico y 401 sin sesión).
+
 ## 6. Autenticación, autorización y rutas actuales
 
 - Las rutas web administrativas están dentro de `auth`, salvo el bloque inicial de login/logout. Las rutas base incluyen panel, agenda, asistencia y clientes.
+- **REESTRUCTURACIÓN RBAC (octubre 2026)**: Se crea el rol supremo **"Álvaro" (Propietario)** con bypass global a cualquier ruta, incluida toda la contabilidad. El rol **"Administrador" (operativo)** se enfoca en gestión operativa (inventario, RRHH, caja, proveedores, servicios, respaldos) y **SE LE PROHÍBE el acceso a submódulos de Contabilidad** (Libro Diario, Libro Mayor, Estado de Resultados, Cierres Fiscales, Catálogo, Asientos Manuales, Periodos). El rol **"Contador" (Auditoría Financiera)** tiene acceso completo al bloque financiero. El middleware `RoleMiddleware` (firma variádica) implementa: `alvaro` = bypass global; `contador` + `alvaro` = contabilidad; `admin` + `contador` = bancos, CxP, retiros, reportes; `recepcion` + `contador` + `admin` = POS, caja, adelantos, mesa de cambio.
 - CORRECCIÓN CRÍTICA (octubre 2026): `RoleMiddleware` ahora tiene firma variádica `handle(..., string ...$roles)`. Laravel entrega `role:admin,contador` como argumentos separados, y la firma antigua `string $roles` sólo leía el PRIMER rol: el contador era bloqueado en todas las rutas multi-rol (incluida `role:recepcion,contador`) aunque estuviera listado. No regresar a la firma de un solo parámetro.
-- `role:admin,contador` agrupa el bloque financiero: reportes, contabilidad (diario, gasto, mayor, resultados, balance), catálogo de cuentas, asientos manuales, periodos y cierre fiscal, bancos, cuentas por pagar y retiros. `role:recepcion,contador` agrupa POS/ventas, adelantos, arqueo, caja chica y mesa de cambio. `role:admin` conserva exclusivamente RRHH, nómina, inventario, fórmulas/servicios, proveedores y respaldos.
-- El menú del layout (`layouts/app.blade.php`) filtra cada elemento con `roles => [...]` según el rol del usuario (el admin ve todo); los enlaces que un rol no puede abrir ya no se le muestran. Si mueves una ruta de grupo, actualizar también su entrada en el menú.
-- `RoleMiddleware` permite siempre al usuario cuyo campo `role` sea `admin`, incluso si la ruta enumera otros roles. Al cambiar permisos, evaluar explícitamente ese bypass.
-- La migración de septiembre de 2026 amplía `users.role` con `contador`; el enum y la tabla `roles` deben permanecer sincronizados.
+- `role:alvaro,contador` agrupa el bloque contable exclusivo: contabilidad (diario, gasto, mayor, resultados, balance), catálogo de cuentas, asientos manuales, periodos y cierre fiscal. `role:admin,contador` agrupa operación financiera diaria: bancos, cuentas por pagar, retiros, reportes. `role:recepcion,contador,admin` agrupa POS/ventas, adelantos, arqueo, caja chica y mesa de cambio. `role:admin` conserva exclusivamente RRHH, nómina, inventario, fórmulas/servicios, proveedores y respaldos.
+- El menú del layout (`layouts/app.blade.php`) filtra cada elemento con `roles => [...]` según el rol del usuario (el rol `alvaro` ve todo por bypass); los enlaces que un rol no puede abrir ya no se le muestran. Si mueves una ruta de grupo, actualizar también su entrada en el menú.
+- `RoleMiddleware` permite siempre al usuario cuyo campo `role` sea `alvaro`, incluso si la ruta enumera otros roles. Al cambiar permisos, evaluar explícitamente ese bypass.
+- La migración de octubre 2026 (`2026_10_26_000001_seguridad_rbac_aprobaciones`) amplía `users.role` con `alvaro`; el enum y la tabla `roles` deben permanecer sincronizados (seeder `RoleSeeder` incluye 'Álvaro (Propietario)', 'Administrador', 'Contador', 'Recepción / Caja', 'Estilista').
 - `routes/api.php` declara `apiResource` para `clients`, `items` y `appointments`. No asumir autenticación/autorización de esos endpoints sin verificar middleware y configuración efectiva.
 - Hay una discrepancia importante en el portal: `/portal/login` y el resto del grupo `portal` están anidados dentro del grupo web `auth`, aunque el controlador además valida un token de portal propio guardado en sesión. No describir el login del colaborador como independiente del login administrativo hasta corregir y probar esa configuración.
 - Antes de alterar rutas, verificar nombres, verbos, middleware y precedencia. Las definiciones históricamente duplicadas del catálogo contable y de la consulta de un período ya fueron consolidadas (octubre 2026); quedan closures con lógica de agenda/POS.
 - Rutas bancarias (octubre 2026, grupo `role:admin,contador`): `GET /bancos`, `POST /bancos/depositar`, `POST /bancos/transferir`, `POST /bancos/cargo`, `POST /bancos/abono`, `GET /bancos/{cuenta_bancaria}/libro`, `GET|POST /bancos/{cuenta_bancaria}/conciliacion` (nombres `bancos.*`). El binding del parámetro debe llamarse `cuenta_bancaria` para que Laravel resuelva `CuentaBancaria`.
-- Mesa de cambio (grupo `role:recepcion,contador`): `GET /mesa-cambio`, `POST /mesa-cambio/operar` y `POST /mesa-cambio/tasa-oficial` (nombre `mesa.tasa.oficial`). Cobertura de pruebas: `tests/Feature/BancosMesaCambioTest.php` (17 pruebas de cuadre, rollback, comisiones y conciliación) y `tests/Feature/AccesoFinanzasContadorTest.php` (11 pruebas de permisos financieros por rol y filtro mensual del Estado de Resultados).
+- Mesa de cambio (grupo `role:recepcion,contador,admin`): `GET /mesa-cambio`, `POST /mesa-cambio/operar` y `POST /mesa-cambio/tasa-oficial` (nombre `mesa.tasa.oficial`). Cobertura de pruebas: `tests/Feature/BancosMesaCambioTest.php` (17 pruebas de cuadre, rollback, comisiones y conciliación) y `tests/Feature/AccesoFinanzasContadorTest.php` (pruebas de permisos financieros por rol y filtro mensual del Estado de Resultados).
 - HRMS (octubre 2026, grupo `role:admin`): dashboard y perfil `GET /rrhh`, `GET /rrhh/colaborador/{id}`; turnos `GET|POST /rrhh/turnos`, `PUT /rrhh/turnos/{id}`, `POST /rrhh/turnos/asignar`; propinas `GET|POST /rrhh/propinas`; permisos `GET|POST /ausencias` y `POST /ausencias/{id}/aprobar|rechazar|cancelar`; nómina `GET /nomina`, `GET /nomina/wizard`, `POST /nomina/previsualizar`, `POST /nomina/procesar`, `GET /nomina/corrida/{id}`, `POST /nomina/corrida/{id}/anular`, `GET /nomina/colilla/{id}`, `GET|POST /nomina/estructuras`, `POST /nomina/estructuras/{id}/toggle` y la colilla legacy `GET /nomina/legacy/{id}/ticket`. Las rutas antiguas `POST /nomina/generar` y `GET /nomina/{id}/ticket` fueron reemplazadas por el wizard (definir primero las rutas estáticas para no colisionar con `{id}`).
 - Asistencia (nivel general, todos los roles): `GET|POST /asistencia` registra la entrada (con cálculo de tardanza contra el turno vigente) y `POST /asistencia/salida` marca la salida calculando horas trabajadas/extras. El expediente de colaboradores (`/empleados`) sincroniza automáticamente el registro `employees` del colaborador al crear, editar o dar de baja.
-- Fase 1 Administración (octubre 2026): `GET /clientes/{id}` (Perfil 360, nivel general) en el grupo `auth`; `POST /clientes/grupos` (grupos de fidelización), `POST /servicios/categorias` (categorías) y `PUT /formulas/{id}` (edición inline del consumo estándar) en el grupo `role:admin`. La carga del POS (`GET /pos`, `role:recepcion,contador`) ahora eager-carga `variantes` y `formulas.articulo` para el selector de variantes y el editor de consumo real; el carrito acepta `variant_id` y `consumo[]` y `/ventas/{id}/documento` los devuelve. Cobertura: `tests/Feature/AdminClientesServiciosTest.php` (12 pruebas: límite/vencidas de crédito, descuento por grupo, variantes y BOM real/estándar con reversión exacta).
+- Fase 1 Administración (octubre 2026): `GET /clientes/{id}` (Perfil 360, nivel general) en el grupo `auth`; `POST /clientes/grupos` (grupos de fidelización), `POST /servicios/categorias` (categorías) y `PUT /formulas/{id}` (edición inline del consumo estándar) en el grupo `role:admin`. La carga del POS (`GET /pos`, `role:recepcion,contador,admin`) ahora eager-carga `variantes` y `formulas.articulo` para el selector de variantes y el editor de consumo real; el carrito acepta `variant_id` y `consumo[]` y `/ventas/{id}/documento` los devuelve. Cobertura: `tests/Feature/AdminClientesServiciosTest.php` (12 pruebas: límite/vencidas de crédito, descuento por grupo, variantes y BOM real/estándar con reversión exacta).
 - Cadena de Suministro / AP (octubre 2026, grupo `role:admin`): compras `GET /inventario/comprar` + `POST /inventario/comprar` (crea `purchase_invoices` completa vía `CompraService`; respuesta JSON con `factura_id`), factura `GET /compras/{id}` (nombre `compras.show`) y `POST /compras/{id}/anular` (`compras.anular`, motivo obligatorio), kárdex `POST /inventario/kardex/apertura` (`inventario.kardex.apertura`) y proveedor `GET /proveedores/{id}` (`proveedores.show`). El kárdex (`GET /inventario/kardex`) lee el ledger inmutable con saldo corrido y mantiene las exportaciones `inventario.kardex.excel|pdf`. Cobertura: `tests/Feature/CadenaSuministroApTest.php` (9 pruebas: ciclo de compra con IVA/landed, costo promedio móvil, COGS real en venta, merma al costo real, Perfil 360 + guardia de borrado, bloqueos y reversión de anulación, apertura de kárdex y humo de vistas).
+- **MESA DE APROBACIONES (gobernanza, octubre 2026, grupo `role:alvaro,admin`)**: `GET /aprobaciones`, `POST /aprobaciones/venta/{id}/aprobar`, `POST /aprobaciones/venta/{id}/rechazar`, `POST /aprobaciones/compra/{id}/aprobar`, `POST /aprobaciones/compra/{id}/rechazar`. Las transacciones retenidas en `pendiente_aprobacion` NO tocan contabilidad ni inventario hasta que un supervisor (Álvaro/Administrador) las apruebe con **doble confirmación por PIN**.
+- Dashboard BI (octubre 2026, grupo `auth`, ver §5.10): `GET /panel/api/datos`, `GET /panel/api/movimientos/{id}` (nombres `panel.*`) y `POST /panel/api/meta` con `role:admin`. El drill-down de inventario usa `GET /inventario?stock=critico` (grupo `role:admin`). Los endpoints BI sin sesión devuelven 401 JSON (no redirect). Cobertura: `tests/Feature/DashboardGerencialTest.php`.
+
+### 6.1. Doble Confirmación por PIN (Supervisor Override) — octubre 2026
+
+**Objetivo**: Acciones críticas de caja y finanzas requieren autorización mediante PIN de 4-6 dígitos (hasheado con `Hash::make()`) almacenado en `users.pin_seguridad`. El PIN lo define la administración al crear/editar el perfil del usuario.
+
+**Implementación**:
+- **Trait reutilizable**: `App\Traits\AutorizaPinSupervisor` con método `autorizarPin(Request $request, bool $soloSupervisor = false)` que valida el PIN contra el usuario autenticado (modo estándar) o SOLO contra roles supervisores configurados en `config('salon.seguridad.roles_supervisor', ['alvaro', 'admin'])` (modo estricto).
+- **Rate limiting**: 5 intentos fallidos por minuto por usuario (llave `pin-supervisor:{userId}`).
+- **Auditoría**: Cada uso exitoso se registra en log (`Log::info('Acción crítica autorizada con PIN de supervisor', [...])`) con usuario que ejecuta, autorizador, roles, modo y ruta.
+- **Modal Alpine.js global**: Componente `pinAutorizacion` (registrado en `resources/js/app.js`, vista `components/pin-modal.blade.php`, incluido en `layouts/app.blade.php`). Se abre despachando evento `open-pin` con `{ mensaje?, form?, callback? }`.
+
+**Acciones protegidas (modo estricto `soloSupervisor: true`)**:
+- Anulación de facturas (`VentaController::anular`)
+- Aprobación/rechazo de ventas retenidas (`AprobacionController::aprobarVenta`, `rechazarVenta`)
+- Aprobación/rechazo de compras retenidas (`AprobacionController::aprobarCompra`, `rechazarCompra`)
+
+**Acciones protegidas (modo estándar - PIN propio O supervisor)**:
+- Apertura de arqueo de caja (`CajaController::open`)
+- Cierre de arqueo de caja (`CajaController::close`)
+- Salidas de caja chica / gastos menores (`CajaChicaController::store`)
+
+**Configuración**: `config/salon.php` → `seguridad.roles_supervisor` y `aprobaciones.roles_supervisor` (ambos `['alvaro', 'admin']`).
+
+### 6.2. Flujo de Pre-Aprobación de Transacciones Sensibles — octubre 2026
+
+**Objetivo**: Operaciones sensibles (ventas/compras sobre umbrales configurables o flag explícito) se RETIENEN en estado `pendiente_aprobacion` SIN contabilizar, SIN mover inventario, SIN registrar libro de pagos, SIN mover divisas, SIN generar comisiones. Solo un supervisor (Álvaro/Administrador) las despacha a contabilidad tras doble confirmación por PIN.
+
+**Estados y campos**:
+- **Ventas** (`sales`): nuevo estado `pendiente_aprobacion` (constante `Venta::ESTADO_PENDIENTE_APROBACION`). Campos de auditoría: `aprobada_at`, `aprobada_por` (FK users). `payload_aprobacion` (JSON) guarda el libro de pagos original (`payments[]`, `change_currency`) para ejecutarlo íntegro al aprobar.
+- **Compras** (`purchase_invoices`): enum `estado` ampliado con `pendiente_aprobacion` (default `registrada`). Campos de auditoría: `aprobada_at`, `aprobada_por` (FK users). Las líneas se crean pero no tienen efectos físicos hasta aprobar.
+
+**Umbrales**: `config('salon.aprobaciones.monto_venta')` y `monto_compra` (en C$, default 0 = desactivado). En ventas, roles supervisores (`alvaro`, `admin`) están exentos del umbral; en compras el umbral aplica a cualquier creador. Flag explícito `requiere_aprobacion` en el request fuerza la retención siempre.
+
+**Servicios y controladores**:
+- `AprobacionService`: lógica de decisión (`requiereAprobacionVenta`, `requiereAprobacionCompra`), cola de pendientes (`pendientes()`), aprobación (`aprobarVenta` ejecuta inventario + libro de pagos + asiento + comisiones), rechazo (`rechazarVenta` marca `anulada` con motivo, sin reversión porque nunca tuvo efectos).
+- `CompraService::registrarFactura` acepta `requiere_aprobacion`; `aprobarFactura`/`rechazarFactura` delegan en `AprobacionController`.
+- `VentaController::store` y `facturarCita` evalúan `AprobacionService::requiereAprobacionVenta` y crean la venta en `pendiente_aprobacion` con `payload_aprobacion`.
+- `AprobacionController`: expone `index` (vista `aprobaciones.index`), `aprobarVenta`, `rechazarVenta`, `aprobarCompra`, `rechazarCompra` — **todas con doble confirmación por PIN (modo estricto)**.
+
+**Vista**: `resources/views/aprobaciones/index.blade.php` con tabla de ventas/compras retenidas, botones Aprobar/Rechazar que disparan el modal PIN global, y modal de motivo obligatorio para rechazo.
+
+**Rutas**: `GET /aprobaciones` (`aprobaciones.index`), `POST /aprobaciones/venta/{id}/aprobar`, `POST /aprobaciones/venta/{id}/rechazar`, `POST /aprobaciones/compra/{id}/aprobar`, `POST /aprobaciones/compra/{id}/rechazar` — grupo `role:alvaro,admin`.
+
+### 6.3. Reestructuración RBAC: Rol Supremo "Álvaro" y Administrador Operativo — octubre 2026
+
+**Cambios en `RoleSeeder`**:
+```php
+Rol::create(['name' => 'Álvaro (Propietario)']);  // ID 1 - bypass global
+Rol::create(['name' => 'Administrador']);         // ID 2 - operativa, SIN contabilidad
+Rol::create(['name' => 'Contador']);              // ID 3 - auditoría financiera completa
+Rol::create(['name' => 'Recepción / Caja']);      // ID 4 - POS, caja, adelantos
+Rol::create(['name' => 'Estilista']);             // ID 5 - agenda, servicios, portal
+```
+
+**Cambios en `UserSeeder`**: Crea usuarios para cada rol con emails y contraseñas distintas. El propietario (`admin@salon.com`) queda con `role='alvaro'`.
+
+**Migración** (`2026_10_26_000001_seguridad_rbac_aprobaciones`):
+- Añade `pin_seguridad` nullable a `users`.
+- Amplía enum `users.role` a `('alvaro','admin','estilista','recepcion','contador')`.
+- Crea rol 'Álvaro (Propietario)' en tabla `roles` y migra usuario `admin@salon.com` a `role='alvaro'`.
+- Añade `aprobada_at`, `aprobada_por`, `payload_aprobacion` a `sales`.
+- Añade `pendiente_aprobacion` a enum `purchase_invoices.estado` y `aprobada_at`, `aprobada_por` a `purchase_invoices`.
+
+**Matriz de accesos resultante**:
+
+| Módulo / Ruta | alvaro | contador | admin | recepcion | estilista |
+|---|---|---|---|---|---|
+| Contabilidad (diario, mayor, resultados, balance, catálogo, asientos, periodos, cierre) | ✅ | ✅ | ❌ 403 | ❌ 403 | ❌ 403 |
+| Bancos, CxP, Retiros, Reportes | ✅ | ✅ | ✅ | ❌ 403 | ❌ 403 |
+| POS, Ventas, Arqueo, Adelantos, Mesa de Cambio, Caja Chica | ✅ | ✅ | ✅ | ✅ | ❌ 403 |
+| Inventario, Compras, Proveedores, Mermas, Kárdex, Fórmulas, Servicios, Respaldos | ✅ | ❌ 403 | ✅ | ❌ 403 | ❌ 403 |
+| RRHH, Nómina, Empleados, Turnos, Ausencias, Propinas, Estructuras | ✅ | ❌ 403 | ✅ | ❌ 403 | ❌ 403 |
+| Aprobaciones Pendientes | ✅ | ❌ 403 | ✅ | ❌ 403 | ❌ 403 |
+| Agenda, Asistencia, Clientes (general), Portal Colaborador | ✅ | ✅ | ✅ | ✅ | ✅ |
+
+**Tests actualizados**: `AccesoFinanzasContadorTest` (ahora usa usuarios `alvaro`, `admin`, `contador`, `recepcion` y verifica que `admin` NO accede a contabilidad), `CatalogoCuentasTest` y `ContabilidadVistasTest` (usan usuario `contador` para rutas contables).
+
+### 6.4. Correcciones Adicionales (noviembre 2026)
+
+#### 6.4.1. Campo PIN en Perfil de Colaborador
+- **EmpleadoController**: Añadido campo `pin_seguridad` (nullable, 4-6 dígitos, hasheado) en validación de `store` y `update`. Solo se actualiza si se envía valor nuevo.
+- **Vista employees/index.blade.php**: Campo "PIN de Seguridad (4-6 dígitos)" en modal de creación/edición con validación solo numérica (`pinKeydown`).
+- El PIN se guarda encriptado con `Hash::make()` y nunca se muestra en edición (campo vacío por seguridad).
+
+#### 6.4.2. Umbral de Aprobación Activado por Defecto
+- **config/salon.php**: `aprobaciones.monto_venta` cambiado de `0` a `1` (C$), `monto_compra` a `10000`. Esto hace que **cualquier venta de mostrador por un rol no supervisor (recepcion) quede en `pendiente_aprobacion`** automáticamente, requiriendo PIN de Álvaro/Administrador para despachar a contabilidad.
+- Los roles supervisores (`alvaro`, `admin`) siguen exentos del umbral.
+
+#### 6.4.3. Fix Botones PIN: `$event.target` vs `$el`
+- **Problema**: En Alpine.js, `$el` refiere al elemento raíz del componente, no al botón clickeado. `$el.closest('form')` fallaba al no encontrar el formulario.
+- **Solución**: Cambiado a `$event.target.closest('form')` en todas las vistas:
+  - `resources/views/cash/index.blade.php` (abrir/cerrar caja)
+  - `resources/views/petty_cash/index.blade.php` (gasto caja chica)
+  - `resources/views/sales/index.blade.php` (anular factura)
+  - `resources/views/aprobaciones/index.blade.php` (aprobar/rechazar ventas y compras)
+
+#### 6.4.4. Bloqueo de Logout con Caja Abierta
+- **AutenticacionController::logout()**: Antes de cerrar sesión, verifica si el usuario tiene una `SesionCaja` abierta (`estado='abierta'`). Si existe, **bloquea el logout** y redirige a `/login` con error: *"Tienes una caja abierta. Debes cerrar tu turno (arqueo) antes de cerrar sesión."*
+- Esto evita que la caja quede abierta en la base de datos sin control y previene confusión al iniciar sesión con otro usuario.
+
+#### 6.4.5. Caja NO se Auto-Abre ni Auto-Cierra
+- **Comportamiento**: La `SesionCaja` permanece en `estado='abierta'` hasta que el usuario hace clic explícito en "Cerrar Turno y Arqueo" (con PIN). No hay lógica de auto-cierre en logout ni auto-apertura en login.
+- Si un usuario cierra sesión sin cerrar caja, la caja sigue abierta en BD. Al intentar entrar otro usuario, ve su propia caja (o formulario para abrirla). El bloqueo de logout (§6.4.4) obliga a cerrar caja antes de salir.
+
+#### 6.4.6. Bloqueo Efectivo de Logout con Caja Abierta (noviembre 2026)
+- **Problema**: `AutenticacionController::logout()` verificaba si había caja abierta y flasheaba un error, pero **seguía cerrando la sesión** y redirigiendo a `/login`.
+- **Corrección**: Ahora el método **previene el logout completamente** si existe una `SesionCaja` con `estado='abierta'` para el usuario. Retorna `redirect()->back()->withErrors(...)` sin llamar a `Auth::logout()`. Solo permite el logout si no hay caja abierta.
+- **Archivo modificado**: `app/Http/Controllers/AutenticacionController.php` (método `logout`).
+
+#### 6.4.7. Flujo de Pre-Aprobación Obligatorio para Ventas (noviembre 2026)
+- **Objetivo**: TODA venta de mostrador (rol `recepcion` / `estilista` / `contador`) queda **retenida en `pendiente_aprobacion`** al confirmar el pago. NO se descuenta inventario, NO se registra libro de pagos, NO se mueven divisas, NO hay comisiones y NO hay asiento contable hasta que **Álvaro (Propietario)** la apruebe.
+- **Configuración** (`config/salon.php`):
+  - `aprobaciones.monto_venta = 1` (C$) → cualquier venta ≥ 1 C$ se retiene
+  - `aprobaciones.roles_supervisor = ['alvaro']` → SOLO Álvaro está exento (sus ventas no se retienen)
+  - `seguridad.roles_supervisor = ['alvaro']` → SOLO Álvaro puede autorizar con PIN
+- **Flujo en POS** (`resources/views/sales/pos.blade.php`):
+  1. Usuario (recepcion) arma el carrito y hace clic en "Proceder al Pago"
+  2. Completa el modal de checkout (método, moneda, montos)
+  3. Al confirmar, el backend crea la venta con `status = 'pendiente_aprobacion'` y guarda el `payload_aprobacion` con los pagos
+  4. El frontend detecta `data.pendiente_aprobacion` y muestra: **"Factura hecha con éxito, a espera de la confirmación del gerente para realizar la venta y guardarla en contabilidad."**
+  5. NO se abre el ticket, NO se afecta caja/contabilidad
+  6. Álvaro entra a **Aprobaciones Pendientes** (`/aprobaciones`, solo visible para él), ingresa su PIN y aprueba
+  7. Al aprobar (`AprobacionService::aprobarVenta`): se ejecuta inventario, libro de pagos, divisas, asiento contable y comisiones; la venta pasa a `pagada`
+- **Rutas y acceso** (`routes/web.php`): grupo `role:alvaro` para `/aprobaciones/*` (antes `role:alvaro,admin`)
+- **Menú** (`layouts/app.blade.php`): "Aprobaciones Pendientes" solo visible para rol `alvaro`
+- **Archivos modificados**:
+  - `config/salon.php` (umbral y roles)
+  - `resources/views/sales/pos.blade.php` (manejo de respuesta `pendiente_aprobacion` en `checkout()` y `enviarCredito()`)
+  - `routes/web.php` (middleware `role:alvaro` para aprobaciones)
+  - `resources/views/layouts/app.blade.php` (visibilidad menú solo `alvaro`)
+
+#### 6.4.8. Sistema de Notificaciones Dinámicas por Rol (noviembre 2026) ⭐ **NUEVO COMPLETO**
+- **Objetivo**: Cada rol recibe notificaciones específicas, relevantes y automáticas. Álvaro tiene control total pero **NO recibe notificaciones de sus propias acciones** (auto-filtrado).
+- **Arquitectura**:
+  - **Tabla**: `notifications` (migración `2026_11_06_191459`)
+  - **Modelo**: `App\Models\Notification` (scopes `unread`, `forType`, relación `user`)
+  - **Servicio**: `App\Services\NotificationService` (centraliza tipos, roles, prioridades, iconos, eventos automáticos)
+  - **Trait**: `App\Traits\Notificable` (métodos `notify*()` listos para usar en controladores/servicios)
+  - **Controlador API**: `App\Http\Controllers\NotificationController` (`/notificaciones/api/*`)
+  - **Componente Alpine**: `resources/js/notification-bell.js` → `Alpine.data('notificationBell')` (helpers dinámicos `getNotificationClasses`, `isVentaType`, `isRechazoType`, etc.)
+  - **Vistas**: Campanita dropdown + Badges contextuales en menú + Vista completa `/notificaciones`
+
+- **Tipos de notificación por rol** (40+ tipos):
+  | Categoría | Tipos clave | Roles | Prioridad |
+  |---|---|---|---|
+  | **Álvaro (Propietario)** | `venta_pendiente_aprobacion`, `compra_pendiente_aprobacion`, `alerta_critica`, `reporte_diario` | `alvaro` (auto-filtrado: NO se notifica a sí mismo) | high/urgent |
+  | **Administrador** | `stock_critico`, `stock_agotado`, `compra_pendiente_aprobacion_admin`, `caja_sin_cerrar`, `caja_diferencia`, `empleado_nuevo`, `ausencia_pendiente`, `nomina_pendiente`, `respaldo_faltante`, `merma_registrada` | `admin`, `alvaro` | normal/high |
+  | **Contador** | `cxp_vencida`, `cxp_por_vencer`, `cxc_vencida`, `cxc_por_vencer`, `conciliacion_pendiente`, `cierre_contable`, `asiento_desbalanceado`, `banco_movimiento`, `iva_declaracion` | `contador`, `admin`, `alvaro` | high |
+  | **Recepción/Caja** | `venta_aprobada`, `venta_rechazada`, `cita_nueva`, `cita_cancelada`, `cliente_cxc_vencida`, `cotizacion_solicitada` | `recepcion`, `contador`, `admin`, `alvaro` | normal/high |
+  | **Estilista** | `cita_asignada`, `cita_modificada`, `comision_ganada`, `comision_pagada`, `propina_recibida` | Estilista específico (vía `createForStylist`) | normal |
+
+- **Eventos automáticos implementados** (vía `Notificable` trait):
+  - **Ventas**: `notifyVentaPendiente()`, `notifyVentaAprobada()`, `notifyVentaRechazada()`
+  - **Compras**: `notifyCompraPendiente()`
+  - **Stock**: `notifyStockCritico()`, `notifyStockAgotado()` (desde `InventarioService`)
+  - **Caja**: `notifyCajaSinCerrar()`, `notifyCajaDiferencia()`
+  - **Citas**: `notifyCitaNueva()`, `notifyCitaCancelada()`, `notifyCitaReagendada()` (+ notifica a estilista)
+  - **CxP/CxC**: `notifyCxpVencida()`, `notifyCxpPorVencer()`, `notifyCxcVencida()`
+  - **RRHH**: `notifyAusenciaPendiente()`, `notifyNominaPendiente()`, `notifyComisionGanada()`, `notifyPropinaRecibida()`
+  - **Sistema**: `notifyRespaldoFaltante()`, `notifyConciliacionPendiente()`, `notifyCierreContable()`, `notifyAlertaCritica()`
+
+- **Filtrado inteligente**:
+  - `createByType(..., excludeActor: true)` → Si el actor es Álvaro, **NO se le notifica** a él mismo
+  - Notificaciones de cajero/estilista van directo al usuario (`createForCashier`, `createForStylist`)
+
+- **Canales duales**:
+  1. **Campanita (Navbar)**: Dropdown con lista, iconos/colores dinámicos, click→marca leída+navega, "Marcar todas"
+  2. **Badges contextuales (Menú)**: Contadores rojos en cada item (`/aprobaciones`, `/inventario`, `/caja/arqueo`, `/adelantos`, `/cuentas-por-pagar`, `/mis-aprobaciones`, etc.)
+  3. **Vista completa**: `/notificaciones` con paginación, iconos SVG por tipo, paginación
+
+- **Endpoints API** (`routes/web.php`, grupo `auth`):
+  - `GET /notificaciones/api/count` → `{ count: N }`
+  - `GET /notificaciones/api/list` → `{ notifications: [...] }`
+  - `POST /notificaciones/api/{id}/read` → marca una como leída
+  - `POST /notificaciones/api/read-all` → marca todas como leídas
+  - `GET /notificaciones` → Vista completa con paginación
+
+- **Archivos nuevos/modificados**:
+  - `database/migrations/2026_11_06_191459_create_notifications_table.php`
+  - `app/Models/Notification.php`
+  - `app/Services/NotificationService.php` (40+ tipos, prioridades, iconos, eventos automáticos)
+  - `app/Traits/Notificable.php` (trait reutilizable con métodos `notify*()`)
+  - `app/Http/Controllers/NotificationController.php`
+  - `resources/js/notification-bell.js` (helpers dinámicos: `getNotificationClasses`, `isVentaType`, `isRechazoType`, `isStockType`, `isCxType`, `isCitaType`, `isComisionType`, `isRRHHType`, `isBancoType`, `isAlertaType`, `isDefaultType`)
+  - `resources/js/app.js` (registro componente)
+  - `resources/views/layouts/app.blade.php` (campanita dinámica + badges en menú + ocultar Dashboard + brand URL por rol)
+  - `resources/views/notifications/index.blade.php` (vista completa con 40+ iconos SVG)
+  - `routes/web.php` (rutas API + `/notificaciones` + `/mis-aprobaciones`)
+  - `app/Http/Controllers/VentaController.php` (usa `Notificable`, llama `notifyVentaPendiente()`)
+  - `app/Http/Controllers/AutenticacionController.php` (redirige a `/pos` para caja/recepcion)
+  - `resources/views/layouts/app.blade.php` (brand URL dinámica por rol)
+
+#### 6.4.9. Vista "Mis Aprobaciones" para Cajeros/Recepción (noviembre 2026)
+- **Objetivo**: El vendedor (recepcion/cajera) ve SOLO sus propias ventas retenidas, con estado en tiempo real.
+- **Ruta**: `/mis-aprobaciones` (grupo `role:recepcion,contador,admin`)
+- **Controlador**: `VentaController::misAprobaciones()` → filtra `cashier_id = auth()->id()` y estados `pendiente_aprobacion`, `pagada`, `anulada`
+- **Vista**: `resources/views/sales/mis-aprobaciones.blade.php`
+- **Menú**: "Finanzas → Mis Aprobaciones" (icono reloj) visible para `recepcion`, `contador`, `admin`
+- **Estados mostrados**:
+  - **Pendiente aprobación** (ámbar): "Esperando..." - botón deshabilitado
+  - **Aprobada y contabilizada** (verde): Botones **"Ver Ticket"** (target="_blank") y "Detalle"
+  - **Rechazada/Anulada** (rojo): Botón "Ver motivo"
+- **Flujo completo**:
+  1. Recepción hace venta en POS → queda `pendiente_aprobacion`
+  2. Ve en "Mis Aprobaciones" → estado "Pendiente aprobación"
+  3. Álvaro aprueba en `/aprobaciones` → venta pasa a `pagada` (inventario + asiento + ticket)
+  4. Recepción recarga "Mis Aprobaciones" → ve 🟢 **"Ver Ticket"** → Click → **Ticket generado**
+
+#### 6.4.10. Sesiones Multi-Rol (Limitación del Navegador)
+- **Problema**: Cookies de sesión se comparten entre pestañas del mismo navegador. No se pueden mantener dos roles simultáneos (ej. `recepcion` y `alvaro`) en pestañas distintas.
+- **Soluciones para testear**:
+  1. **Navegadores distintos**: Chrome (recepcion) + Firefox (alvaro)
+  2. **Modo Incógnito/Privado**: Una ventana normal + una incógnita
+  3. **Perfiles de usuario**: Chrome "Añadir perfil" → perfiles aislados con cookies separadas
+  4. **Extensiones**: "SessionBox", "Multi-Account Containers" (Firefox)
+- **En producción**: No es problema real, cada usuario físico usa su propio dispositivo/sesión.
 
 ## 7. Datos, migraciones y documentación
 
@@ -170,6 +401,7 @@ Los nombres de tablas y algunos campos conservan nombres heredados en inglés (`
 - Hay migraciones de compatibilidad que verifican existencia de columnas/tablas. Preservar idempotencia cuando sea parte del propósito de esa migración.
 - Revisar seeders antes de cambiar catálogo contable, monedas, roles o datos iniciales. `ContabilidadBaseSeeder` es parte relevante de la configuración del motor contable. Las subcuentas complementarias del motor (`1.1.1.1`, `1.1.1.2`, `1.1.1.3` Propinas en Custodia, `1.1.2.3`, `1.1.2.4`, `1.1.7` IVA Crédito Fiscal (Compras), `2.1.5` Retenciones por Pagar, `2.1.6` Propinas por Pagar, `4.6`, `4.7`, `6.8` Mermas y Desperdicios, `6.9`, `7.5`) las inserta `CuentasComplementariasSeeder` (idempotente, invocado también por la migración corporativa y por los tests, porque el catálogo base se siembra después de migrar en instalaciones nuevas). Nótese que `6.8` y `1.1.7` solo existían antes si el catálogo ya estaba sembrado al correr su migración original: NO depender de migraciones que inserten cuentas condicionadas a que el catálogo exista, usar el seeder. La migración `2026_10_14_000001_scm_ap_corporativo` crea `purchase_invoices`, `purchase_invoice_lines` y `stock_ledger_entries`, amplía `providers`/`cuentas_por_pagar`/`lotes` y es reversible (`down()` revierte enum y FKs en orden). `RrhhBaseSeeder` (idempotente, invocado por la migración HRMS, por `db:seed` y por los tests) siembra tipos de ausencia, turnos por defecto y la estructura salarial "Planilla Estándar del Salón". `AdminCatalogoSeeder` (idempotente, invocado por la migración de fase 1 de Administración, por `db:seed` y por los tests) siembra grupos de clientes (Regular/VIP/Mayorista), categorías de servicios (Cabello/Maquillaje/Uñas/Tratamientos/Otros) y plantillas de impuestos (Exento/IVA 15%).
 - `README.md` describe instalación general, pero referencia `PROJECT_CONTEXT.md` y `DOCUMENTACION_TECNICA.md`, que no figuran en la estructura actual del workspace. Confirmar su existencia antes de enlazarlos o tratarlos como fuentes vigentes.
+- METAS DEL DASHBOARD (octubre 2026): la migración `2026_10_15_000001_create_company_targets_table` crea `company_targets` (`periodo` date UNIQUE = primer día del mes, `monto` decimal(15,2), `moneda`, `creado_por` FK nullable a users) y es reversible. No requiere seeder: sin filas el panel usa el fallback `config('salon.meta_mensual')` vía `CompanyTarget::montoParaMes()` (§5.10). `package.json` incluye la dependencia npm `chart.js` (importada por `resources/js/dashboard.js`); tras actualizarla correr `npm run build` — el CDN de Chart.js del dashboard fue eliminado.
 - `Como_trabajar.md` aporta mandamientos de negocio adicionales. Mantenerlo consistente con este archivo cuando se modifiquen reglas financieras; si hay contradicción, verificar implementación y pedir precisión antes de relajar una restricción financiera.
 
 ## 8. Convenciones para implementar cambios

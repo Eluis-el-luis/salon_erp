@@ -12,21 +12,24 @@ use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
 /**
- * Permisos financieros y Estado de Resultados:
- *  - El contador (rol 'contador') tiene acceso a TODO el bloque financiero:
- *    contabilidad, catálogo de cuentas, asientos, periodos, bancos, CxP y retiros.
- *  - El resto del ERP (RRHH, inventario, respaldos) sigue siendo exclusivo del admin.
+ * Permisos financieros y Estado de Resultados (RBAC reestructurado, octubre 2026):
+ *  - 'alvaro' (Propietario): bypass global a TODO, incluida contabilidad.
+ *  - 'contador' (Auditoría financiera): acceso completo al bloque financiero
+ *    (contabilidad, catálogo, asientos, periodos, bancos, CxP, retiros, reportes).
+ *  - 'admin' (Administrador operativo): gestión operativa (inventario, RRHH, caja,
+ *    proveedores, servicios, respaldos). NO accede a contabilidad (diario, mayor,
+ *    resultados, balance, catálogo, asientos, periodos, cierre fiscal).
+ *  - 'recepcion': POS, ventas, arqueo, mesa de cambio, adelantos, caja chica.
  *  - El Estado de Resultados filtra por mes (default: mes actual) y admite histórico.
  */
 class AccesoFinanzasContadorTest extends TestCase
 {
     use RefreshDatabase;
 
-    protected Usuario $admin;
-
-    protected Usuario $contador;
-
-    protected Usuario $recepcion;
+    protected Usuario $alvaro;      // Propietario (bypass global)
+    protected Usuario $admin;       // Administrador operativo (SIN contabilidad)
+    protected Usuario $contador;    // Contador / Auditoría financiera
+    protected Usuario $recepcion;   // Recepción / Caja
 
     protected function setUp(): void
     {
@@ -36,11 +39,15 @@ class AccesoFinanzasContadorTest extends TestCase
         $this->seed(ContabilidadBaseSeeder::class);
         $this->seed(CuentasComplementariasSeeder::class);
 
+        $rolAlvaro = Rol::where('name', 'Álvaro (Propietario)')->first()->id;
         $rolAdmin = Rol::where('name', 'Administrador')->first()->id;
+        $rolContador = Rol::where('name', 'Contador')->first()->id;
+        $rolRecepcion = Rol::where('name', 'Recepción / Caja')->first()->id;
 
+        $this->alvaro = $this->crearUsuario('alvaro@t.com', 'alvaro', $rolAlvaro);
         $this->admin = $this->crearUsuario('admin@t.com', 'admin', $rolAdmin);
-        $this->contador = $this->crearUsuario('contador@t.com', 'contador', $rolAdmin);
-        $this->recepcion = $this->crearUsuario('recepcion@t.com', 'recepcion', Rol::where('name', 'Recepción / Caja')->first()->id);
+        $this->contador = $this->crearUsuario('contador@t.com', 'contador', $rolContador);
+        $this->recepcion = $this->crearUsuario('recepcion@t.com', 'recepcion', $rolRecepcion);
     }
 
     protected function crearUsuario(string $email, string $role, int $roleId): Usuario
@@ -56,8 +63,29 @@ class AccesoFinanzasContadorTest extends TestCase
     }
 
     // =====================================================================
-    // PERMISOS: EL CONTADOR ES PERSONAL FINANCIERO
+    // PERMISOS: RBAC REESTRUCTURADO
     // =====================================================================
+
+    public function test_alvaro_tiene_bypass_global(): void
+    {
+        $this->actingAs($this->alvaro);
+
+        // Álvaro accede a TODO: contabilidad, operación, RRHH, inventario
+        foreach ([
+            '/catalogo',
+            '/contabilidad',
+            '/contabilidad/resultados',
+            '/bancos',
+            '/empleados',
+            '/nomina',
+            '/inventario',
+            '/proveedores',
+            '/backups',
+            '/servicios',
+        ] as $ruta) {
+            $this->get($ruta)->assertStatus(200, "Álvaro no pudo entrar a {$ruta}");
+        }
+    }
 
     public function test_el_contador_accede_a_todas_las_vistas_financieras(): void
     {
@@ -104,6 +132,26 @@ class AccesoFinanzasContadorTest extends TestCase
         }
     }
 
+    public function test_el_admin_no_accede_a_contabilidad(): void
+    {
+        $this->actingAs($this->admin);
+
+        // El administrador operativo NO tiene acceso a contabilidad
+        foreach (['/catalogo', '/contabilidad', '/contabilidad/resultados', '/asientos', '/periodos'] as $ruta) {
+            $this->get($ruta)->assertStatus(403, "El admin NO debió entrar a {$ruta}");
+        }
+    }
+
+    public function test_el_admin_accede_a_operaciones_y_bancos(): void
+    {
+        $this->actingAs($this->admin);
+
+        // El administrador SÍ accede a operaciones, bancos, retiros, reportes
+        foreach (['/empleados', '/nomina', '/inventario', '/proveedores', '/backups', '/servicios', '/bancos', '/retiros', '/reportes', '/cuentas-por-pagar'] as $ruta) {
+            $this->get($ruta)->assertStatus(200, "El admin debió entrar a {$ruta}");
+        }
+    }
+
     public function test_recepcion_no_accede_al_bloque_contable(): void
     {
         $this->actingAs($this->recepcion);
@@ -122,17 +170,8 @@ class AccesoFinanzasContadorTest extends TestCase
         $this->get('/caja-chica')->assertStatus(200);
     }
 
-    public function test_el_admin_mantiene_bypass_global(): void
-    {
-        $this->actingAs($this->admin);
-
-        $this->get('/catalogo')->assertStatus(200);
-        $this->get('/empleados')->assertStatus(200);
-        $this->get('/bancos')->assertStatus(200);
-    }
-
     // =====================================================================
-    // ESTADO DE RESULTADOS CON FILTRO DE MES
+    // ESTADO DE RESULTADOS CON FILTRO DE MES (usando contador o alvaro)
     // =====================================================================
 
     /**
@@ -150,7 +189,7 @@ class AccesoFinanzasContadorTest extends TestCase
             'concepto' => 'Resultado '.$numero,
             'modulo_origen' => 'manual',
             'periodo_id' => $periodoId,
-            'usuario_id' => $this->admin->id,
+            'usuario_id' => $this->alvaro->id,
             'created_at' => now(),
             'updated_at' => now(),
         ]);
@@ -177,7 +216,7 @@ class AccesoFinanzasContadorTest extends TestCase
         $mesPasado = $hoy->copy()->subMonth();
         $this->asientoResultado('RES-PAS1', $mesPasado->format('Y-m-15'), '4.1', 900, alHaber: true);
 
-        $respuesta = $this->actingAs($this->admin)->get('/contabilidad/resultados');
+        $respuesta = $this->actingAs($this->contador)->get('/contabilidad/resultados');
 
         $respuesta->assertStatus(200);
         $respuesta->assertSee('C$ 500.00', false);   // ingreso del mes actual
@@ -194,7 +233,7 @@ class AccesoFinanzasContadorTest extends TestCase
         $this->asientoResultado('RES-PAS1', $mesPasado->format('Y-m-15'), '4.1', 900, alHaber: true);
         $this->asientoResultado('RES-PAS2', $mesPasado->format('Y-m-20'), '6.1', 300, alHaber: false);
 
-        $respuesta = $this->actingAs($this->admin)
+        $respuesta = $this->actingAs($this->contador)
             ->get('/contabilidad/resultados?mes='.$mesPasado->format('Y-m'));
 
         $respuesta->assertStatus(200);
@@ -211,7 +250,7 @@ class AccesoFinanzasContadorTest extends TestCase
         $this->asientoResultado('RES-ACT1', $hoy->toDateString(), '4.1', 500, alHaber: true);
         $this->asientoResultado('RES-PAS1', $mesPasado->format('Y-m-15'), '4.1', 900, alHaber: true);
 
-        $respuesta = $this->actingAs($this->admin)->get('/contabilidad/resultados?mes=todo');
+        $respuesta = $this->actingAs($this->contador)->get('/contabilidad/resultados?mes=todo');
 
         $respuesta->assertStatus(200);
         $respuesta->assertSee('C$ 1,400.00', false); // 500 + 900 acumulados
@@ -222,7 +261,7 @@ class AccesoFinanzasContadorTest extends TestCase
         $this->asientoResultado('RES-ACT1', now()->toDateString(), '4.1', 500, alHaber: true);
         $this->asientoResultado('RES-PAS1', now()->copy()->subMonth()->format('Y-m-15'), '4.1', 900, alHaber: true);
 
-        $respuesta = $this->actingAs($this->admin)->get('/contabilidad/resultados?mes=2026-13');
+        $respuesta = $this->actingAs($this->contador)->get('/contabilidad/resultados?mes=2026-13');
 
         $respuesta->assertStatus(200);
         $respuesta->assertSee('C$ 500.00', false);
@@ -232,6 +271,17 @@ class AccesoFinanzasContadorTest extends TestCase
     public function test_el_contador_usa_el_filtro_de_resultados(): void
     {
         $this->actingAs($this->contador);
+
+        $this->asientoResultado('RES-ACT1', now()->toDateString(), '4.1', 500, alHaber: true);
+
+        $this->get('/contabilidad/resultados?mes=todo')
+            ->assertStatus(200)
+            ->assertSee('Histórico completo');
+    }
+
+    public function test_alvaro_tambien_usa_el_filtro_de_resultados(): void
+    {
+        $this->actingAs($this->alvaro);
 
         $this->asientoResultado('RES-ACT1', now()->toDateString(), '4.1', 500, alHaber: true);
 

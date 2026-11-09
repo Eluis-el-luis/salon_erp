@@ -115,7 +115,7 @@
 
                     <!-- Estructura Salarial -->
                     <div class="col-span-2 mt-2 border-t pt-5">
-                        <h4 class="text-sm font-black text-emerald-700 mb-4">Estructura Salarial y Cargo</h4>
+                        <h4 class="text-sm font-black text-emerald-700 mb-4">Estructura Salarial, Seguridad y Cargo</h4>
                     </div>
 
                     <div class="col-span-2 md:col-span-1">
@@ -125,6 +125,7 @@
                             <option value="recepcion">Recepción / Caja</option>
                             <option value="contador">Contador / Finanzas</option>
                             <option value="admin">Administrador</option>
+                            <option value="alvaro">Álvaro (Propietario)</option>
                         </select>
                     </div>
                     <div class="col-span-2 md:col-span-1">
@@ -139,6 +140,12 @@
                     <div class="col-span-2 md:col-span-1">
                         <label class="block text-xs font-bold text-gray-700 mb-1">Comisión por Productos (%)</label>
                         <input type="number" step="0.01" min="0" max="100" x-model.number="form.comision_producto" class="w-full shadow-sm border-gray-300 rounded-lg py-2 px-3 text-gray-700 focus:ring-emerald-500 focus:border-emerald-500 font-bold">
+                    </div>
+
+                    <div class="col-span-2 md:col-span-1">
+                        <label class="block text-xs font-bold text-gray-700 mb-1">PIN de Seguridad (4-6 dígitos)</label>
+                        <input type="text" x-model="form.pin_seguridad" maxlength="6" inputmode="numeric" placeholder="Solo números, 4-6 dígitos" class="w-full shadow-sm border-gray-300 rounded-lg py-2 px-3 text-gray-700 focus:ring-emerald-500 focus:border-emerald-500 font-bold text-center tracking-widest" @keydown="pinKeydown($event)">
+                        <p class="text-xs text-gray-400 mt-1">Para autorización de acciones críticas (arqueos, anulaciones, aprobaciones). Se guarda encriptado.</p>
                     </div>
 
                     <!-- Expediente RRHH (Employee) -->
@@ -192,7 +199,8 @@
             form: {
                 name: '', email: '', password: '', phone: '',
                 role: 'estilista', salario_fijo: 0, comision_servicio: 0, comision_producto: 0,
-                tipo_contrato: 'indefinido', fecha_ingreso: '', cargo: '', documento_identidad: '', nss: ''
+                tipo_contrato: 'indefinido', fecha_ingreso: '', cargo: '', documento_identidad: '', nss: '',
+                pin_seguridad: ''
             },
 
             resetForm() {
@@ -201,8 +209,16 @@
                 this.form = {
                     name: '', email: '', password: '', phone: '',
                     role: 'estilista', salario_fijo: 0, comision_servicio: 0, comision_producto: 0,
-                    tipo_contrato: 'indefinido', fecha_ingreso: '', cargo: '', documento_identidad: '', nss: ''
+                    tipo_contrato: 'indefinido', fecha_ingreso: '', cargo: '', documento_identidad: '', nss: '',
+                    pin_seguridad: ''
                 };
+            },
+
+            // Solo permitir dígitos en PIN
+            pinKeydown(event) {
+                if (!/^\d$/.test(event.key) && !['Backspace', 'Delete', 'ArrowLeft', 'ArrowRight', 'Tab'].includes(event.key)) {
+                    event.preventDefault();
+                }
             },
 
             openCreateModal() {
@@ -228,7 +244,8 @@
                     fecha_ingreso: employee.empleado?.fecha_ingreso || '',
                     cargo: employee.empleado?.cargo || '',
                     documento_identidad: employee.empleado?.documento_identidad || '',
-                    nss: employee.empleado?.nss || ''
+                    nss: employee.empleado?.nss || '',
+                    pin_seguridad: '' // PIN no se muestra por seguridad; dejar vacío para no cambiar
                 };
                 this.openModal = true;
             },

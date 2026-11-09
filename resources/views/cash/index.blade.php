@@ -44,10 +44,11 @@
                         <span class="text-sm text-gray-600 font-medium">Fondo inicial automático (último cierre)</span>
                         <span class="text-lg font-black text-emerald-700">C$ {{ number_format($autoApertura, 2) }}</span>
                     </div>
-                    <p class="text-xs text-gray-400 -mt-2">El fondo se calcula automáticamente según tu último arqueo.</p>
+                    <p class="text-xs text-gray-400 -mt-2">El fondo se calcula automáticamente según el último arqueo cerrado (caja compartida).</p>
                 @endif
 
-                <button type="submit" class="btn btn-primary w-full py-3">Iniciar Turno de Caja</button>
+                {{-- DOBLE CONFIRMACIÓN: abrir turno exige PIN propio o de supervisor --}}
+                <button type="button" onclick="window.dispatchEvent(new CustomEvent('open-pin', { detail: { mensaje: 'Abrir un turno de caja requiere confirmación con PIN de seguridad.', form: this.closest('form') } }))" class="btn btn-primary w-full py-3">Iniciar Turno de Caja</button>
             </form>
         </div>
 
@@ -122,8 +123,8 @@
                         <p class="text-xs text-gray-400">Se cerrará al total teórico sin diferencia.</p>
                     @endif
 
-                    <button type="submit" class="btn btn-danger w-full py-3"
-                            onclick="return window.dispatchEvent(new CustomEvent('confirm', { detail: '¿Estás seguro de cerrar el turno y realizar el arqueo? Esta acción no se puede deshacer.' }))">
+                    {{-- DOBLE CONFIRMACIÓN: cerrar arqueo exige PIN propio o de supervisor --}}
+                    <button type="button" onclick="window.dispatchEvent(new CustomEvent('open-pin', { detail: { mensaje: 'Cerrar el turno y realizar el arqueo requiere confirmación con PIN de seguridad.', form: this.closest('form') } }))" class="btn btn-danger w-full py-3">
                         Cerrar Turno y Arqueo
                     </button>
                 </form>

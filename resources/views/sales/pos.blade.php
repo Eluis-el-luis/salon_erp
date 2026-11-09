@@ -662,6 +662,19 @@
                     });
                     let data = await response.json();
                     if (response.ok) {
+                        // FLUJO DE PRE-APROBACIÓN: si la venta quedó retenida (raro en crédito pero posible)
+                        if (data.pendiente_aprobacion) {
+                            window.dispatchEvent(new CustomEvent('notify', { 
+                                detail: 'Factura hecha con éxito, a espera de la confirmación del gerente para realizar la venta y guardarla en contabilidad.' 
+                            }));
+                            (data.notificaciones || []).forEach(function (n, i) {
+                                setTimeout(function () {
+                                    window.dispatchEvent(new CustomEvent('notify', { detail: n }));
+                                }, 900 + (i * 1500));
+                            });
+                            this.limpiarCaja();
+                            return;
+                        }
                         window.dispatchEvent(new CustomEvent('notify', { detail: '¡Factura #' + data.sale_id + ' emitida a crédito (CxC)!' }));
                         (data.notificaciones || []).forEach(function (n, i) {
                             setTimeout(function () {
@@ -880,6 +893,24 @@
 
                     if (response.ok) {
                         let data = await response.json();
+
+                        // FLUJO DE PRE-APROBACIÓN: si la venta quedó retenida, NO se abre ticket
+                        if (data.pendiente_aprobacion) {
+                            window.dispatchEvent(new CustomEvent('notify', { 
+                                detail: 'Factura hecha con éxito, a espera de la confirmación del gerente para realizar la venta y guardarla en contabilidad.' 
+                            }));
+                            // Notificaciones del backend
+                            (data.notificaciones || []).forEach(function (n, i) {
+                                setTimeout(function () {
+                                    window.dispatchEvent(new CustomEvent('notify', { detail: n }));
+                                }, 900 + (i * 1500));
+                            });
+                            this.limpiarCaja();
+                            this.checkoutOpen = false;
+                            return;
+                        }
+
+                        // Venta aprobada directamente (supervisor o monto bajo): flujo normal
                         window.dispatchEvent(new CustomEvent('notify', { detail: '¡Factura procesada con éxito!' }));
 
                         // Notificaciones del backend (ej. periodo contable autogenerado)

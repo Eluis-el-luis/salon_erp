@@ -16,120 +16,129 @@
     </div>
 
     <!-- Tabla Dinámica de Asistencia -->
-    <div class="card overflow-hidden">
-        <table class="min-w-full divide-y divide-gray-200">
-            <thead class="bg-gray-50">
-                <tr>
-                    <th scope="col" class="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase">Empleado</th>
-                    <th scope="col" class="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase">Turno Esperado</th>
-                    <th scope="col" class="px-6 py-4 text-center text-xs font-bold text-gray-500 uppercase">Entrada</th>
-                    <th scope="col" class="px-6 py-4 text-center text-xs font-bold text-gray-500 uppercase">Tardanza</th>
-                    <th scope="col" class="px-6 py-4 text-center text-xs font-bold text-gray-500 uppercase">Salida</th>
-                    <th scope="col" class="px-6 py-4 text-center text-xs font-bold text-gray-500 uppercase">Aseo</th>
-                    <th scope="col" class="px-6 py-4 text-center text-xs font-bold text-gray-500 uppercase">Uniforme</th>
-                    <th scope="col" class="px-6 py-4 text-right text-xs font-bold text-gray-500 uppercase">Acción</th>
-                </tr>
-            </thead>
-            <tbody class="bg-white divide-y divide-gray-100">
-                @forelse ($empleados as $empleado)
-                    @php
-                        $a = $empleado->asistencia_hoy;
-                        $turno = $empleado->turno_actual;
-                        $timeIn = $a ? \Carbon\Carbon::parse($a->time_in)->format('H:i') : '';
-                        $timeOut = ($a && $a->time_out) ? \Carbon\Carbon::parse($a->time_out)->format('H:i') : '';
-                        $tardanza = $a ? (int) $a->minutos_tardanza : 0;
-                        $aseo = $a ? $a->aseo : 1;
-                        $uniforme = $a ? $a->uniforme : 1;
-                    @endphp
-
-                    <tr x-data="attendanceRow({
-                            userId: {{ $empleado->user_id }},
-                            timeIn: '{{ $timeIn }}',
-                            timeOut: '{{ $timeOut }}',
-                            aseo: {{ $aseo ? 'true' : 'false' }},
-                            uniforme: {{ $uniforme ? 'true' : 'false' }},
-                            isSaved: {{ $a ? 'true' : 'false' }}
-                        })"
-                        class="hover:bg-gray-50 transition">
-
-                        <td class="px-6 py-4 whitespace-nowrap">
-                            <div class="text-sm font-bold text-gray-900">{{ $empleado->nombre }}</div>
-                            <div class="text-xs text-gray-400">{{ $empleado->codigo_empleado }} · {{ ucfirst($empleado->usuario->role ?? '') }}</div>
-                        </td>
-
-                        <!-- Turno esperado -->
-                        <td class="px-6 py-4 whitespace-nowrap text-sm">
-                            @if($turno)
-                                <span class="font-bold text-gray-700">{{ substr($turno->hora_entrada, 0, 5) }} – {{ substr($turno->hora_salida, 0, 5) }}</span>
-                                <span class="block text-[10px] text-gray-400">{{ $turno->nombre }} · tolerancia {{ $turno->tolerancia_minutos }} min</span>
-                            @else
-                                <span class="text-amber-600 font-bold text-xs">Sin turno asignado</span>
-                            @endif
-                        </td>
-
-                        <!-- Hora de Entrada -->
-                        <td class="px-6 py-4 whitespace-nowrap">
-                            <input type="time" x-model="timeIn" @change="isSaved = false"
-                                class="border border-gray-300 rounded-md py-1.5 px-3 font-bold focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm">
-                        </td>
-
-                        <!-- Tardanza -->
-                        <td class="px-6 py-4 whitespace-nowrap text-center">
-                            @if($a && $tardanza > 0)
-                                <span class="px-2 py-1 text-[10px] font-black rounded-full bg-red-100 text-red-700">+{{ $tardanza }} min</span>
-                            @elseif($a)
-                                <span class="px-2 py-1 text-[10px] font-black rounded-full bg-emerald-100 text-emerald-700">Puntual</span>
-                            @else
-                                <span class="text-gray-300 text-xs">—</span>
-                            @endif
-                        </td>
-
-                        <!-- Hora de Salida -->
-                        <td class="px-6 py-4 whitespace-nowrap">
-                            <input type="time" x-model="timeOut" @change="isSaved = false"
-                                class="border border-gray-300 rounded-md py-1.5 px-3 font-bold focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
-                        </td>
-
-                        <!-- Aseo -->
-                        <td class="px-6 py-4 whitespace-nowrap text-center">
-                            <label class="relative inline-flex items-center cursor-pointer">
-                                <input type="checkbox" x-model="aseo" @change="isSaved = false" class="sr-only peer">
-                                <div class="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
-                            </label>
-                            <span class="ml-2 text-xs font-bold" :class="aseo ? 'text-emerald-600' : 'text-gray-400'" x-text="aseo ? 'SÍ' : 'NO'"></span>
-                        </td>
-
-                        <!-- Uniforme -->
-                        <td class="px-6 py-4 whitespace-nowrap text-center">
-                            <label class="relative inline-flex items-center cursor-pointer">
-                                <input type="checkbox" x-model="uniforme" @change="isSaved = false" class="sr-only peer">
-                                <div class="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-500"></div>
-                            </label>
-                            <span class="ml-2 text-xs font-bold" :class="uniforme ? 'text-blue-600' : 'text-gray-400'" x-text="uniforme ? 'SÍ' : 'NO'"></span>
-                        </td>
-
-                        <!-- Guardar -->
-                        <td class="px-6 py-4 whitespace-nowrap text-right">
-                            <button @click="saveAttendance()"
-                                    :class="isSaved ? 'bg-gray-100 text-gray-500 border-gray-200 hover:bg-gray-200' : 'bg-emerald-600 text-white shadow-sm hover:bg-emerald-700'"
-                                    class="border font-bold py-1.5 px-4 rounded transition text-sm flex items-center justify-end ml-auto">
-                                <span x-show="!isSaved">Guardar</span>
-                                <span x-show="isSaved">
-                                    <svg class="w-4 h-4 mr-1 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
-                                    Guardado
-                                </span>
-                            </button>
-                        </td>
-                    </tr>
-                @empty
+    <div class="card">
+        <!-- Wrapper para el scroll -->
+        <div class="w-full overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
                     <tr>
-                        <td colspan="8" class="px-6 py-8 text-center text-gray-500 text-sm">
-                            No hay empleados activos registrados en el sistema.
-                        </td>
+                        <!-- Cambiamos px-6 a px-4 -->
+                        <th scope="col" class="px-4 py-4 text-left text-xs font-bold text-gray-500 uppercase">Empleado</th>
+                        <th scope="col" class="px-4 py-4 text-left text-xs font-bold text-gray-500 uppercase">Turno Esperado</th>
+                        <th scope="col" class="px-4 py-4 text-center text-xs font-bold text-gray-500 uppercase">Entrada</th>
+                        <th scope="col" class="px-4 py-4 text-center text-xs font-bold text-gray-500 uppercase">Tardanza</th>
+                        <th scope="col" class="px-4 py-4 text-center text-xs font-bold text-gray-500 uppercase">Salida</th>
+                        <th scope="col" class="px-4 py-4 text-center text-xs font-bold text-gray-500 uppercase">Aseo</th>
+                        <th scope="col" class="px-4 py-4 text-center text-xs font-bold text-gray-500 uppercase">Uniforme</th>
+                        <th scope="col" class="px-4 py-4 text-right text-xs font-bold text-gray-500 uppercase">Acción</th>
                     </tr>
-                @endforelse
-            </tbody>
-        </table>
+                </thead>
+                <tbody class="bg-white divide-y divide-gray-100">
+                    @forelse ($empleados as $empleado)
+                        @php
+                            $a = $empleado->asistencia_hoy;
+                            $turno = $empleado->turno_actual;
+                            $timeIn = $a ? \Carbon\Carbon::parse($a->time_in)->format('H:i') : '';
+                            $timeOut = ($a && $a->time_out) ? \Carbon\Carbon::parse($a->time_out)->format('H:i') : '';
+                            $tardanza = $a ? (int) $a->minutos_tardanza : 0;
+                            $aseo = $a ? $a->aseo : 1;
+                            $uniforme = $a ? $a->uniforme : 1;
+                        @endphp
+
+                        <tr x-data="attendanceRow({
+                                userId: {{ $empleado->user_id }},
+                                timeIn: '{{ $timeIn }}',
+                                timeOut: '{{ $timeOut }}',
+                                aseo: {{ $aseo ? 'true' : 'false' }},
+                                uniforme: {{ $uniforme ? 'true' : 'false' }},
+                                isSaved: {{ $a ? 'true' : 'false' }}
+                            })"
+                            class="hover:bg-gray-50 transition">
+
+                            <!-- Cambiamos px-6 a px-4 en todos los td -->
+                            <td class="px-4 py-4 whitespace-nowrap">
+                                <div class="text-sm font-bold text-gray-900">{{ $empleado->nombre }}</div>
+                                <div class="text-xs text-gray-400">{{ $empleado->codigo_empleado }} · {{ ucfirst($empleado->usuario->role ?? '') }}</div>
+                            </td>
+
+                            <td class="px-4 py-4 whitespace-nowrap text-sm">
+                                @if($turno)
+                                    <span class="font-bold text-gray-700">{{ substr($turno->hora_entrada, 0, 5) }} – {{ substr($turno->hora_salida, 0, 5) }}</span>
+                                    <span class="block text-[10px] text-gray-400">{{ $turno->nombre }} · tolerancia {{ $turno->tolerancia_minutos }} min</span>
+                                @else
+                                    <span class="text-amber-600 font-bold text-xs">Sin turno asignado</span>
+                                @endif
+                            </td>
+
+                            <td class="px-4 py-4 whitespace-nowrap">
+                                <input type="time" x-model="timeIn" @change="isSaved = false"
+                                    class="border border-gray-300 rounded-md py-1.5 px-3 font-bold focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm">
+                            </td>
+
+                            <td class="px-4 py-4 whitespace-nowrap text-center">
+                                @if($a && $tardanza > 0)
+                                    <span class="px-2 py-1 text-[10px] font-black rounded-full bg-red-100 text-red-700">+{{ $tardanza }} min</span>
+                                @elseif($a)
+                                    <span class="px-2 py-1 text-[10px] font-black rounded-full bg-emerald-100 text-emerald-700">Puntual</span>
+                                @else
+                                    <span class="text-gray-300 text-xs">—</span>
+                                @endif
+                            </td>
+
+                            <td class="px-4 py-4 whitespace-nowrap">
+                                <input type="time" x-model="timeOut" @change="isSaved = false"
+                                    class="border border-gray-300 rounded-md py-1.5 px-3 font-bold focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
+                            </td>
+
+                            <td class="px-4 py-4 whitespace-nowrap text-center">
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" x-model="aseo" @change="isSaved = false" class="sr-only peer">
+                                    <div class="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
+                                </label>
+                                <span class="ml-2 text-xs font-bold" :class="aseo ? 'text-emerald-600' : 'text-gray-400'" x-text="aseo ? 'SÍ' : 'NO'"></span>
+                            </td>
+
+                            <td class="px-4 py-4 whitespace-nowrap text-center">
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" x-model="uniforme" @change="isSaved = false" class="sr-only peer">
+                                    <div class="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-500"></div>
+                                </label>
+                                <span class="ml-2 text-xs font-bold" :class="uniforme ? 'text-blue-600' : 'text-gray-400'" x-text="uniforme ? 'SÍ' : 'NO'"></span>
+                            </td>
+
+                            <td class="px-4 py-4 whitespace-nowrap text-right">
+                                <div class="flex items-center justify-end gap-2">
+                                    {{-- Guardar Entrada --}}
+                                    <button @click="saveAttendance()"
+                                            :disabled="isSaved"
+                                            :class="isSaved ? 'bg-gray-100 text-gray-500 border-gray-200 hover:bg-gray-200 cursor-not-allowed' : 'bg-emerald-600 text-white shadow-sm hover:bg-emerald-700'"
+                                            class="border font-bold py-1.5 px-3 rounded transition text-sm flex items-center gap-1">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                                        <span x-show="!isSaved">Entrada</span>
+                                        <span x-show="isSaved">Guardado</span>
+                                    </button>
+
+                                    {{-- Guardar Salida --}}
+                                    <button @click="saveExit()"
+                                            :disabled="!timeOut || isSaved"
+                                            :class="!timeOut ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed' : 'bg-blue-600 text-white shadow-sm hover:bg-blue-700'"
+                                            class="border font-bold py-1.5 px-3 rounded transition text-sm flex items-center gap-1">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path></svg>
+                                        <span>Salida</span>
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                    @empty
+                        <tr>
+                            <td colspan="8" class="px-4 py-8 text-center text-gray-500 text-sm">
+                                No hay empleados activos registrados en el sistema.
+                            </td>
+                        </tr>
+                    @endforelse
+                </tbody>
+            </table>
+        </div>
     </div>
 
     <!-- Resumen del mes -->
@@ -192,7 +201,6 @@
                         body: JSON.stringify({
                             user_id: this.userId,
                             time_in: this.timeIn,
-                            time_out: this.timeOut || null,
                             aseo: this.aseo,
                             uniforme: this.uniforme
                         })
@@ -203,26 +211,45 @@
                     if (response.ok) {
                         this.isSaved = true;
                         window.dispatchEvent(new CustomEvent('notify', { detail: data.message }));
-
-                        // Si hay hora de salida, registrarla también
-                        if (this.timeOut) {
-                            let respSalida = await fetch('/asistencia/salida', {
-                                method: 'POST',
-                                headers: {
-                                    'Content-Type': 'application/json',
-                                    'Accept': 'application/json',
-                                    'X-Requested-With': 'XMLHttpRequest',
-                                    'X-CSRF-TOKEN': '{{ csrf_token() }}'
-                                },
-                                body: JSON.stringify({ user_id: this.userId, time_out: this.timeOut })
-                            });
-                            let dataSalida = await respSalida.json();
-                            if (respSalida.ok) {
-                                window.dispatchEvent(new CustomEvent('notify', { detail: dataSalida.message }));
-                            }
-                        }
                     } else {
                         let errorMessage = 'Error al guardar.';
+                        if (data.errors) {
+                            errorMessage = Object.values(data.errors)[0][0];
+                        } else if (data.message) {
+                            errorMessage = data.message;
+                        }
+                        window.dispatchEvent(new CustomEvent('notify', { detail: errorMessage }));
+                    }
+                } catch (error) {
+                    console.error(error);
+                    window.dispatchEvent(new CustomEvent('notify', { detail: 'Error de conexión con el servidor.' }));
+                }
+            },
+
+            async saveExit() {
+                if (!this.timeOut) {
+                    window.dispatchEvent(new CustomEvent('notify', { detail: 'Debes ingresar la hora de salida.' }));
+                    return;
+                }
+
+                try {
+                    let response = await fetch('/asistencia/salida', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Accept': 'application/json',
+                            'X-Requested-With': 'XMLHttpRequest',
+                            'X-CSRF-TOKEN': '{{ csrf_token() }}'
+                        },
+                        body: JSON.stringify({ user_id: this.userId, time_out: this.timeOut })
+                    });
+
+                    let data = await response.json();
+
+                    if (response.ok) {
+                        window.dispatchEvent(new CustomEvent('notify', { detail: data.message }));
+                    } else {
+                        let errorMessage = 'Error al registrar salida.';
                         if (data.errors) {
                             errorMessage = Object.values(data.errors)[0][0];
                         } else if (data.message) {

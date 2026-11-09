@@ -19,7 +19,7 @@ class ContabilidadVistasTest extends TestCase
 {
     use RefreshDatabase;
 
-    protected Usuario $admin;
+    protected Usuario $contador;  // Contador / Auditoría financiera (acceso a contabilidad)
 
     protected function setUp(): void
     {
@@ -28,16 +28,16 @@ class ContabilidadVistasTest extends TestCase
         $this->seed(RoleSeeder::class);
         $this->seed(ContabilidadBaseSeeder::class);
 
-        $this->admin = Usuario::create([
+        $this->contador = Usuario::create([
             'name' => 'Contador Admin',
             'email' => 'contador@test.com',
             'password' => 'password',
-            'role' => 'admin',
-            'role_id' => Rol::where('name', 'Administrador')->first()->id ?? null,
+            'role' => 'contador',
+            'role_id' => Rol::where('name', 'Contador')->first()->id ?? null,
             'is_active' => true,
         ]);
 
-        $this->actingAs($this->admin);
+        $this->actingAs($this->contador);
     }
 
     /**

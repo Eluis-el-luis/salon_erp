@@ -6,12 +6,15 @@ use Illuminate\Http\Request;
 use App\Models\SesionCaja;
 use App\Models\Venta;
 use App\Services\ContabilidadService;
+use App\Traits\AutorizaPinSupervisor;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
 
 class CajaController extends Controller
 {
+    use AutorizaPinSupervisor;
+
     /**
      * MANDAMIENTO: Solo el Administrador y el Contador gestionan los montos
      * de apertura y cierre de forma manual. El resto se calcula automáticamente.
@@ -43,12 +46,13 @@ class CajaController extends Controller
             );
         }
 
-        // Monto automático de apertura: el cierre de la última sesión del usuario.
+        // Monto automático de apertura: el cierre de la última sesión de CUALQUIER usuario.
+        // La caja es un recurso físico compartido; el fondo inicial debe ser el último
+        // arqueo cerrado por cualquier cajero, no por el usuario actual.
         // (Solo relevante para usuarios no privilegiados.)
         $autoApertura = 0;
         if (!$puedeGestionarMontos && !$sesion) {
-            $ultimaCerrada = SesionCaja::where('user_id', auth()->id())
-                ->where('estado', 'cerrada')
+            $ultimaCerrada = SesionCaja::where('estado', 'cerrada')
                 ->orderByDesc('fecha_cierre')
                 ->first();
             $autoApertura = $ultimaCerrada ? (float) $ultimaCerrada->monto_fisico : 0;
@@ -67,7 +71,7 @@ class CajaController extends Controller
         ));
     }
 
-    // Abrir Turno
+    // Abrir Turno (requiere doble confirmación con PIN propio o de supervisor)
     public function open(Request $request)
     {
         $privilegiado = $this->puedeGestionarMontos();
@@ -77,15 +81,18 @@ class CajaController extends Controller
             'monto_apertura' => 'nullable|numeric|min:0',
         ]);
 
+        // DOBLE CONFIRMACIÓN: abrir arqueo exige PIN propio o de supervisor
+        $this->autorizarPin($request);
+
         DB::beginTransaction();
 
         try {
             if ($privilegiado) {
                 $montoApertura = round((float) ($request->monto_apertura ?? 0), 2);
             } else {
-                // Automático: se hereda el monto con el que se cerró la última sesión.
-                $ultimaCerrada = SesionCaja::where('user_id', auth()->id())
-                    ->where('estado', 'cerrada')
+                // Automático: se hereda el monto con el que se cerró la última sesión de CUALQUIER usuario.
+                // La caja es un recurso físico compartido.
+                $ultimaCerrada = SesionCaja::where('estado', 'cerrada')
                     ->orderByDesc('fecha_cierre')
                     ->first();
                 $montoApertura = $ultimaCerrada ? round((float) $ultimaCerrada->monto_fisico, 2) : 0;
@@ -112,7 +119,7 @@ class CajaController extends Controller
         }
     }
 
-    // Cerrar Turno (Arqueo)
+    // Cerrar Turno (Arqueo, con doble confirmación por PIN)
     public function close(Request $request)
     {
         $privilegiado = $this->puedeGestionarMontos();
@@ -121,6 +128,9 @@ class CajaController extends Controller
             // Solo el privilegiado envía el monto físico; los demás se auto-calculan.
             'monto_fisico' => 'nullable|numeric|min:0',
         ]);
+
+        // DOBLE CONFIRMACIÓN: cerrar arqueo exige PIN propio o de supervisor
+        $this->autorizarPin($request);
 
         DB::beginTransaction();
 

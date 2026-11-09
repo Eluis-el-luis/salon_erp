@@ -14,6 +14,7 @@
                     <option value="pagada" {{ request('estado') === 'pagada' ? 'selected' : '' }}>Pagada</option>
                     <option value="emitida" {{ request('estado') === 'emitida' ? 'selected' : '' }}>Emitida (Por cobrar)</option>
                     <option value="borrador" {{ request('estado') === 'borrador' ? 'selected' : '' }}>Cotización (Borrador)</option>
+                    <option value="pendiente_aprobacion" {{ request('estado') === 'pendiente_aprobacion' ? 'selected' : '' }}>Pendiente de Aprobación</option>
                     <option value="anulada" {{ request('estado') === 'anulada' ? 'selected' : '' }}>Anulada</option>
                 </select>
             </form>
@@ -24,43 +25,49 @@
         </div>
     </div>
 
-    <div class="card overflow-hidden">
-        <table class="min-w-full divide-y divide-gray-200">
-            <thead class="bg-gray-50">
-                <tr>
-                    <th scope="col" class="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase">Factura #</th>
-                    <th scope="col" class="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase">Fecha y Hora</th>
-                    <th scope="col" class="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase">Cliente</th>
-                    <th scope="col" class="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase">Estado</th>
-                    <th scope="col" class="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase">Pago</th>
-                    <th scope="col" class="px-6 py-3 text-right text-xs font-bold text-gray-500 uppercase">Total (C$)</th>
-                    <th scope="col" class="px-6 py-3 text-right text-xs font-bold text-gray-500 uppercase">Acciones</th>
-                </tr>
-            </thead>
-            <tbody class="bg-white divide-y divide-gray-200">
-                @forelse ($ventas as $venta)
-                    <tr class="hover:bg-gray-50 transition {{ $venta->status === 'anulada' ? 'bg-red-50/40' : '' }}">
-                        <td class="px-6 py-4 whitespace-nowrap text-sm font-bold text-gray-900">
-                            INV-{{ str_pad($venta->id, 5, '0', STR_PAD_LEFT) }}
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
-                            {{ $venta->created_at->format('d/m/Y h:i A') }}
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-800">
-                            {{ $venta->cliente ? $venta->cliente->name : 'Cliente General' }}
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap">
+    <div class="card">
+        <!-- 2. Agregamos un div envolvente que se encargue exclusivamente del scroll -->
+        <div class="w-full overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <!-- 3. Cambiamos px-6 a px-4 en todos los <th> para ahorrar espacio horizontal -->
+                        <th scope="col" class="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase">Factura #</th>
+                        <th scope="col" class="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase">Fecha y Hora</th>
+                        <th scope="col" class="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase">Cliente</th>
+                        <th scope="col" class="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase">Estado</th>
+                        <th scope="col" class="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase">Pago</th>
+                        <th scope="col" class="px-4 py-3 text-right text-xs font-bold text-gray-500 uppercase">Total (C$)</th>
+                        <th scope="col" class="px-4 py-3 text-right text-xs font-bold text-gray-500 uppercase">Acciones</th>
+                    </tr>
+                </thead>
+                <tbody class="bg-white divide-y divide-gray-200">
+                    @forelse ($ventas as $venta)
+                        <tr class="hover:bg-gray-50 transition {{ $venta->status === 'anulada' ? 'bg-red-50/40' : '' }}">
+                            <!-- También cambiamos px-6 a px-4 en todos los <td> -->
+                            <td class="px-4 py-4 whitespace-nowrap text-sm font-bold text-gray-900">
+                                INV-{{ str_pad($venta->id, 5, '0', STR_PAD_LEFT) }}
+                            </td>
+                            <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-600">
+                                {{ $venta->created_at->format('d/m/Y h:i A') }}
+                            </td>
+                            <td class="px-4 py-4 whitespace-nowrap text-sm font-medium text-gray-800">
+                                {{ $venta->cliente ? $venta->cliente->name : 'Cliente General' }}
+                            </td>
+                            <td class="px-4 py-4 whitespace-nowrap">
                             @php
                                 $estilosEstado = [
                                     'pagada'   => 'bg-emerald-100 text-emerald-800',
                                     'emitida'  => 'bg-amber-100 text-amber-800',
                                     'borrador' => 'bg-gray-200 text-gray-700',
+                                    'pendiente_aprobacion' => 'bg-purple-100 text-purple-800',
                                     'anulada'  => 'bg-red-100 text-red-800',
                                 ];
                                 $etiquetasEstado = [
                                     'pagada'   => 'Pagada',
                                     'emitida'  => 'Por Cobrar',
                                     'borrador' => 'Cotización',
+                                    'pendiente_aprobacion' => 'Pendiente de Aprobación',
                                     'anulada'  => 'Anulada',
                                 ];
                             @endphp
@@ -73,45 +80,46 @@
                                 </p>
                             @endif
                         </td>
-                        <td class="px-6 py-4 whitespace-nowrap">
+                        <td class="px-4 py-4 whitespace-nowrap">
                             <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{ $venta->pagos_cobro_count > 1 ? 'bg-purple-100 text-purple-800' : 'bg-blue-100 text-blue-800' }} uppercase">
                                 {{ $venta->pagos_cobro_count > 1 ? 'Mixto ('.$venta->pagos_cobro_count.')' : $venta->payment_method }}
                             </span>
                         </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-bold {{ $venta->status === 'anulada' ? 'text-red-400 line-through' : 'text-emerald-600' }}">
-                            C$ {{ number_format($venta->total, 2) }}
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                            <div class="flex justify-end items-center gap-3">
-                                {{-- Continuar cotización: carga el documento en el POS --}}
-                                @if($venta->status === 'borrador')
-                                    <a href="{{ url('/pos') }}?draft_id={{ $venta->id }}" class="text-gray-700 hover:text-gray-900 font-bold transition" title="Cargar en el POS">
-                                        Cotizar / Cobrar
+                        <td class="px-4 py-4 whitespace-nowrap text-right text-sm font-bold {{ $venta->status === 'anulada' ? 'text-red-400 line-through' : 'text-emerald-600' }}">
+                                C$ {{ number_format($venta->total, 2) }}
+                            </td>
+                            <td class="px-4 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                <!-- Botones de acción sin el min-w-[300px] -->
+                                <div class="flex justify-end items-center gap-3">
+                                    {{-- Continuar cotización --}}
+                                    @if($venta->status === 'borrador')
+                                        <a href="{{ url('/pos') }}?draft_id={{ $venta->id }}" class="text-gray-700 hover:text-gray-900 font-bold transition whitespace-nowrap" title="Cargar en el POS">
+                                            Cotizar / Cobrar
+                                        </a>
+                                    @endif
+
+                                    {{-- Cobrar factura a crédito --}}
+                                    @if($venta->status === 'emitida')
+                                        <a href="{{ url('/pos') }}?cobro_id={{ $venta->id }}" class="text-amber-600 hover:text-amber-900 font-bold transition whitespace-nowrap">
+                                            Cobrar
+                                        </a>
+                                    @endif
+
+                                    <a href="{{ url('/ventas/'.$venta->id.'/ticket') }}" target="_blank" class="text-emerald-600 hover:text-emerald-900 flex items-center transition whitespace-nowrap">
+                                        <svg class="w-5 h-5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"></path></svg>
+                                        <span>Imprimir</span>
                                     </a>
-                                @endif
 
-                                {{-- Cobrar factura a crédito --}}
-                                @if($venta->status === 'emitida')
-                                    <a href="{{ url('/pos') }}?cobro_id={{ $venta->id }}" class="text-amber-600 hover:text-amber-900 font-bold transition">
-                                        Cobrar
-                                    </a>
-                                @endif
-
-                                <a href="{{ url('/ventas/'.$venta->id.'/ticket') }}" target="_blank" class="text-emerald-600 hover:text-emerald-900 flex items-center transition">
-                                    <svg class="w-5 h-5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"></path></svg>
-                                    Imprimir
-                                </a>
-
-                                {{-- ANULAR: privilegio exclusivo del administrador, nunca borra el documento --}}
-                                @if($esAdmin && in_array($venta->status, ['pagada', 'emitida', 'borrador']))
-                                    <button @click="anularId = {{ $venta->id }}" class="text-red-500 hover:text-red-700 font-bold transition">
-                                        Anular
-                                    </button>
-                                @endif
-                            </div>
-                        </td>
-                    </tr>
-                @empty
+                                    {{-- ANULAR --}}
+                                    @if($puedeAnular && in_array($venta->status, ['pagada', 'emitida', 'borrador', 'pendiente_aprobacion']))
+                                        <button @click="anularId = {{ $venta->id }}" class="text-red-500 hover:text-red-700 font-bold transition whitespace-nowrap">
+                                            Anular
+                                        </button>
+                                    @endif
+                                </div>
+                            </td>
+                        </tr>
+                    @empty
                     <tr>
                         <td colspan="7" class="px-6 py-8 text-center text-gray-500 text-sm">
                             No hay ventas registradas aún.
@@ -144,8 +152,11 @@
                         </p>
                     </div>
                     <div class="px-6 py-4 bg-gray-50 border-t border-gray-100 flex flex-row-reverse gap-3">
-                        <button type="submit" class="btn bg-red-600 hover:bg-red-700 text-white font-bold py-2.5 px-4 rounded-xl flex-1">
-                            Confirmar Anulación
+                        {{-- DOBLE CONFIRMACIÓN: abre el modal de PIN de supervisor --}}
+                        <button type="button"
+                                @click="window.dispatchEvent(new CustomEvent('open-pin', { detail: { mensaje: 'Anular una factura exige el PIN de un supervisor (Álvaro / Administrador).', form: $event.target.closest('form') } }))"
+                                class="btn bg-red-600 hover:bg-red-700 text-white font-bold py-2.5 px-4 rounded-xl flex-1">
+                            Continuar a Autorización
                         </button>
                         <button type="button" @click="anularId = null" class="btn btn-secondary">Cancelar</button>
                     </div>

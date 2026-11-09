@@ -10,8 +10,8 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 
-#[Fillable(['name', 'email', 'password'])]
-#[Hidden(['password', 'remember_token'])]
+#[Fillable(['name', 'email', 'password', 'pin_seguridad'])]
+#[Hidden(['password', 'remember_token', 'pin_seguridad', 'pin_code'])]
 class Usuario extends Authenticatable
 {
     use HasFactory, Notifiable;
@@ -22,6 +22,7 @@ class Usuario extends Authenticatable
         'name',
         'email',
         'password',
+        'pin_seguridad',
         'role_id', 
         'role',
         'salario_fijo',
@@ -34,6 +35,7 @@ class Usuario extends Authenticatable
     protected $hidden = [
         'password',
         'remember_token',
+        'pin_seguridad', // Ocultamos el PIN por seguridad
         'pin_code', // Ocultamos el PIN por seguridad
     ];
 

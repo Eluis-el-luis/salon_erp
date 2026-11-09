@@ -10,10 +10,18 @@ class RoleMiddleware
     /**
      * Handle an incoming request.
      *
+     * RBAC reestructurado (octubre 2026):
+     *  - 'alvaro' es el rol SUPREMO (propietario): bypass global a cualquier
+     *    ruta, incluida toda la contabilidad. Inquebrantable.
+     *  - 'admin' ya NO tiene bypass: entra sólo donde se le enumera
+     *    explícitamente (operación de caja, inventario, RRHH, bancos...).
+     *    Las rutas contables (diario, mayor, resultados, catálogo, asientos,
+     *    periodos) responden a 'alvaro' y 'contador' (auditoría financiera):
+     *    un administrador que accede por URL directa recibe 403.
+     *
      * Laravel pasa cada valor separado por coma como argumento individual
      * (role:admin,contador -> handle(..., 'admin', 'contador')), por lo que la
-     * firma debe ser variádica; antes sólo se leía el PRIMER rol y el contador
-     * era bloqueado en todas las rutas compartidas con recepción.
+     * firma debe ser variádica.
      */
     public function handle(Request $request, Closure $next, string ...$roles)
     {
@@ -24,8 +32,8 @@ class RoleMiddleware
 
         $user = auth()->user();
 
-        // 2. SUPERPODER DEL ADMIN: Si el usuario es 'admin', entra a donde sea.
-        if ($user->role === 'admin') {
+        // 2. SUPERPODER DEL PROPIETARIO: 'alvaro' entra a donde sea.
+        if ($user->role === 'alvaro') {
             return $next($request);
         }
 

@@ -14,8 +14,12 @@
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="flex items-center justify-between h-16">
 
+                @php
+                    // Marca redirige según rol: Dashboard para alvaro/admin/contador, POS para recepcion/caja/estilista
+                    $brandUrl = in_array(auth()->user()->role ?? '', ['alvaro', 'admin', 'contador']) ? '/' : '/pos';
+                @endphp
                 <!-- Marca -->
-                <a href="{{ url('/') }}" class="flex items-center space-x-3 shrink-0">
+                <a href="{{ $brandUrl }}" class="flex items-center space-x-3 shrink-0">
                     <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-emerald-700 text-white">
                         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
                     </span>
@@ -28,26 +32,35 @@
                 <!-- Navegación -->
                 <div class="hidden lg:flex items-center space-x-1">
 
+                    @php
+                        // VISIBILIDAD POR ROL (RBAC): Dashboard solo para alvaro, admin, contador
+                        $rolUsuario = auth()->user()->role ?? null;
+                        $verDashboard = in_array($rolUsuario, ['alvaro', 'admin', 'contador'], true);
+                    @endphp
+
+                    @if($verDashboard)
                     <a href="{{ url('/') }}" class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold text-gray-600 hover:bg-gray-100 hover:text-gray-900 transition">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l9-9 9 9M5 10v10a1 1 0 001 1h3a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1h3a1 1 0 001-1V10"></path></svg>
                         Dashboard
                     </a>
+                    @endif
 
                     @php
-                        // VISIBILIDAD POR ROL: 'roles' lista los roles con acceso a la
-                        // ruta. Sin 'roles' = todos los roles. El admin ve todo (bypass).
-                        $rolUsuario = auth()->user()->role ?? null;
+                        // VISIBILIDAD POR ROL (RBAC): 'roles' lista los roles con
+                        // acceso a la ruta. Sin 'roles' = todos los roles. El rol
+                        // supremo 'alvaro' ve todo (bypass); 'admin' es operativo y
+                        // NO accede a la contabilidad (alvaro + contador).
                         $puedeVer = function (array $item) use ($rolUsuario): bool {
                             if (!isset($item['roles'])) return true;
-                            if ($rolUsuario === 'admin') return true;
+                            if ($rolUsuario === 'alvaro') return true;
                             return in_array($rolUsuario, $item['roles'], true);
                         };
 
                         $grupos = [
                             'Operaciones' => [
                                 ['url' => '/agenda', 'label' => 'Agenda Diaria', 'icon' => 'calendar'],
-                                ['url' => '/pos', 'label' => 'Caja (POS)', 'icon' => 'cart', 'roles' => ['recepcion', 'contador']],
-                                ['url' => '/caja/arqueo', 'label' => 'Turnos y Arqueo', 'icon' => 'lock', 'roles' => ['recepcion', 'contador']],
+                                ['url' => '/pos', 'label' => 'Caja (POS)', 'icon' => 'cart', 'roles' => ['recepcion', 'contador', 'admin']],
+                                ['url' => '/caja/arqueo', 'label' => 'Turnos y Arqueo', 'icon' => 'lock', 'roles' => ['recepcion', 'contador', 'admin']],
                             ],
                             'Administración' => [
                                 ['url' => '/clientes', 'label' => 'Clientes', 'icon' => 'users'],
@@ -63,24 +76,26 @@
                                 ['url' => '/backups', 'label' => 'Respaldos', 'icon' => 'save', 'roles' => ['admin']],
                             ],
                             'Finanzas' => [
-                                ['url' => '/historial-ventas', 'label' => 'Historial Ventas', 'icon' => 'receipt', 'roles' => ['recepcion', 'contador']],
+                                ['url' => '/historial-ventas', 'label' => 'Historial Ventas', 'icon' => 'receipt', 'roles' => ['recepcion', 'contador', 'admin']],
+                                ['url' => '/mis-aprobaciones', 'label' => 'Mis Aprobaciones', 'icon' => 'clock', 'roles' => ['recepcion', 'contador', 'admin']],
+                                ['url' => '/aprobaciones', 'label' => 'Aprobaciones Pendientes', 'icon' => 'shield', 'roles' => ['alvaro']],
                                 ['url' => '/bancos', 'label' => 'Bancos y Conciliación', 'icon' => 'bank', 'roles' => ['admin', 'contador']],
-                                ['url' => '/mesa-cambio', 'label' => 'Mesa de Cambio', 'icon' => 'exchange', 'roles' => ['recepcion', 'contador']],
-                                ['url' => '/caja-chica', 'label' => 'Caja Chica', 'icon' => 'wallet', 'roles' => ['recepcion', 'contador']],
+                                ['url' => '/mesa-cambio', 'label' => 'Mesa de Cambio', 'icon' => 'exchange', 'roles' => ['recepcion', 'contador', 'admin']],
+                                ['url' => '/caja-chica', 'label' => 'Caja Chica', 'icon' => 'wallet', 'roles' => ['recepcion', 'contador', 'admin']],
                                 ['url' => '/retiros', 'label' => 'Retiros del Propietario', 'icon' => 'user', 'roles' => ['admin', 'contador']],
-                                ['url' => '/contabilidad', 'label' => 'Registro de Gastos', 'icon' => 'banknote', 'roles' => ['admin', 'contador']],
+                                ['url' => '/contabilidad', 'label' => 'Registro de Gastos', 'icon' => 'banknote', 'roles' => ['alvaro', 'contador']],
                                 ['sep' => true],
-                                ['url' => '/adelantos', 'label' => 'Cuentas por Cobrar', 'icon' => 'handshake', 'roles' => ['recepcion', 'contador']],
+                                ['url' => '/adelantos', 'label' => 'Cuentas por Cobrar', 'icon' => 'handshake', 'roles' => ['recepcion', 'contador', 'admin']],
                                 ['url' => '/cuentas-por-pagar', 'label' => 'Cuentas por Pagar', 'icon' => 'credit', 'roles' => ['admin', 'contador']],
                                 ['sep' => true],
-                                ['url' => '/contabilidad', 'label' => 'Libro Diario', 'icon' => 'book', 'roles' => ['admin', 'contador']],
-                                ['url' => '/contabilidad/mayor', 'label' => 'Libro Mayor', 'icon' => 'book', 'roles' => ['admin', 'contador']],
-                                ['url' => '/contabilidad/resultados', 'label' => 'Estado de Resultados', 'icon' => 'chart', 'roles' => ['admin', 'contador']],
-                                ['url' => '/contabilidad/balance', 'label' => 'Balance General', 'icon' => 'chart', 'roles' => ['admin', 'contador']],
+                                ['url' => '/contabilidad', 'label' => 'Libro Diario', 'icon' => 'book', 'roles' => ['alvaro', 'contador']],
+                                ['url' => '/contabilidad/mayor', 'label' => 'Libro Mayor', 'icon' => 'book', 'roles' => ['alvaro', 'contador']],
+                                ['url' => '/contabilidad/resultados', 'label' => 'Estado de Resultados', 'icon' => 'chart', 'roles' => ['alvaro', 'contador']],
+                                ['url' => '/contabilidad/balance', 'label' => 'Balance General', 'icon' => 'chart', 'roles' => ['alvaro', 'contador']],
                                 ['sep' => true],
-                                ['url' => '/catalogo', 'label' => 'Catálogo de Cuentas', 'icon' => 'book', 'roles' => ['admin', 'contador']],
-                                ['url' => '/asientos', 'label' => 'Asientos Manuales', 'icon' => 'book', 'roles' => ['admin', 'contador']],
-                                ['url' => '/periodos', 'label' => 'Periodos y Cierre Fiscal', 'icon' => 'lock', 'roles' => ['admin', 'contador']],
+                                ['url' => '/catalogo', 'label' => 'Catálogo de Cuentas', 'icon' => 'book', 'roles' => ['alvaro', 'contador']],
+                                ['url' => '/asientos', 'label' => 'Asientos Manuales', 'icon' => 'book', 'roles' => ['alvaro', 'contador']],
+                                ['url' => '/periodos', 'label' => 'Periodos y Cierre Fiscal', 'icon' => 'lock', 'roles' => ['alvaro', 'contador']],
                                 ['sep' => true],
                                 ['url' => '/reportes', 'label' => 'Reportes', 'icon' => 'chart', 'roles' => ['admin', 'contador']],
                             ],
@@ -141,16 +156,85 @@
                                     @if(isset($item['sep']))
                                         <div class="border-t border-gray-100 my-1"></div>
                                     @else
+                                        @php
+                                            // Obtener contador contextual para este item del menú
+                                            $notificationService = app(\App\Services\NotificationService::class);
+                                            $contextualCounts = $notificationService->getContextualCounts();
+                                            $itemUrl = ltrim($item['url'], '/');
+                                            $badgeCount = $contextualCounts[$itemUrl] ?? 0;
+                                        @endphp
                                         <a href="{{ url($item['url']) }}"
-                                            class="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 hover:text-gray-900 transition">
+                                            class="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 hover:text-gray-900 transition relative">
                                             <x-nav-icon :name="$item['icon']" class="w-4 h-4 text-gray-400" />
                                             {{ $item['label'] }}
+                                            @if($badgeCount > 0)
+                                                <span class="absolute right-2 top-1/2 -translate-y-1/2 bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[18px] text-center">
+                                                    {{ $badgeCount > 9 ? '9+' : $badgeCount }}
+                                                </span>
+                                            @endif
                                         </a>
                                     @endif
                                 @endforeach
                             </div>
                         </div>
                     @endforeach
+                </div>
+
+                <!-- Campanita de Notificaciones -->
+                <div x-data="notificationBell()" class="relative" @notify.window="refreshCount()">
+                    <button @click="toggle()" @click.outside="open = false"
+                        class="relative p-2 rounded-lg text-gray-500 hover:text-gray-900 hover:bg-gray-100 transition cursor-pointer"
+                        aria-label="Notificaciones">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"></path></svg>
+                        <span x-show="unreadCount > 0" class="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center">
+                            <span x-text="unreadCount > 9 ? '9+' : unreadCount"></span>
+                        </span>
+                    </button>
+
+                    <!-- Dropdown de notificaciones -->
+                    <div x-show="open" x-transition:enter="transition ease-out duration-150" x-transition:enter-start="opacity-0 scale-95" x-transition:enter-end="opacity-100 scale-100" x-transition:leave="transition ease-in duration-100" x-transition:leave-start="opacity-100 scale-100" x-transition:leave-end="opacity-0 scale-95" style="display: none;"
+                        class="absolute right-0 mt-2 w-80 bg-white rounded-xl shadow-xl border border-gray-100 z-50 overflow-hidden">
+                        <div class="flex items-center justify-between px-4 py-3 border-b border-gray-100 bg-gray-50">
+                            <h3 class="font-bold text-gray-900">Notificaciones</h3>
+                            <button @click="markAllRead()" class="text-xs text-emerald-600 hover:text-emerald-700 font-semibold">Marcar todas</button>
+                        </div>
+                        <div class="max-h-96 overflow-y-auto">
+                            <template x-for="notif in notifications" :key="notif.id">
+                                <a :href="notif.data?.url || '#'" @click="handleNotificationClick(notif)"
+                                    class="flex items-start gap-3 px-4 py-3 hover:bg-gray-50 transition border-b border-gray-50 last:border-0"
+                                    :class="notif.read ? 'bg-white' : 'bg-blue-50'">
+                                    <div class="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center"
+                                        :class="getNotificationClasses(notif.type)">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <template x-if="isVentaType(notif.type)"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path></template>
+                                            <template x-if="isRechazoType(notif.type)"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"></path></template>
+                                            <template x-if="notif.type === 'caja_sin_cerrar' || notif.type === 'caja_diferencia'"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></template>
+                                            <template x-if="isStockType(notif.type)"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></template>
+                                            <template x-if="isCxType(notif.type)"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></template>
+                                            <template x-if="isCitaType(notif.type)"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></template>
+                                            <template x-if="isComisionType(notif.type) || notif.type === 'propina_recibida'"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></template>
+                                            <template x-if="isRRHHType(notif.type)"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path></template>
+                                            <template x-if="isBancoType(notif.type)"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h4M3 6h18a1 1 0 011 1v10a1 1 0 01-1 1H3a1 1 0 01-1-1V7a1 1 0 011-1z"></path></template>
+                                            <template x-if="isAlertaType(notif.type)"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></template>
+                                            <template x-if="isDefaultType(notif.type)"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></template>
+                                        </svg>
+                                    </div>
+                                    <div class="flex-1 min-w-0">
+                                        <p class="text-sm font-semibold text-gray-900" x-text="notif.title"></p>
+                                        <p class="text-xs text-gray-500 truncate" x-text="notif.message || 'Sin mensaje'"></p>
+                                        <p class="text-[10px] text-gray-400 mt-1" x-text="formatTime(notif.created_at)"></p>
+                                    </div>
+                                    <span x-show="!notif.read" class="flex-shrink-0 w-2 h-2 bg-emerald-500 rounded-full"></span>
+                                </a>
+                            </template>
+                            <div x-show="notifications.length === 0" class="px-4 py-8 text-center text-gray-500 text-sm">
+                                No hay notificaciones
+                            </div>
+                        </div>
+                        <div class="px-4 py-3 bg-gray-50 border-t border-gray-100 text-center">
+                            <a href="{{ route('notificaciones.index') }}" class="text-sm text-emerald-600 hover:text-emerald-700 font-semibold">Ver todas</a>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Usuario y Salir -->
@@ -221,6 +305,8 @@
             </div>
         </div>
     </div>
+
+    @include('components.pin-modal')
 
     @if(session('info') || session('success') || session('error'))
     <script>
