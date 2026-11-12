@@ -175,7 +175,11 @@
                 try {
                     let response = await fetch('/api/appointments', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                        credentials: 'same-origin',
+                        headers: {
+                            'Content-Type': 'application/json', 'Accept': 'application/json',
+                            'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content
+                        },
                         body: JSON.stringify(this.form)
                     });
                     if (response.ok) {
@@ -204,7 +208,11 @@
                 try {
                     let response = await fetch(`/api/appointments/${id}`, {
                         method: 'PUT',
-                        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                        credentials: 'same-origin',
+                        headers: {
+                            'Content-Type': 'application/json', 'Accept': 'application/json',
+                            'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content
+                        },
                         body: JSON.stringify({ status: 'completada' })
                     });
                     if (response.ok) {

@@ -68,9 +68,11 @@ class CitaController extends Controller
      * Update the specified resource in storage.
      */
     // El método update se usará cuando el estilista marque la cita como "completada"
-    public function update(Request $request, Cita $cita)
+    public function update(Request $request, Cita $appointment)
     {
-        $cita->update([
+        $request->validate(['status' => 'sometimes|required|in:pendiente,completada,cancelada,no_asistio']);
+
+        $appointment->update([
             'status' => $request->input('status', 'completada')
         ]);
         

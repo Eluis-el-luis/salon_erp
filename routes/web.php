@@ -10,6 +10,8 @@ use App\Http\Controllers\BancoController;
 use App\Http\Controllers\CajaChicaController;
 use App\Http\Controllers\CajaController;
 use App\Http\Controllers\ClienteController;
+use App\Http\Controllers\CitaController;
+use App\Http\Controllers\ArticuloController;
 use App\Http\Controllers\ContabilidadController;
 use App\Http\Controllers\CuentaContableController;
 use App\Http\Controllers\CuentaPorPagarController;
@@ -49,6 +51,14 @@ Route::post('/logout', [AutenticacionController::class, 'logout'])->name('logout
 // TODAS LAS RUTAS PROTEGIDAS (Requieren inicio de sesión)
 // =================================================================
 Route::middleware(['auth'])->group(function () {
+
+    // Compatibilidad de URL: mismos permisos que clientes y agenda web
+    // (todos los roles autenticados), con sesión y CSRF del grupo web.
+    Route::prefix('api')->group(function () {
+        Route::apiResource('clients', ClienteController::class);
+        Route::apiResource('items', ArticuloController::class);
+        Route::apiResource('appointments', CitaController::class);
+    });
 
     // -------------------------------------------------------------
     // NIVEL 1: GENERAL (Todos los roles autenticados)
