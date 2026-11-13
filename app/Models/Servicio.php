@@ -40,6 +40,11 @@ class Servicio extends Model
         return $this->hasMany(FormulaServicio::class, 'service_id');
     }
 
+    public function citas()
+    {
+        return $this->hasMany(Cita::class, 'service_id');
+    }
+
     public function categoria()
     {
         return $this->belongsTo(ServicioCategoria::class, 'service_category_id');

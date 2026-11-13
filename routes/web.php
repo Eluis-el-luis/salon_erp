@@ -82,9 +82,16 @@ Route::middleware(['auth'])->group(function () {
         Route::post('meta', [PanelController::class, 'guardarMeta'])->middleware('role:admin')->name('meta');
     });
 
-    Route::get('/agenda', function () {
-        $citas = Cita::with(['cliente', 'servicio'])
-            ->whereDate('appointment_date', today())
+    Route::get('/agenda', function (\Illuminate\Http\Request $request) {
+        $validator = validator(
+            $request->query(),
+            ['fecha' => 'sometimes|required|date_format:Y-m-d']
+        );
+        // Esta página es HTML: rechazar explícitamente, sin redirigir a otro día.
+        abort_if($validator->fails(), 422, 'Fecha inválida. Utilice AAAA-MM-DD.');
+        $fechaSeleccionada = $validator->validated()['fecha'] ?? now(config('app.timezone'))->toDateString();
+        $citas = Cita::with(['cliente', 'servicio', 'estilistas'])
+            ->whereDate('appointment_date', $fechaSeleccionada)
             ->orderBy('appointment_date', 'asc')
             ->get();
 
@@ -92,7 +99,7 @@ Route::middleware(['auth'])->group(function () {
         $servicios = Servicio::where('is_active', true)->orderBy('name', 'asc')->get();
         $estilistas = Usuario::where('role', 'estilista')->where('is_active', true)->get();
 
-        return view('appointments.index', compact('citas', 'clientes', 'servicios', 'estilistas'));
+        return view('appointments.index', compact('citas', 'clientes', 'servicios', 'estilistas', 'fechaSeleccionada'));
     });
 
     Route::get('/asistencia', [AsistenciaController::class, 'index']);

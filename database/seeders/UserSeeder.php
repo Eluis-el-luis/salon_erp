@@ -2,70 +2,40 @@
 
 namespace Database\Seeders;
 
+use App\Models\{Empleado, Rol, Usuario};
 use Illuminate\Database\Seeder;
-use App\Models\Usuario;
-use App\Models\Rol;
-use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\{DB, Hash, Validator};
 
+/** Propietario local: configuración solo en memoria desde salon:propietario. */
 class UserSeeder extends Seeder
 {
-    public function run()
+    public function run(): void
     {
-        // 1. Álvaro (Propietario) - Rol supremo con bypass global
-        $rolAlvaro = Rol::where('name', 'Álvaro (Propietario)')->first();
-        Usuario::create([
-            'name' => 'Álvaro Rugama',
-            'email' => 'admin@salon.com',
-            'password' => Hash::make('admin123'),
-            'role_id' => $rolAlvaro?->id,
-            'role' => 'alvaro',
-            'is_active' => true,
-        ]);
-
-        // 2. Administrador Operativo - Gestión operativa (inventario, RRHH, caja), SIN contabilidad
-        $rolAdmin = Rol::where('name', 'Administrador')->first();
-        Usuario::create([
-            'name' => 'Administrador Operativo',
-            'email' => 'adminops@salon.com',
-            'password' => Hash::make('admin123'),
-            'role_id' => $rolAdmin?->id,
-            'role' => 'admin',
-            'is_active' => true,
-        ]);
-
-        // 3. Contador - Auditoría financiera, acceso completo a contabilidad
-        $rolContador = Rol::where('name', 'Contador')->first();
-        Usuario::create([
-            'name' => 'Contador del Salón',
-            'email' => 'contador@salon.com',
-            'password' => Hash::make('contador123'),
-            'role_id' => $rolContador?->id,
-            'role' => 'contador',
-            'is_active' => true,
-        ]);
-
-        // 4. Recepcionista / Cajera
-        $rolRecepcion = Rol::where('name', 'Recepción / Caja')->first();
-        Usuario::create([
-            'name' => 'Ana Recepción',
-            'email' => 'caja@salon.com',
-            'password' => Hash::make('caja123'),
-            'role_id' => $rolRecepcion?->id,
-            'role' => 'recepcion',
-            'is_active' => true,
-        ]);
-
-        // 5. Estilista de Prueba
-        $rolEstilista = Rol::where('name', 'Estilista')->first();
-        Usuario::create([
-            'name' => 'Carlos Estilista',
-            'email' => 'estilista@salon.com',
-            'password' => Hash::make('estilista123'),
-            'role_id' => $rolEstilista?->id,
-            'role' => 'estilista',
-            'salario_fijo' => 5000,
-            'comision_servicio' => 40,
-            'is_active' => true,
-        ]);
+        $data = config('salon.bootstrap_owner');
+        if (! is_array($data) || Validator::make($data, [
+            'name' => 'required|string|max:255', 'email' => 'required|email|max:255',
+            'password' => 'required|string|min:12', 'pin' => ['required', 'string', 'regex:/^\d{4,6}$/'],
+        ])->fails()) {
+            throw new \RuntimeException('Configure el propietario mediante salon:propietario; no hay credenciales predeterminadas.');
+        }
+        DB::transaction(function () use ($data) {
+            $this->call(RoleSeeder::class);
+            $role = Rol::where('name', 'Álvaro (Propietario)')->sole();
+            $owner = Usuario::firstOrCreate(['email' => $data['email']], [
+                'name' => $data['name'], 'password' => Hash::make($data['password']),
+                'pin_seguridad' => Hash::make($data['pin']),
+                'role' => 'alvaro', 'role_id' => $role->id, 'is_active' => true,
+            ]);
+            if ($owner->role !== 'alvaro' || $owner->role_id !== $role->id || ! $owner->is_active) {
+                throw new \RuntimeException('La cuenta existente no es un propietario activo coherente; no se modificó.');
+            }
+            if (! is_string($owner->pin_seguridad) || ! Hash::isHashed($owner->pin_seguridad)) {
+                throw new \RuntimeException('La cuenta existente requiere configuración explícita de PIN; no se modificó.');
+            }
+            // No cambiar contraseña, PIN, contrato ni salario al repetir el seeder.
+            if (! Empleado::where('user_id', $owner->id)->exists()) {
+                Empleado::crearParaUsuario($owner);
+            }
+        });
     }
 }

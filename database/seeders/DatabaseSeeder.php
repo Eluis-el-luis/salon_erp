@@ -3,23 +3,21 @@
 namespace Database\Seeders;
 
 use Illuminate\Database\Seeder;
+use Illuminate\Support\Facades\DB;
 
 class DatabaseSeeder extends Seeder
 {
     public function run(): void
     {
-        // EL ORDEN ES ESTRICTO PARA EVITAR ERRORES DE LLAVES FORÁNEAS
-        $this->call([
-            RoleSeeder::class,
-            UserSeeder::class,
-            ProviderSeeder::class, // Proveedores antes que Items
-            ItemSeeder::class,
-            ServiceSeeder::class,  // Servicios antes que Fórmulas
-            FormulaSeeder::class,
-            ContabilidadBaseSeeder::class,
-            CuentasComplementariasSeeder::class,
-            AdminCatalogoSeeder::class, // Grupos de clientes, categorías de servicios y plantillas de impuestos
-            RrhhBaseSeeder::class, // Tipos de ausencia, turnos y estructura salarial estándar
-        ]);
+        // Configuración esencial. Credenciales y demostraciones son pasos explícitos.
+        DB::transaction(function () {
+            $this->call([
+                RoleSeeder::class,
+                ContabilidadBaseSeeder::class,
+                CuentasComplementariasSeeder::class,
+                AdminCatalogoSeeder::class, // Grupos, categorías y plantillas fiscales
+                RrhhBaseSeeder::class, // Ausencias, turnos y estructura salarial
+            ]);
+        });
     }
 }

@@ -2,18 +2,38 @@
 
 @section('content')
 <!-- El contenedor principal define el "estado" de Alpine con x-data -->
-<div x-data="appointmentManager()">
+<div x-data="appointmentManager(@js($fechaSeleccionada))">
     
     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
         <div>
-            <h2 class="page-title">Agenda del Día</h2>
-            <p class="page-subtitle">Citas programadas y atención del equipo.</p>
+            <h2 class="page-title">Agenda — {{ \Carbon\Carbon::parse($fechaSeleccionada)->format('d/m/Y') }}</h2>
+            <p class="page-subtitle">Citas programadas y atención del equipo. Horario del salón.</p>
         </div>
-        <button @click="openModal = true" class="btn btn-primary">
+        <button @click="newAppointment()" class="btn btn-primary">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
             Nueva Cita
         </button>
     </div>
+
+    <form method="GET" action="{{ url('/agenda') }}" class="flex flex-wrap items-end gap-3 mb-4">
+        @foreach(request()->except('fecha', 'page') as $key => $value)
+            @if(is_scalar($value))
+                <input type="hidden" name="{{ $key }}" value="{{ $value }}">
+            @endif
+        @endforeach
+        <div>
+            <label for="agenda-fecha" class="block text-sm font-medium text-gray-700">Día seleccionado</label>
+            <input id="agenda-fecha" type="date" name="fecha" value="{{ $fechaSeleccionada }}" required class="border-gray-300 rounded-md">
+        </div>
+        <button type="submit" class="btn btn-primary">Consultar</button>
+        <a href="{{ request()->fullUrlWithoutQuery(['fecha', 'page']) }}" class="btn">Hoy</a>
+    </form>
+
+    <div x-cloak x-show="createdAppointment" role="status" aria-live="polite" class="mb-4 rounded-lg bg-emerald-50 p-4 text-emerald-900">
+        <p x-text="creationMessage()"></p>
+        <a :href="createdAppointment?.url" class="font-bold underline">Ver el día de la cita</a>
+    </div>
+    <p x-cloak x-show="error" x-text="error" role="alert" class="mb-4 text-red-700"></p>
 
     <!-- Tabla de Citas -->
     <div class="card overflow-hidden">
@@ -85,7 +105,7 @@
                     <!-- Mensaje por defecto si la base de datos está vacía para el día de hoy -->
                     <tr>
                         <td colspan="6" class="px-6 py-4 whitespace-nowrap text-sm text-center text-gray-500">
-                            No hay citas agendadas para hoy.
+                            No hay citas agendadas para el {{ \Carbon\Carbon::parse($fechaSeleccionada)->format('d/m/Y') }}.
                         </td>
                     </tr>
                 @endforelse
@@ -106,6 +126,7 @@
                 
                 <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
                     <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4">Agendar Nueva Cita</h3>
+                    <p x-show="error" x-text="error" role="alert" class="mb-3 text-red-700"></p>
                     
                     <form>
                         <!-- Reemplaza tus inputs actuales por estos selects -->
@@ -148,8 +169,8 @@
                 
                 <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
                     <!-- Conectamos el botón de guardar a nuestra función saveAppointment() -->
-                    <button @click="saveAppointment()" type="button" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-emerald-600 text-base font-medium text-white hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 sm:ml-3 sm:w-auto sm:text-sm">
-                        Guardar Cita
+                    <button @click="saveAppointment()" :disabled="saving" type="button" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-emerald-600 text-base font-medium text-white hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 sm:ml-3 sm:w-auto sm:text-sm disabled:opacity-50">
+                        <span x-text="saving ? 'Guardando…' : 'Guardar Cita'"></span>
                     </button>
                     <button @click="openModal = false" type="button" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-emerald-500 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">
                         Cancelar
@@ -163,15 +184,51 @@
 
 
 <script>
-    function appointmentManager() {
+    function appointmentManager(selectedDate) {
         return {
             openModal: false,
+            saving: false,
+            error: '',
+            createdAppointment: null,
             form: {
                 client_id: '', service_id: '', stylists: [], appointment_date: '', duration_minutes: 45
             },
             
+            resetForm() {
+                this.form = { client_id: '', service_id: '', stylists: [], appointment_date: '', duration_minutes: 45 };
+            },
+
+            newAppointment() {
+                this.resetForm();
+                this.error = '';
+                this.openModal = true;
+            },
+
+            creationMessage() {
+                if (!this.createdAppointment) return '';
+                const { id, date, time } = this.createdAppointment;
+                const [year, month, day] = date.split('-');
+                return `Cita #${id} guardada para el ${day}/${month}/${year} a las ${time}. Puedes consultar su día aunque no sea el seleccionado (${selectedDate}).`;
+            },
+
+            responseError(status, data) {
+                if (status === 422) {
+                    const labels = { client_id: 'cliente', service_id: 'servicio', stylists: 'estilistas', appointment_date: 'fecha y hora', duration_minutes: 'duración', notes: 'notas', status: 'estado', fecha: 'día seleccionado' };
+                    const fields = [...new Set(Object.keys(data?.errors || {}).map(key => labels[key.split('.')[0]]).filter(Boolean))];
+                    return 'Hay errores de validación.' + (fields.length ? ` Revisa: ${fields.join(', ')}.` : ' Revisa los datos de la cita.');
+                }
+                return ({
+                    401: 'No has iniciado sesión. Inicia sesión antes de continuar.',
+                    403: 'Acceso denegado. No tienes permiso para esta operación.',
+                    419: 'La sesión o el token de seguridad expiró. Recarga la página antes de continuar.',
+                    500: 'El servidor no pudo completar la operación. Comprueba la agenda antes de reintentar.'
+                })[status] || 'No se pudo confirmar la operación. Comprueba la agenda antes de reintentar.';
+            },
+
             async saveAppointment() {
-                
+                if (this.saving) return;
+                this.saving = true;
+                this.error = '';
                 try {
                     let response = await fetch('/api/appointments', {
                         method: 'POST',
@@ -182,14 +239,31 @@
                         },
                         body: JSON.stringify(this.form)
                     });
+                    const data = await response.json().catch(() => null);
                     if (response.ok) {
-                        window.dispatchEvent(new CustomEvent('notify', { detail: '¡Cita agendada correctamente!' }));
+                        const appointment = data?.appointment;
+                        // DATETIME local guardado: extraer componentes, sin convertir a UTC.
+                        const saved = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})(?::\d{2})?$/.exec(appointment?.appointment_date || '');
+                        if (!Number.isInteger(appointment?.id) || !saved) {
+                            this.error = 'El servidor respondió sin una confirmación legible. Comprueba la agenda antes de reintentar.';
+                            return;
+                        }
+                        const url = new URL(window.location.href);
+                        url.pathname = '/agenda';
+                        url.searchParams.set('fecha', saved[1]);
+                        url.searchParams.delete('page');
+                        url.hash = '';
+                        this.createdAppointment = { id: appointment.id, date: saved[1], time: saved[2], url: url.href };
                         this.openModal = false;
-                        setTimeout(() => { window.location.reload(); }, 1000);
+                        this.resetForm();
                     } else {
-                        window.dispatchEvent(new CustomEvent('notify', { detail: 'Error: Revisa los campos.' }));
+                        this.error = this.responseError(response.status, data);
                     }
-                } catch (error) { console.error(error); }
+                } catch {
+                    this.error = 'Fallo de red: no se pudo confirmar la operación. Comprueba la agenda antes de reintentar.';
+                } finally {
+                    this.saving = false;
+                }
             },
 
             // --- FLUXO DE COMPLETAR CITA ---
@@ -204,7 +278,7 @@
             },
 
             async processComplete(id) {
-                
+                this.error = '';
                 try {
                     let response = await fetch(`/api/appointments/${id}`, {
                         method: 'PUT',
@@ -218,8 +292,12 @@
                     if (response.ok) {
                         window.dispatchEvent(new CustomEvent('notify', { detail: '¡Cita marcada como completada!' }));
                         setTimeout(() => { window.location.reload(); }, 1000);
+                    } else {
+                        this.error = this.responseError(response.status, await response.json().catch(() => null));
                     }
-                } catch (error) { console.error(error); }
+                } catch {
+                    this.error = 'Fallo de red: no se pudo confirmar la operación. Comprueba la agenda antes de reintentar.';
+                }
             },
 
         }

@@ -30,12 +30,6 @@ class Articulo extends Model
         'current_volume',
     ];
 
-    // Las veces que este articulo ha sido agendado
-    public function citas()
-    {
-        return $this->hasMany(Cita::class, 'service_id');
-    }
-
     public function detallesVenta()
     {
         return $this->hasMany(DetalleVenta::class, 'item_id');

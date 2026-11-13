@@ -9,15 +9,13 @@ class ProviderSeeder extends Seeder
 {
     public function run()
     {
-        Proveedor::create([
-            'name' => 'L\'Oréal Professionnel',
+        Proveedor::withTrashed()->firstOrCreate(['name' => 'L\'Oréal Professionnel'], [
             'contact_name' => 'Distribuidora Central',
             'phone' => '8888-0000',
             'email' => 'ventas@loreal.com'
         ]);
 
-        Proveedor::create([
-            'name' => 'Truss Professional',
+        Proveedor::withTrashed()->firstOrCreate(['name' => 'Truss Professional'], [
             'contact_name' => 'Carlos López',
             'phone' => '8888-1111'
         ]);

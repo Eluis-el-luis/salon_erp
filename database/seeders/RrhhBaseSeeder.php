@@ -32,10 +32,9 @@ class RrhhBaseSeeder extends Seeder
         ];
 
         foreach ($tipos as $tipo) {
-            DB::table('leave_types')->updateOrInsert(
-                ['codigo' => $tipo['codigo']],
-                $tipo + ['activo' => true, 'created_at' => now(), 'updated_at' => now()],
-            );
+            if (! DB::table('leave_types')->where('codigo', $tipo['codigo'])->exists()) {
+                DB::table('leave_types')->insert($tipo + ['activo' => true, 'created_at' => now(), 'updated_at' => now()]);
+            }
         }
 
         // ------------------------------------------------------------------
@@ -48,10 +47,9 @@ class RrhhBaseSeeder extends Seeder
         ];
 
         foreach ($turnos as $turno) {
-            DB::table('shifts')->updateOrInsert(
-                ['nombre' => $turno['nombre']],
-                $turno + ['activo' => true, 'created_at' => now(), 'updated_at' => now()],
-            );
+            if (! DB::table('shifts')->where('nombre', $turno['nombre'])->exists()) {
+                DB::table('shifts')->insert($turno + ['activo' => true, 'created_at' => now(), 'updated_at' => now()]);
+            }
         }
 
         // ------------------------------------------------------------------
@@ -80,10 +78,9 @@ class RrhhBaseSeeder extends Seeder
         ];
 
         foreach ($detalles as $detalle) {
-            DB::table('salary_structure_details')->updateOrInsert(
-                ['salary_structure_id' => $estructura->id, 'codigo' => $detalle['codigo']],
-                $detalle + ['cuenta_contable_id' => null, 'activo' => true, 'created_at' => now(), 'updated_at' => now()],
-            );
+            if (! DB::table('salary_structure_details')->where('salary_structure_id', $estructura->id)->where('codigo', $detalle['codigo'])->exists()) {
+                DB::table('salary_structure_details')->insert($detalle + ['salary_structure_id' => $estructura->id, 'cuenta_contable_id' => null, 'activo' => true, 'created_at' => now(), 'updated_at' => now()]);
+            }
         }
     }
 }

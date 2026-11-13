@@ -9,15 +9,14 @@ class RoleSeeder extends Seeder
 {
     public function run()
     {
-        // Rol supremo: Propietario con privilegios absolutos (bypass global en middleware)
-        Rol::create(['name' => 'Álvaro (Propietario)']); // ID 1
-        // Administrador operativo: gestión de inventario, RRHH, caja, NO contabilidad
-        Rol::create(['name' => 'Administrador']);        // ID 2
-        // Contador / Auditoría financiera: acceso completo a contabilidad, bancos, CxP
-        Rol::create(['name' => 'Contador']);             // ID 3
-        // Recepción / Caja: POS, ventas, arqueo, mesa de cambio, adelantos
-        Rol::create(['name' => 'Recepción / Caja']);     // ID 4
-        // Estilista: agenda, servicios, comisiones, portal colaborador
-        Rol::create(['name' => 'Estilista']);            // ID 5
+        $names = ['Álvaro (Propietario)', 'Administrador', 'Contador', 'Recepción / Caja', 'Estilista'];
+        foreach ($names as $name) {
+            if (Rol::where('name', $name)->count() > 1) {
+                throw new \RuntimeException('Hay roles duplicados; requieren conciliación explícita.');
+            }
+        }
+        foreach ($names as $name) {
+            Rol::firstOrCreate(['name' => $name]);
+        }
     }
 }

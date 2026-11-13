@@ -2,7 +2,6 @@
 
 namespace Tests\Feature;
 
-use App\Models\Articulo;
 use App\Models\Cita;
 use App\Models\Cliente;
 use App\Models\Rol;
@@ -43,13 +42,8 @@ class ApiAgendaSecurityTest extends TestCase
     {
         $client = Cliente::create(['name' => 'Cliente H12']);
         $stylist = $this->user('estilista');
-        // Compatibilidad heredada explícita: ambos catálogos tienen el mismo ID.
-        // No cambia FK ni oculta el caso de IDs divergentes probado más abajo.
-        $item = Articulo::create(['producto' => 'Item H12', 'type' => 'servicio', 'precio_c' => 100, 'existencia_actual' => 0]);
-        $service = new Servicio;
-        $service->id = $item->id;
-        $service->fill(['name' => 'Servicio H12', 'price' => 100, 'duration' => 45, 'is_active' => true])->save();
-        return ['client_id' => $client->id, 'service_id' => $item->id,
+        $service = Servicio::create(['name' => 'Servicio H12', 'price' => 100, 'duration' => 45, 'is_active' => true]);
+        return ['client_id' => $client->id, 'service_id' => $service->id,
             'stylists' => [$stylist->id], 'appointment_date' => today()->setHour(10)->toDateTimeString(), 'duration_minutes' => 45];
     }
 
@@ -137,14 +131,14 @@ class ApiAgendaSecurityTest extends TestCase
         $this->get('/api/clients/'.$client->id)->assertOk()->assertJsonPath('cliente.name', 'Web');
     }
 
-    public function test_services_only_id_still_exposes_the_documented_legacy_catalog_mismatch(): void
+    public function test_services_only_id_is_accepted_after_h13(): void
     {
         $data = $this->fixture();
         $service = Servicio::create(['name' => 'Solo services', 'price' => 200, 'duration' => 45, 'is_active' => true]);
         $this->assertDatabaseMissing('items', ['id' => $service->id]);
         $this->actingAs($this->user());
-        $this->post('/api/appointments', array_replace($data, ['service_id' => $service->id]))->assertUnprocessable();
-        $this->assertSame(0, Cita::count());
+        $this->post('/api/appointments', array_replace($data, ['service_id' => $service->id]))->assertCreated();
+        $this->assertSame(1, Cita::count());
     }
 }
 

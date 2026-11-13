@@ -49,7 +49,12 @@ class CuentasComplementariasSeeder extends Seeder
 
     protected function asegurar(string $codigo, string $nombre, string $tipo, string $naturaleza, string $codigoPadre): void
     {
-        if (DB::table('cuentas_contables')->where('codigo', $codigo)->exists()) {
+        $existing = DB::table('cuentas_contables')->where('codigo', $codigo)->first();
+        if ($existing) {
+            if ($existing->tipo !== $tipo || $existing->naturaleza !== $naturaleza) {
+                throw new \RuntimeException('Una cuenta complementaria tiene clasificación incompatible; requiere revisión explícita.');
+            }
+            DB::table('cuentas_contables')->where('codigo', $codigo)->update(['is_system_account' => true]);
             return;
         }
 
@@ -67,6 +72,7 @@ class CuentasComplementariasSeeder extends Seeder
             'nivel' => $padre->nivel + 1,
             'permite_movimiento' => true,
             'activa' => true,
+            'is_system_account' => true,
             'created_at' => now(),
             'updated_at' => now(),
         ]);

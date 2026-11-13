@@ -32,7 +32,7 @@ class Cita extends Model
         return $this->belongsToMany(Usuario::class, 'appointment_user', 'appointment_id', 'user_id');
     }   
 
-    // La cita es para un servicio específico (item)
+    // El servicio comercial pertenece al catálogo services.
     public function servicio()
     {
         return $this->belongsTo(Servicio::class, 'service_id');

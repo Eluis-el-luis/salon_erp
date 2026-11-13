@@ -7,14 +7,17 @@ use App\Models\Cliente;
 use App\Models\Usuario;
 use App\Models\Articulo;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class CitaController extends Controller
 {
-    public function index()
+    public function index(Request $request)
     {
+        $validated = $request->validate(['fecha' => 'sometimes|required|date_format:Y-m-d']);
+        $fecha = $validated['fecha'] ?? now(config('app.timezone'))->toDateString();
         // Traemos las citas con sus estilistas y servicios
         $citas = Cita::with(['cliente', 'estilistas', 'servicio'])
-                            ->whereDate('appointment_date', today())
+                            ->whereDate('appointment_date', $fecha)
                             ->orderBy('appointment_date', 'asc')
                             ->get();
 
@@ -25,7 +28,7 @@ class CitaController extends Controller
     {
         $validatedData = $request->validate([
             'client_id' => 'required|exists:clients,id',
-            'service_id' => 'required|exists:items,id',
+            'service_id' => 'required|exists:services,id',
             'appointment_date' => 'required|date',
             'stylists' => 'required|array', // Ahora validamos que sea un arreglo de estilistas
             'stylists.*' => 'exists:users,id',
@@ -33,17 +36,21 @@ class CitaController extends Controller
             'notes' => 'nullable|string'
         ]);
 
-        $cita = Cita::create([
-            'client_id' => $validatedData['client_id'],
-            'service_id' => $validatedData['service_id'],
-            'appointment_date' => $validatedData['appointment_date'],
-            'duration_minutes' => $validatedData['duration_minutes'] ?? 45,
-            'notes' => $validatedData['notes'] ?? null,
-            'status' => 'pendiente'
-        ]);
+        $cita = DB::transaction(function () use ($validatedData) {
+            $cita = Cita::create([
+                'client_id' => $validatedData['client_id'],
+                'service_id' => $validatedData['service_id'],
+                'appointment_date' => $validatedData['appointment_date'],
+                'duration_minutes' => $validatedData['duration_minutes'] ?? 45,
+                'notes' => $validatedData['notes'] ?? null,
+                'status' => 'pendiente'
+            ]);
 
-        // Sincronizamos la tabla intermedia con los estilistas seleccionados
-        $cita->estilistas()->sync($validatedData['stylists']);
+            // Sincronizamos la tabla intermedia con los estilistas seleccionados
+            $cita->estilistas()->sync($validatedData['stylists']);
+
+            return $cita->refresh();
+        });
 
         return response()->json(['message' => 'Cita agendada exitosamente', 'appointment' => $cita], 201);
     }

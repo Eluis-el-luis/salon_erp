@@ -27,7 +27,7 @@ class AdminCatalogoSeeder extends Seeder
         ];
 
         foreach ($grupos as $grupo) {
-            ClienteGrupo::updateOrCreate(['name' => $grupo['name']], $grupo);
+            ClienteGrupo::firstOrCreate(['name' => $grupo['name']], $grupo);
         }
 
         // ------------------------------------------------------------------
@@ -42,13 +42,13 @@ class AdminCatalogoSeeder extends Seeder
         ];
 
         foreach ($categorias as $categoria) {
-            ServicioCategoria::updateOrCreate(['name' => $categoria['name']], $categoria);
+            ServicioCategoria::firstOrCreate(['name' => $categoria['name']], $categoria);
         }
 
         // ------------------------------------------------------------------
         // PLANTILLAS DE IMPUESTOS (reglas fiscales enlazables al servicio)
         // ------------------------------------------------------------------
-        PlantillaImpuesto::updateOrCreate(['name' => 'Exento'], ['rate' => 0, 'is_default' => true]);
-        PlantillaImpuesto::updateOrCreate(['name' => 'IVA 15%'], ['rate' => 15, 'is_default' => false]);
+        PlantillaImpuesto::firstOrCreate(['name' => 'Exento'], ['rate' => 0, 'is_default' => true]);
+        PlantillaImpuesto::firstOrCreate(['name' => 'IVA 15%'], ['rate' => 15, 'is_default' => false]);
     }
 }

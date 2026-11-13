@@ -18,7 +18,7 @@ try {
         }
     }
     $phase = $argv[2] ?? '05';
-    if (! in_array($phase, ['05', '06', 'H12'], true)) { throw new RuntimeException('Fase inválida'); }
+    if (! in_array($phase, ['05', '06', 'H12', 'H14A', 'H13', 'H13B', 'H13C'], true)) { throw new RuntimeException('Fase inválida'); }
     $file = dirname(__DIR__, 2).'/storage/app/private/isolation-'.$phase.'-before.json';
     if (($argv[1] ?? '') === 'before') {
         $handle = fopen($file, 'x');
@@ -28,7 +28,7 @@ try {
         fclose($handle);
     } elseif (($argv[1] ?? '') === 'after') {
         $baseline = json_decode(file_get_contents($file), true, 512, JSON_THROW_ON_ERROR);
-        if ($phase !== '05') {
+        if (! in_array($phase, ['05', 'H13C'], true)) {
             if ($snapshot['salon_erp'] !== $baseline['salon_erp']) { throw new RuntimeException('Diferencias en desarrollo'); }
             echo "DEVELOPMENT_ALL_COUNTS_CONTENT_AND_SCHEMA_EQUAL=True\n";
         } else {

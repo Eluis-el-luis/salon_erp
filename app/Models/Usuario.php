@@ -76,7 +76,7 @@ class Usuario extends Authenticatable
     // Las citas que el estilista tiene agendadas
     public function citas()
     {
-        return $this->hasMany(Cita::class, 'stylist_id');
+        return $this->belongsToMany(Cita::class, 'appointment_user', 'user_id', 'appointment_id');
     }
 
     public function asistencias()
