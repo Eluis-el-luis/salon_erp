@@ -1,6 +1,6 @@
 <?php
 
-// Proceso hijo exclusivo de H16. El destino NO se recibe por argumentos o stdin.
+// Proceso compartido H16/H15. El destino NO se recibe por argumentos o stdin.
 ini_set('zend.exception_ignore_args','1');
 try {
     require dirname(__DIR__).'/bootstrap.php';
@@ -32,13 +32,15 @@ try {
     $db->beginTransaction();
     // Snapshot anterior deliberado: la lectura actual debe ver el commit del rival.
     $db->table('appointments')->count();
-    $request=\Illuminate\Http\Request::create('/api/appointments','POST',$input['payload'],[],[],['HTTP_ACCEPT'=>'application/json']);
+    $editing=($input['operation']??'reserve')==='edit';
+    $uri=$editing?'/api/appointments/'.(int)$input['appointment_id'].'/details':'/api/appointments';
+    $request=\Illuminate\Http\Request::create($uri,$editing?'PUT':'POST',$input['payload'],[],[],['HTTP_ACCEPT'=>'application/json']);
     $kernel=$app->make(\Illuminate\Contracts\Http\Kernel::class);
     $response=$kernel->handle($request);
     $json=json_decode($response->getContent(),true);
-    if($response->getStatusCode()===201) $db->commit(); else $db->rollBack();
+    if(in_array($response->getStatusCode(),[200,201],true)) $db->commit(); else $db->rollBack();
     $kernel->terminate($request,$response);
-    echo json_encode(['event'=>'result','status'=>$response->getStatusCode(),'id'=>$json['appointment']['id']??null,'conflict'=>isset($json['errors']['availability']),'connection'=>$connection],JSON_THROW_ON_ERROR).PHP_EOL;
+    echo json_encode(['event'=>'result','status'=>$response->getStatusCode(),'id'=>$json['appointment']['id']??null,'conflict'=>isset($json['errors']['availability'])||isset($json['errors']['edit_conflict']),'connection'=>$connection],JSON_THROW_ON_ERROR).PHP_EOL;
     $db->disconnect();
 } catch(Throwable $e) {
     if(isset($db)) { while($db->transactionLevel()>0) $db->rollBack(); $db->disconnect(); }

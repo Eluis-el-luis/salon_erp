@@ -191,3 +191,27 @@ Cada entrega debe incluir un escenario que falle antes y pase después, rollback
 - `php vendor/phpunit/phpunit/phpunit --list-tests`: bloqueado porque falta `mbstring`; ni siquiera inició el listado de pruebas.
 - No se ejecutó la suite financiera. Usa `RefreshDatabase`; AGENTS.md §9 exige autorización explícita y confirmación del entorno/base antes de recrear tablas. `phpunit.xml` declara `salon_erp_test`, pero esa declaración no reemplaza confirmar la configuración efectiva. El candado de `tests/TestCase.php` está después de `parent::setUp()`, por lo que debe revisarse su ejecución previa a cualquier inicialización destructiva.
 - Las propuestas no incluyen validar tasas legales de nómina ni emitir un dictamen fiscal; se evaluó coherencia interna del código.
+
+## Mejoras visuales transversales pendientes
+
+### UI-01 · Pendiente · Desbordamiento horizontal en tablas administrativas
+
+**Origen:** comprobación manual del propietario durante H16. No se realizó una
+verificación visual adicional al registrar este hallazgo.
+
+**Comportamiento observado:** en la agenda, cuando hay citas con distintos
+estados y algunas filas presentan varias acciones, la columna Acciones puede
+extenderse fuera de la tarjeta y cortar botones o texto. El propietario también
+ha observado problemas similares en Aprobaciones pendientes y Asistencia.
+
+**Planificación:** atender después de los hallazgos funcionales de la auditoría.
+No corregirlo dentro de H15/H16 ni añadir cambios CSS por este hallazgo.
+
+**Revisión futura:** analizar el patrón compartido de tablas, anchos de columnas,
+contenedores, overflow y adaptación a pantallas pequeñas. Buscar una solución
+reutilizable que conserve las reglas de negocio y acciones de cada módulo.
+
+**Criterios de aceptación futuros:** botones y texto completos y accesibles en
+las tres pantallas, con distintas combinaciones de estados/acciones y tamaños
+de pantalla; comportamiento de tablas y navegación comprensible, sin cambios
+en la lógica funcional. La causa concreta y la solución quedan por verificar.

@@ -57,6 +57,7 @@ Route::middleware(['auth'])->group(function () {
     Route::prefix('api')->group(function () {
         Route::apiResource('clients', ClienteController::class);
         Route::apiResource('items', ArticuloController::class);
+        Route::put('appointments/{appointment}/details', [CitaController::class, 'updateDetails']);
         Route::apiResource('appointments', CitaController::class);
     });
 

@@ -22,8 +22,7 @@ class AgendaService
             $this->bloquearEstilistas($ids);
             $servicio = Servicio::findOrFail($data['service_id']);
             $duracion = $this->duracion($servicio->getRawOriginal('duration'));
-            $inicio = CarbonImmutable::parse($data['appointment_date'], config('app.timezone'))
-                ->setTimezone(config('app.timezone'));
+            $inicio = $this->inicio($data['appointment_date']);
             $this->sinConflictos($ids, $inicio, $duracion);
             $cita = Cita::create([
                 'client_id' => $data['client_id'], 'service_id' => $servicio->id,
@@ -32,6 +31,64 @@ class AgendaService
                 'status' => 'pendiente',
             ]);
             $cita->estilistas()->sync($ids);
+            return $cita->refresh();
+        }, 3);
+    }
+
+    public function paraEditar(int $id): array
+    {
+        return DB::transaction(function () use ($id) {
+            $cita = $this->bloquearCitas([$id])->get($id);
+            $comercial = $cita->status === 'pendiente' && !$this->ventaVigente($id);
+            return [
+                'appointment' => [
+                    'id' => $cita->id, 'client_id' => $cita->client_id, 'service_id' => $cita->service_id,
+                    'appointment_date' => $cita->appointment_date, 'duration_minutes' => $cita->duration_minutes,
+                    'stylists' => $cita->estilistas->modelKeys(), 'notes' => $cita->notes, 'status' => $cita->status,
+                ],
+                'edit_token' => $this->versionEdicion($cita), 'can_edit_commercial' => $comercial,
+                // Solo etiquetas del catálogo ya visible en agenda, sin datos de venta o RRHH.
+                'choices' => [
+                    'clients' => [['id' => $cita->client_id, 'label' => $cita->cliente?->name ?? 'Cliente #'.$cita->client_id]],
+                    'services' => [['id' => $cita->service_id, 'label' => $cita->servicio?->name ?? 'Servicio #'.$cita->service_id]],
+                    'stylists' => $cita->estilistas->map(fn($u) => ['id' => $u->id, 'label' => $u->name])->all(),
+                ],
+            ];
+        }, 3);
+    }
+
+    public function editar(int $id, array $data): Cita
+    {
+        return DB::transaction(function () use ($id, $data) {
+            $adicionales = array_key_exists('stylists', $data) ? $this->ids($data['stylists']) : [];
+            $cita = $this->bloquearCitas([$id], $adicionales)->get($id);
+            if (!hash_equals($this->versionEdicion($cita), $data['edit_token'])) {
+                throw ValidationException::withMessages(['edit_conflict' => 'La cita cambió desde que abrió el formulario. Vuelva a abrir Editar.'])->status(409);
+            }
+            $anteriores = $this->ids($cita->estilistas->modelKeys(), false);
+            $nuevos = array_key_exists('stylists', $data) ? $adicionales : $anteriores;
+            $cliente = (int)($data['client_id'] ?? $cita->client_id);
+            $servicio = (int)($data['service_id'] ?? $cita->service_id);
+            $inicio = $this->inicio($data['appointment_date'] ?? $cita->appointment_date);
+            $fecha = $inicio->format('Y-m-d H:i:s');
+            $cambioServicio = $servicio !== (int)$cita->service_id;
+            $comercial = $cliente !== (int)$cita->client_id || $cambioServicio
+                || $fecha !== $cita->appointment_date || $nuevos !== $anteriores;
+            if ($comercial && ($cita->status !== 'pendiente' || $this->ventaVigente($id))) {
+                throw ValidationException::withMessages(['editing' => 'Esta cita solo permite editar notas. No se modificaron sus datos comerciales.']);
+            }
+            $updates = [];
+            if ($comercial) {
+                $duracion = $cambioServicio
+                    ? $this->duracion(Servicio::findOrFail($servicio)->getRawOriginal('duration'))
+                    : $this->duracion($cita->getRawOriginal('duration_minutes'));
+                $this->sinConflictos($this->ids($nuevos), $inicio, $duracion, $id);
+                $updates = ['client_id' => $cliente, 'service_id' => $servicio,
+                    'appointment_date' => $fecha, 'duration_minutes' => $duracion];
+            }
+            if (array_key_exists('notes', $data)) $updates['notes'] = $data['notes'];
+            if ($updates) $cita->update($updates); // Nunca status ni duración enviada por cliente.
+            if ($nuevos !== $anteriores) $cita->estilistas()->sync($nuevos);
             return $cita->refresh();
         }, 3);
     }
@@ -45,9 +102,7 @@ class AgendaService
             $cita = $this->bloquearCitas([$id])->get($id);
             if (in_array($estado, ['cancelada', 'no_asistio'], true)) {
                 // Lectura actual. Ventas adquiere antes los mismos mutex y la cita.
-                $vigente = Venta::where('appointment_id', $id)
-                    ->where('status', '<>', Venta::ESTADO_ANULADA)->orderBy('id')->lockForUpdate()->first();
-                if ($vigente) throw ValidationException::withMessages([
+                if ($this->ventaVigente($id)) throw ValidationException::withMessages([
                     'financial_link' => 'La cita tiene una venta vigente o pendiente; no puede liberar su horario desde agenda.',
                 ]);
             }
@@ -62,25 +117,48 @@ class AgendaService
     }
 
     /** Requiere una transacción exterior; orden: usuarios -> citas -> ventas. */
-    public function bloquearCitas(array $ids): Collection
+    public function bloquearCitas(array $ids, array $estilistasNuevos = []): Collection
     {
         if (DB::transactionLevel() === 0) throw new \LogicException('Agenda requiere una transacción activa.');
         $ids = $this->ids($ids, false);
         if (!$ids) return collect();
         // Esta lectura solo descubre mutex; NO decide estado, asignación o conflictos.
         $antes = $this->ids(DB::table('appointment_user')->whereIn('appointment_id', $ids)->pluck('user_id')->all(), false);
-        if ($antes) $this->bloquearEstilistas($antes);
+        $bloqueados = $this->ids(array_merge($antes, $estilistasNuevos), false);
+        if ($bloqueados) $this->bloquearEstilistas($bloqueados);
         $citas = Cita::whereIn('id', $ids)->orderBy('id')->lockForUpdate()->get()->keyBy('id');
         if ($citas->count() !== count($ids)) throw ValidationException::withMessages(['appointment_id' => 'La cita ya no existe.']);
         $pivot = DB::table('appointment_user')->whereIn('appointment_id', $ids)->orderBy('id')->lockForUpdate()->get();
         $actuales = $this->ids($pivot->pluck('user_id')->all(), false);
-        if ($actuales !== $antes) throw ValidationException::withMessages(['availability' => 'La asignación cambió. Vuelva a consultar la agenda.']);
+        if (array_diff($actuales, $bloqueados)) throw ValidationException::withMessages([
+            'edit_conflict' => 'La asignación cambió. Vuelva a consultar la agenda.'
+        ])->status(409);
         foreach ($citas as $cita) {
             // Evitar una carga de relación por snapshot anterior de REPEATABLE READ.
             $asignados = $pivot->where('appointment_id', $cita->id)->pluck('user_id')->all();
             $cita->setRelation('estilistas', Usuario::whereIn('id', $asignados)->orderBy('id')->lockForUpdate()->get());
         }
         return $citas;
+    }
+
+    private function versionEdicion(Cita $cita): string
+    {
+        return hash('sha256', json_encode([
+            (int)$cita->client_id, (int)$cita->service_id, $cita->appointment_date,
+            (int)$cita->duration_minutes, $cita->status, $cita->notes,
+            $this->ids($cita->estilistas->modelKeys(), false), $cita->getRawOriginal('updated_at'),
+        ], JSON_THROW_ON_ERROR));
+    }
+
+    private function ventaVigente(int $id): bool
+    {
+        return Venta::where('appointment_id', $id)->where('status', '<>', Venta::ESTADO_ANULADA)
+            ->orderBy('id')->lockForUpdate()->first(['id']) !== null;
+    }
+
+    private function inicio(string $value): CarbonImmutable
+    {
+        return CarbonImmutable::parse($value, config('app.timezone'))->setTimezone(config('app.timezone'));
     }
 
     public function validarParaFacturar(array $ids): Collection

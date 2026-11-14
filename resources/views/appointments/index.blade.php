@@ -2,14 +2,14 @@
 
 @section('content')
 <!-- El contenedor principal define el "estado" de Alpine con x-data -->
-<div x-data="appointmentManager(@js($fechaSeleccionada))">
+<div x-data="appointmentManager(@js($fechaSeleccionada), @js(['clients' => $clientes->modelKeys(), 'services' => $servicios->modelKeys(), 'stylists' => $estilistas->modelKeys()]))">
     
     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
         <div>
             <h2 class="page-title">Agenda — {{ \Carbon\Carbon::parse($fechaSeleccionada)->format('d/m/Y') }}</h2>
             <p class="page-subtitle">Citas programadas y atención del equipo. Horario del salón.</p>
         </div>
-        <button @click="newAppointment()" class="btn btn-primary">
+        <button @click="newAppointment()" :disabled="saving" class="btn btn-primary disabled:opacity-50">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
             Nueva Cita
         </button>
@@ -86,7 +86,7 @@
                             @endif
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                        
+                            <button type="button" :disabled="saving" @click="editAppointment({{ $cita->id }})" class="btn mr-2 disabled:opacity-50">Editar</button>
                             @if($cita->status === 'pendiente')
                                 <button type="button" :disabled="saving" @click="completeAppointment({{ $cita->id }})" class="text-emerald-600 hover:text-emerald-900 font-bold mr-3 transition duration-150 disabled:opacity-50">
                                     ✓ Completar
@@ -121,11 +121,11 @@
         </table>
     </div>
 
-    <!-- MODAL DE NUEVA CITA -->
-    <div x-show="openModal" class="fixed inset-0 z-50 overflow-y-auto" style="display: none;">
+    <!-- Creación y edición comparten formulario; estado se modifica por separado. -->
+    <div x-show="openModal" @keydown.escape.window="if (!saving) openModal = false" role="dialog" aria-modal="true" aria-labelledby="appointment-modal-title" class="fixed inset-0 z-50 overflow-y-auto" style="display: none;">
         <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
             
-            <div x-show="openModal" @click="openModal = false" class="fixed inset-0 transition-opacity" aria-hidden="true">
+            <div x-show="openModal" @click="if (!saving) openModal = false" class="fixed inset-0 transition-opacity" aria-hidden="true">
                 <div class="absolute inset-0 bg-gray-900 opacity-75"></div>
             </div>
             <span class="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
@@ -133,54 +133,62 @@
             <div x-show="openModal" class="relative z-20 inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
                 
                 <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                    <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4">Agendar Nueva Cita</h3>
+                    <h3 id="appointment-modal-title" x-text="editingId ? (canEditCommercial ? 'Editar cita #' : 'Editar notas de cita #') + editingId : 'Agendar Nueva Cita'" class="text-lg leading-6 font-medium text-gray-900 mb-4"></h3>
+                    <p x-show="editingId && !canEditCommercial" class="mb-3 text-sm text-gray-600">Por su estado o vínculo con una venta, esta cita solo permite editar notas. La reactivación se realiza por separado.</p>
                     <p x-show="error" x-text="error" role="alert" class="mb-3 text-red-700"></p>
                     
-                    <form>
+                    <form id="appointment-form" @submit.prevent="saveAppointment()">
                         <!-- Reemplaza tus inputs actuales por estos selects -->
                     <div class="mb-4">
-                        <label class="block text-sm font-medium text-gray-700 mb-2">Cliente</label>
-                        <select x-model.number="form.client_id" class="w-full border-gray-300 rounded-md shadow-sm focus:border-emerald-500 focus:ring-emerald-500" required>
+                        <label for="appointment-client" class="block text-sm font-medium text-gray-700 mb-2">Cliente</label>
+                        <select id="appointment-client" x-ref="client" :disabled="saving || (editingId && !canEditCommercial)" x-model.number="form.client_id" class="w-full border-gray-300 rounded-md shadow-sm focus:border-emerald-500 focus:ring-emerald-500" required>
                             <option value="">Seleccione un cliente...</option>
                             @foreach($clientes as $cliente)
                                 <option value="{{ $cliente->id }}">{{ $cliente->name }}</option>
                             @endforeach
+                            <template x-for="choice in editChoices.clients" :key="choice.id"><option :value="choice.id" x-text="choice.label"></option></template>
                         </select>
                     </div>
 
                     <div class="mb-4">
-                        <label class="block text-sm font-medium text-gray-700 mb-2">Servicio</label>
-                            <select x-model.number="form.service_id" class="w-full border-gray-300 rounded-md shadow-sm focus:border-emerald-500 focus:ring-emerald-500" required>
+                        <label for="appointment-service" class="block text-sm font-medium text-gray-700 mb-2">Servicio</label>
+                            <select id="appointment-service" :disabled="saving || (editingId && !canEditCommercial)" x-model.number="form.service_id" class="w-full border-gray-300 rounded-md shadow-sm focus:border-emerald-500 focus:ring-emerald-500" required>
                                 <option value="">Seleccione el servicio...</option>
                                 @foreach($servicios as $servicio)
                                     <option value="{{ $servicio->id }}">{{ $servicio->name }} (C$ {{ number_format($servicio->price, 2) }})</option>
                                 @endforeach
+                                <template x-for="choice in editChoices.services" :key="choice.id"><option :value="choice.id" x-text="choice.label"></option></template>
                             </select>
                         </div>
 
                         <div class="mb-4">
-                            <label class="block text-sm font-medium text-gray-700 mb-1">Estilista(s) Asignado(s)</label>
+                            <label for="appointment-stylists" class="block text-sm font-medium text-gray-700 mb-1">Estilista(s) Asignado(s)</label>
                             <p class="text-xs text-gray-500 mb-2">Mantén presionada la tecla Ctrl (o Cmd en Mac) para seleccionar varios.</p>
-                            <select multiple x-model="form.stylists" class="w-full h-24 border-gray-300 rounded-md shadow-sm focus:border-emerald-500 focus:ring-emerald-500 text-sm p-2" required>
+                            <select id="appointment-stylists" :disabled="saving || (editingId && !canEditCommercial)" multiple x-model="form.stylists" class="w-full h-24 border-gray-300 rounded-md shadow-sm focus:border-emerald-500 focus:ring-emerald-500 text-sm p-2" required>
                                 @foreach($estilistas as $estilista)
                                     <option value="{{ $estilista->id }}">{{ $estilista->name }}</option>
                                 @endforeach
+                                <template x-for="choice in editChoices.stylists" :key="choice.id"><option :value="choice.id" x-text="choice.label"></option></template>
                             </select>
                         </div>
 
                         <div class="mb-4">
-                            <label class="block text-sm font-medium text-gray-700 mb-2">Fecha y Hora</label>
-                            <input type="datetime-local" x-model="form.appointment_date" class="w-full border-gray-300 rounded-md shadow-sm focus:border-emerald-500 focus:ring-emerald-500" required>
+                            <label for="appointment-date" class="block text-sm font-medium text-gray-700 mb-2">Fecha y Hora</label>
+                            <input id="appointment-date" :disabled="saving || (editingId && !canEditCommercial)" type="datetime-local" step="1" x-model="form.appointment_date" class="w-full border-gray-300 rounded-md shadow-sm focus:border-emerald-500 focus:ring-emerald-500" required>
+                        </div>
+                        <div class="mb-4">
+                            <label for="appointment-notes" class="block text-sm font-medium text-gray-700 mb-2">Notas</label>
+                            <textarea id="appointment-notes" x-ref="notes" :disabled="saving" x-model="form.notes" class="w-full border-gray-300 rounded-md shadow-sm focus:border-emerald-500 focus:ring-emerald-500" rows="3"></textarea>
                         </div>
                     </form>
                 </div>
                 
                 <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
                     <!-- Conectamos el botón de guardar a nuestra función saveAppointment() -->
-                    <button @click="saveAppointment()" :disabled="saving" type="button" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-emerald-600 text-base font-medium text-white hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 sm:ml-3 sm:w-auto sm:text-sm disabled:opacity-50">
-                        <span x-text="saving ? 'Guardando…' : 'Guardar Cita'"></span>
+                    <button form="appointment-form" :disabled="saving" type="submit" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-emerald-600 text-base font-medium text-white hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 sm:ml-3 sm:w-auto sm:text-sm disabled:opacity-50">
+                        <span x-text="saving ? 'Guardando…' : (editingId ? 'Guardar cambios' : 'Crear cita')"></span>
                     </button>
-                    <button @click="openModal = false" type="button" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-emerald-500 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">
+                    <button @click="openModal = false" :disabled="saving" type="button" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-emerald-500 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm disabled:opacity-50">
                         Cancelar
                     </button>
                 </div>
@@ -192,37 +200,85 @@
 
 
 <script>
-    function appointmentManager(selectedDate) {
+    function appointmentManager(selectedDate, catalogIds = { clients: [], services: [], stylists: [] }) {
         return {
             openModal: false,
             saving: false,
             error: '',
             createdAppointment: null,
+            editingId: null,
+            editToken: '',
+            canEditCommercial: true,
+            editChoices: { clients: [], services: [], stylists: [] },
             form: {
-                client_id: '', service_id: '', stylists: [], appointment_date: ''
+                client_id: '', service_id: '', stylists: [], appointment_date: '', notes: ''
             },
             
             resetForm() {
-                this.form = { client_id: '', service_id: '', stylists: [], appointment_date: '' };
+                this.form = { client_id: '', service_id: '', stylists: [], appointment_date: '', notes: '' };
+                this.editingId = null;
+                this.editToken = '';
+                this.canEditCommercial = true;
+                this.editChoices = { clients: [], services: [], stylists: [] };
             },
 
             newAppointment() {
+                if (this.saving) return;
                 this.resetForm();
                 this.error = '';
                 this.openModal = true;
+                this.focusEditor();
+            },
+
+            focusEditor() {
+                this.$nextTick?.(() => this.$refs?.[this.canEditCommercial ? 'client' : 'notes']?.focus());
+            },
+
+            async editAppointment(id) {
+                if (this.saving) return;
+                this.saving = true;
+                this.error = '';
+                this.openModal = false;
+                try {
+                    const response = await fetch(`/api/appointments/${id}`, { credentials: 'same-origin', headers: { Accept: 'application/json' } });
+                    const data = await response.json().catch(() => null);
+                    if (!response.ok) { this.error = this.responseError(response.status, data); return; }
+                    const a = data?.appointment;
+                    if (a?.id !== id || !Array.isArray(a.stylists) || !/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}$/.test(a.appointment_date || '') || !/^[a-f0-9]{64}$/.test(data?.edit_token || '')) {
+                        this.error = 'No se pudo cargar una versión legible de la cita. Vuelve a abrir Editar.';
+                        return;
+                    }
+                    this.resetForm();
+                    this.editingId = id;
+                    this.editToken = data.edit_token;
+                    this.canEditCommercial = data.can_edit_commercial === true;
+                    const loadedForm = { client_id: Number(a.client_id), service_id: Number(a.service_id), stylists: a.stylists.map(String), appointment_date: a.appointment_date.replace(' ', 'T'), notes: a.notes ?? '' };
+                    for (const type of ['clients', 'services', 'stylists']) {
+                        const known = (catalogIds[type] || []).map(String);
+                        this.editChoices[type] = (data.choices?.[type] || []).filter(choice => !known.includes(String(choice.id)));
+                    }
+                    this.openModal = true;
+                    // Renderizar primero opciones históricas que ya no están en el catálogo activo.
+                    if (typeof this.$nextTick === 'function') await this.$nextTick();
+                    this.form = loadedForm;
+                    this.focusEditor();
+                } catch {
+                    this.error = 'Fallo de red: no se pudo cargar la cita. Vuelve a abrir Editar.';
+                } finally { this.saving = false; }
             },
 
             creationMessage() {
                 if (!this.createdAppointment) return '';
-                const { id, date, time } = this.createdAppointment;
+                const { id, date, time, updated } = this.createdAppointment;
                 const [year, month, day] = date.split('-');
-                return `Cita #${id} guardada para el ${day}/${month}/${year} a las ${time}. Puedes consultar su día aunque no sea el seleccionado (${selectedDate}).`;
+                return `Cita #${id} ${updated ? 'actualizada' : 'guardada'} para el ${day}/${month}/${year} a las ${time}. Puedes consultar su día aunque no sea el seleccionado (${selectedDate}).`;
             },
 
             responseError(status, data) {
                 if (status === 422) {
                     if (data?.errors?.availability) return 'Uno de los estilistas ya tiene otra cita en ese horario. Elige otro horario o estilista.';
                     if (data?.errors?.financial_link) return 'La cita tiene una venta vigente o pendiente de aprobación. No puede liberar su horario desde agenda.';
+                    if (data?.errors?.editing) return 'Esta cita solo permite editar notas. Vuelve a abrir Editar para consultar su estado actual.';
                     const labels = { client_id: 'cliente', service_id: 'servicio', stylists: 'estilistas', appointment_date: 'fecha y hora', duration_minutes: 'duración', notes: 'notas', status: 'estado', fecha: 'día seleccionado' };
                     const fields = [...new Set(Object.keys(data?.errors || {}).map(key => labels[key.split('.')[0]]).filter(Boolean))];
                     return 'Hay errores de validación.' + (fields.length ? ` Revisa: ${fields.join(', ')}.` : ' Revisa los datos de la cita.');
@@ -231,6 +287,7 @@
                     401: 'No has iniciado sesión. Inicia sesión antes de continuar.',
                     403: 'Acceso denegado. No tienes permiso para esta operación.',
                     419: 'La sesión o el token de seguridad expiró. Recarga la página antes de continuar.',
+                    409: 'La cita cambió desde que abriste el formulario. Vuelve a abrir Editar para cargar la versión actual.',
                     500: 'El servidor no pudo completar la operación. Comprueba la agenda antes de reintentar.'
                 })[status] || 'No se pudo confirmar la operación. Comprueba la agenda antes de reintentar.';
             },
@@ -240,21 +297,23 @@
                 this.saving = true;
                 this.error = '';
                 try {
-                    let response = await fetch('/api/appointments', {
-                        method: 'POST',
+                    const updated = this.editingId !== null;
+                    const body = updated ? { ...(this.canEditCommercial ? this.form : { notes: this.form.notes }), edit_token: this.editToken } : this.form;
+                    let response = await fetch(updated ? `/api/appointments/${this.editingId}/details` : '/api/appointments', {
+                        method: updated ? 'PUT' : 'POST',
                         credentials: 'same-origin',
                         headers: {
                             'Content-Type': 'application/json', 'Accept': 'application/json',
                             'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content
                         },
-                        body: JSON.stringify(this.form)
+                        body: JSON.stringify(body)
                     });
                     const data = await response.json().catch(() => null);
                     if (response.ok) {
                         const appointment = data?.appointment;
                         // DATETIME local guardado: extraer componentes, sin convertir a UTC.
                         const saved = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})(?::\d{2})?$/.exec(appointment?.appointment_date || '');
-                        if (!Number.isInteger(appointment?.id) || !saved) {
+                        if (!Number.isInteger(appointment?.id) || !saved || (updated && appointment.id !== this.editingId)) {
                             this.error = 'El servidor respondió sin una confirmación legible. Comprueba la agenda antes de reintentar.';
                             return;
                         }
@@ -263,7 +322,7 @@
                         url.searchParams.set('fecha', saved[1]);
                         url.searchParams.delete('page');
                         url.hash = '';
-                        this.createdAppointment = { id: appointment.id, date: saved[1], time: saved[2], url: url.href };
+                        this.createdAppointment = { id: appointment.id, date: saved[1], time: saved[2], url: url.href, updated };
                         this.openModal = false;
                         this.resetForm();
                     } else {

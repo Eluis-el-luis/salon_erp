@@ -34,15 +34,17 @@ try {
     if(file_put_contents($file,$enabled,LOCK_EX)!==strlen($enabled)) throw new RuntimeException('Cannot write reset flag');
     unset($before,$enabled);
     $mode=$argv[1]??'';
-    if(!in_array($mode,['','checks-only','links-only'],true)) throw new RuntimeException('Unexpected H16 selection');
+    if(!in_array($mode,['','checks-only','links-only','h15','h15-regressions'],true)) throw new RuntimeException('Unexpected agenda test selection');
     $paths=match($mode) {
         'checks-only'=>['AgendaStateControlsTest','AppointmentConcurrencyTest'],
         'links-only'=>['AppointmentSaleLinksTest'],
+        'h15'=>['AppointmentEditingTest','AppointmentEditingConcurrencyTest'],
+        'h15-regressions'=>['AppointmentAvailabilityTest','ApiAgendaSecurityTest','AppointmentServicesTest','AgendaNavigationTest','AgendaStateControlsTest','AppointmentConcurrencyTest','AppointmentSaleLinksTest'],
         default=>['AppointmentAvailabilityTest','ApiAgendaSecurityTest','AppointmentServicesTest','AgendaNavigationTest','AgendaStateControlsTest','AppointmentConcurrencyTest','AppointmentSaleLinksTest'],
     };
     $args=[PHP_BINARY,'-d','display_errors=0','-d','zend.exception_ignore_args=1',$root.'/vendor/phpunit/phpunit/phpunit','--configuration',$root.'/phpunit.xml','--do-not-cache-result','--no-progress','--stop-on-error','--stop-on-failure'];
     foreach($paths as $path) $args[]=$root.'/tests/Feature/'.$path.'.php';
-    $log=$root.'/storage/app/private/h16-'.($mode!==''?str_replace('-only','',$mode).'-':'').'phpunit.log';
+    $log=$root.'/storage/app/private/'.(str_starts_with($mode,'h15')?$mode:'h16'.($mode!==''?'-'.str_replace('-only','',$mode):'')).'-phpunit.log';
     $process=proc_open($args,[0=>['pipe','r'],1=>['file',$log,'w'],2=>['redirect',1]],$pipes,$root);
     if(!is_resource($process)) throw new RuntimeException('Cannot launch PHPUnit');
     fclose($pipes[0]);$exit=proc_close($process);
