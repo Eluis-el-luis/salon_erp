@@ -23,6 +23,7 @@ use App\Services\AprobacionService;
 use App\Services\ComisionService;
 use App\Services\LibroPagosService;
 use App\Services\NotificationService;
+use App\Services\AgendaService;
 use App\Traits\AutorizaPinSupervisor;
 use App\Traits\Notificable;
 
@@ -50,10 +51,11 @@ class VentaController extends Controller
             'exchange_rate' => 'nullable|numeric|min:1',
         ]);
 
-        $cita = \App\Models\Cita::with(['servicio', 'estilistas'])->findOrFail($id);
         \Illuminate\Support\Facades\DB::beginTransaction();
 
         try {
+            $cita = app(AgendaService::class)->validarParaFacturar([(int)$id])->get((int)$id);
+            $cita->load('servicio');
             $subtotal = $cita->servicio->price;
             $descuento = $request->discount ?? 0;
             $total = $subtotal - $descuento;
@@ -137,7 +139,7 @@ class VentaController extends Controller
                 ], 201);
             }
 
-            $cita->update(['status' => 'completada']);
+            app(AgendaService::class)->completarDesdeVenta([$cita->id]);
 
             $venta->load('detalles');
 
@@ -206,6 +208,7 @@ class VentaController extends Controller
             // nullable: si el POS omite el descuento, se aplica el % del grupo del cliente
             'discount' => 'nullable|numeric|min:0',
             'cart.*.variant_id' => 'nullable|integer',
+            'cart.*.appointment_id' => 'nullable|integer|exists:appointments,id',
             // BOM DINÁMICO: consumo real editado por recepción antes de facturar
             'cart.*.consumo' => 'nullable|array',
             'cart.*.consumo.*.item_id' => 'required|integer|exists:items,id',
@@ -257,6 +260,19 @@ class VentaController extends Controller
         \Illuminate\Support\Facades\DB::beginTransaction();
 
         try {
+            // Antes de clientes/ventas: adquirir todos los mutex de agenda en orden.
+            $citasDelCarrito = collect($request->cart)->pluck('appointment_id')->filter()->map(fn($id) => (int)$id)->all();
+            $citasValidadas = $citasDelCarrito;
+            if ($request->draft_id) {
+                $citaDelBorrador = Venta::whereKey($request->draft_id)->value('appointment_id');
+                if ($citaDelBorrador) $citasValidadas[] = (int)$citaDelBorrador;
+            }
+            // sales conserva UN appointment_id: no perder vínculos que luego
+            // deban protegerse al cancelar o aprobar el documento.
+            if (count(array_unique($citasValidadas)) > 1) {
+                throw new \App\Exceptions\ContabilidadException('Una venta solo puede vincularse a una cita. Facture las citas por separado.');
+            }
+            if ($accion !== 'cotizar') app(AgendaService::class)->validarParaFacturar($citasValidadas);
             $subtotal = collect($request->cart)->sum(function($item) {
                 return $item['precio_c'] * $item['quantity'];
             });
@@ -305,6 +321,10 @@ class VentaController extends Controller
                 // Transformar una cotización guardada: se reutiliza el MISMO documento
                 // para conservar la trazabilidad (la cotización se convierte en venta).
                 $venta = Venta::lockForUpdate()->findOrFail($request->draft_id);
+
+                if ($accion !== 'cotizar' && $venta->appointment_id && !in_array((int)$venta->appointment_id, $citasValidadas, true)) {
+                    throw new \App\Exceptions\ContabilidadException('El vínculo de la cita cambió. Vuelva a consultar la venta.');
+                }
 
                 if ($venta->status !== Venta::ESTADO_BORRADOR) {
                     throw new \App\Exceptions\ContabilidadException(
@@ -372,8 +392,7 @@ class VentaController extends Controller
                 ]);
 
                 if (isset($cartItem['appointment_id']) && $accion !== 'cotizar' && !$requiereAprobacion) {
-                    \App\Models\Cita::where('id', $cartItem['appointment_id'])
-                        ->update(['status' => 'completada']);
+                    app(AgendaService::class)->completarDesdeVenta([(int)$cartItem['appointment_id']]);
                 }
             }
 
@@ -666,10 +685,8 @@ class VentaController extends Controller
         \Illuminate\Support\Facades\DB::beginTransaction();
 
         try {
-            $venta = Venta::where('id', $id)
-                ->with(['detalles', 'pagos'])
-                ->lockForUpdate()
-                ->firstOrFail();
+            $venta = app(AgendaService::class)->bloquearVenta((int)$id, false);
+            $venta->load(['detalles', 'pagos']);
 
             if ($venta->status === Venta::ESTADO_ANULADA) {
                 throw new \App\Exceptions\ContabilidadException('La factura #' . $venta->id . ' ya está anulada.');
@@ -738,9 +755,7 @@ class VentaController extends Controller
 
                 // 5. La cita asociada vuelve a pendiente para permitir refacturar
                 if ($venta->appointment_id) {
-                    \App\Models\Cita::where('id', $venta->appointment_id)
-                        ->where('status', 'completada')
-                        ->update(['status' => 'pendiente']);
+                    app(AgendaService::class)->restaurarTrasAnulacion((int)$venta->appointment_id);
                 }
             }
 

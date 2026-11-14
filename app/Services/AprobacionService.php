@@ -96,9 +96,8 @@ class AprobacionService
     public function aprobarVenta(int $ventaId, ?int $aprobadorId = null): Venta
     {
         return DB::transaction(function () use ($ventaId, $aprobadorId) {
-            $venta = Venta::lockForUpdate()
-                ->with(['detalles'])
-                ->findOrFail($ventaId);
+            $venta = app(AgendaService::class)->bloquearVenta($ventaId, true);
+            $venta->load('detalles');
 
             if ($venta->status !== Venta::ESTADO_PENDIENTE_APROBACION) {
                 throw new ContabilidadException(
@@ -177,9 +176,7 @@ class AprobacionService
 
             // 8. Citas asociadas: se completan recién al aprobar
             if ($venta->appointment_id) {
-                Cita::where('id', $venta->appointment_id)
-                    ->where('status', 'pendiente')
-                    ->update(['status' => 'completada']);
+                app(AgendaService::class)->completarDesdeVenta([(int)$venta->appointment_id]);
             }
 
             return $venta->fresh();

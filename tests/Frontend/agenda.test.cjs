@@ -8,12 +8,15 @@ const path = require('node:path');
 const blade = fs.readFileSync(path.join(__dirname, '../../resources/views/appointments/index.blade.php'), 'utf8');
 const script = blade.match(/<script>([\s\S]*?)<\/script>/)[1];
 function component(fetch) {
-    const window = { location: { href: 'http://salon.test/agenda?fecha=2026-11-12&filtro=equipo' } };
+    const events = [];
+    const window = { dispatchEvent: event => events.push(event), location: { href: 'http://salon.test/agenda?fecha=2026-11-12&filtro=equipo', reload() {} } };
     const document = { querySelector: () => ({ content: 'fixture-csrf' }) };
-    const factory = vm.runInNewContext(script + '; appointmentManager;', { window, document, fetch, URL });
+    const factory = vm.runInNewContext(script + '; appointmentManager;', { window, document, fetch, URL,
+        CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init.detail; } }, setTimeout() {} });
     const model = factory('2026-11-12');
     model.newAppointment();
     model.form = { client_id: 1, service_id: 2, stylists: [3], appointment_date: '2026-11-13T23:50', duration_minutes: 45 };
+    model.testEvents = events;
     return model;
 }
 const response = (status, data) => ({ ok: status >= 200 && status < 300, status, json: async () => data });
@@ -80,5 +83,49 @@ test('doble clic durante la petición no duplica el alta', async () => {
     assert.equal(calls, 1);
     finish(response(201, { appointment: { id: 57, appointment_date: '2026-11-13 12:00:00' } }));
     await first;
+    assert.equal(model.saving, false);
+});
+
+test('explica conflicto sin mostrar mensajes SQL del servidor', async () => {
+    const model = component(async () => response(422, { errors: { availability: ['SQL secreto'] } }));
+    await model.saveAppointment();
+    assert.match(model.error, /estilistas.*otra cita.*otro horario/);
+    assert.doesNotMatch(model.error, /SQL secreto/);
+});
+
+test('explica bloqueo financiero y no propone anular documentos automáticamente', async () => {
+    const model = component(async () => response(422, { errors: { financial_link: ['TRAZA'] } }));
+    await model.saveAppointment();
+    assert.match(model.error, /venta vigente.*No puede liberar/);
+    assert.doesNotMatch(model.error, /TRAZA/);
+});
+
+test('nuevo formulario no fija una duración arbitraria', () => {
+    const model = component(async () => response(201, {}));
+    model.newAppointment();
+    assert.equal(Object.hasOwn(model.form, 'duration_minutes'), false);
+});
+
+test('reactivación requiere confirmación y conserva CSRF y sesión', async () => {
+    const model = component(async (url, options) => {
+        assert.equal(url, '/api/appointments/7');
+        assert.equal(options.method, 'PUT');
+        assert.equal(options.credentials, 'same-origin');
+        assert.equal(options.headers['X-CSRF-TOKEN'], 'fixture-csrf');
+        assert.equal(JSON.parse(options.body).status, 'pendiente');
+        return response(200, {});
+    });
+    model.changeAppointmentStatus(7, 'pendiente');
+    assert.match(model.testEvents[0].detail.message, /Reactivar.*disponibilidad/);
+    await model.testEvents[0].detail.action();
+    assert.equal(model.testEvents[1].type, 'notify');
+    assert.equal(model.saving, false);
+});
+
+test('reactivación con conflicto muestra el rechazo y no confirma éxito', async () => {
+    const model = component(async () => response(422, { errors: { availability: ['conflict'] } }));
+    await model.processComplete(7, 'pendiente');
+    assert.match(model.error, /otra cita/);
+    assert.equal(model.testEvents.length, 0);
     assert.equal(model.saving, false);
 });

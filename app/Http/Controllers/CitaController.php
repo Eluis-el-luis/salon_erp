@@ -3,11 +3,8 @@
 namespace App\Http\Controllers;
 
 use App\Models\Cita;
-use App\Models\Cliente;
-use App\Models\Usuario;
-use App\Models\Articulo;
+use App\Services\AgendaService;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 
 class CitaController extends Controller
 {
@@ -24,33 +21,20 @@ class CitaController extends Controller
         return response()->json($citas);
     }
 
-    public function store(Request $request)
+    public function store(Request $request, AgendaService $agenda)
     {
         $validatedData = $request->validate([
             'client_id' => 'required|exists:clients,id',
             'service_id' => 'required|exists:services,id',
             'appointment_date' => 'required|date',
-            'stylists' => 'required|array', // Ahora validamos que sea un arreglo de estilistas
-            'stylists.*' => 'exists:users,id',
-            'duration_minutes' => 'nullable|integer',
+            'stylists' => 'required|array|min:1',
+            'stylists.*' => 'required|integer|distinct|exists:users,id',
+            // Compatibilidad con consumidores anteriores: nunca se usa como duración.
+            'duration_minutes' => 'sometimes|integer|min:1',
             'notes' => 'nullable|string'
         ]);
 
-        $cita = DB::transaction(function () use ($validatedData) {
-            $cita = Cita::create([
-                'client_id' => $validatedData['client_id'],
-                'service_id' => $validatedData['service_id'],
-                'appointment_date' => $validatedData['appointment_date'],
-                'duration_minutes' => $validatedData['duration_minutes'] ?? 45,
-                'notes' => $validatedData['notes'] ?? null,
-                'status' => 'pendiente'
-            ]);
-
-            // Sincronizamos la tabla intermedia con los estilistas seleccionados
-            $cita->estilistas()->sync($validatedData['stylists']);
-
-            return $cita->refresh();
-        });
+        $cita = $agenda->reservar($validatedData);
 
         return response()->json(['message' => 'Cita agendada exitosamente', 'appointment' => $cita], 201);
     }
@@ -75,13 +59,11 @@ class CitaController extends Controller
      * Update the specified resource in storage.
      */
     // El método update se usará cuando el estilista marque la cita como "completada"
-    public function update(Request $request, Cita $appointment)
+    public function update(Request $request, Cita $appointment, AgendaService $agenda)
     {
         $request->validate(['status' => 'sometimes|required|in:pendiente,completada,cancelada,no_asistio']);
 
-        $appointment->update([
-            'status' => $request->input('status', 'completada')
-        ]);
+        $agenda->cambiarEstado($appointment->id, $request->input('status', 'completada'));
         
         return response()->json(['message' => 'Estado de la cita actualizado']);
     }

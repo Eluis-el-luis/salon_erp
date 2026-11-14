@@ -5,7 +5,9 @@ ini_set('zend.exception_ignore_args', '1');
 try {
     $pdo = new PDO('mysql:host=127.0.0.1;port=3306;charset=utf8mb4', 'root', '', [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
     $snapshot = [];
-    foreach (['salon_erp', 'salon_erp_test'] as $schema) {
+    $phase = $argv[2] ?? '05';
+    $schemas = $phase === 'H16' ? ['salon_erp', 'salon_erp_test', 'salon_erp_bootstrap_check'] : ['salon_erp', 'salon_erp_test'];
+    foreach ($schemas as $schema) {
         $tables = $pdo->query("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA='$schema' AND TABLE_TYPE='BASE TABLE' ORDER BY TABLE_NAME")->fetchAll(PDO::FETCH_COLUMN);
         foreach ($tables as $table) {
             if (! preg_match('/^[a-zA-Z0-9_]+$/D', $table)) { throw new RuntimeException('Identificador inesperado'); }
@@ -17,8 +19,7 @@ try {
             $snapshot[$schema][$table] = ['count' => count($rows), 'content' => hash('sha256', implode('', $rows)), 'schema' => hash('sha256', $ddl)];
         }
     }
-    $phase = $argv[2] ?? '05';
-    if (! in_array($phase, ['05', '06', 'H12', 'H14A', 'H13', 'H13B', 'H13C'], true)) { throw new RuntimeException('Fase inválida'); }
+    if (! in_array($phase, ['05', '06', 'H12', 'H14A', 'H13', 'H13B', 'H13C', 'H16'], true)) { throw new RuntimeException('Fase inválida'); }
     $file = dirname(__DIR__, 2).'/storage/app/private/isolation-'.$phase.'-before.json';
     if (($argv[1] ?? '') === 'before') {
         $handle = fopen($file, 'x');
@@ -31,6 +32,10 @@ try {
         if (! in_array($phase, ['05', 'H13C'], true)) {
             if ($snapshot['salon_erp'] !== $baseline['salon_erp']) { throw new RuntimeException('Diferencias en desarrollo'); }
             echo "DEVELOPMENT_ALL_COUNTS_CONTENT_AND_SCHEMA_EQUAL=True\n";
+            if ($phase === 'H16') {
+                if ($snapshot['salon_erp_bootstrap_check'] !== $baseline['salon_erp_bootstrap_check']) { throw new RuntimeException('Diferencias en ensayo bootstrap'); }
+                echo "BOOTSTRAP_CHECK_ALL_COUNTS_CONTENT_AND_SCHEMA_EQUAL=True\n";
+            }
         } else {
             if ($snapshot !== $baseline) { throw new RuntimeException('Diferencias antes/después'); }
             echo "ALL_TABLE_COUNTS_CONTENT_AND_SCHEMA_EQUAL=True\n";

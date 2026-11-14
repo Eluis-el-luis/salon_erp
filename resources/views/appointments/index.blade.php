@@ -79,17 +79,25 @@
                                 <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
                                     Completada
                                 </span>
+                            @elseif($cita->status === 'cancelada')
+                                <span class="text-sm text-gray-600">Cancelada</span>
+                            @elseif($cita->status === 'no_asistio')
+                                <span class="text-sm text-gray-600">No asistió</span>
                             @endif
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                         
                             @if($cita->status === 'pendiente')
-                                <button @click="completeAppointment({{ $cita->id }})" class="text-emerald-600 hover:text-emerald-900 font-bold mr-3 transition duration-150">
+                                <button type="button" :disabled="saving" @click="completeAppointment({{ $cita->id }})" class="text-emerald-600 hover:text-emerald-900 font-bold mr-3 transition duration-150 disabled:opacity-50">
                                     ✓ Completar
                                 </button>
+                                <button type="button" :disabled="saving" @click="changeAppointmentStatus({{ $cita->id }}, 'cancelada')" class="btn mr-2 disabled:opacity-50">Cancelar</button>
+                                <button type="button" :disabled="saving" @click="changeAppointmentStatus({{ $cita->id }}, 'no_asistio')" class="btn mr-2 disabled:opacity-50">No asistió</button>
+                            @elseif(in_array($cita->status, ['cancelada', 'no_asistio']))
+                                <button type="button" :disabled="saving" @click="changeAppointmentStatus({{ $cita->id }}, 'pendiente')" class="btn disabled:opacity-50">Reactivar</button>
                             @endif
 
-                            @if($cita->status !== 'cancelada' && $cita->status !== 'completada')
+                            @if($cita->status === 'pendiente')
                                 @php
                                     // Preparamos los IDs para enviarlos al POS
                                     $stylistIds = $cita->estilistas->pluck('id')->join(',');
@@ -191,11 +199,11 @@
             error: '',
             createdAppointment: null,
             form: {
-                client_id: '', service_id: '', stylists: [], appointment_date: '', duration_minutes: 45
+                client_id: '', service_id: '', stylists: [], appointment_date: ''
             },
             
             resetForm() {
-                this.form = { client_id: '', service_id: '', stylists: [], appointment_date: '', duration_minutes: 45 };
+                this.form = { client_id: '', service_id: '', stylists: [], appointment_date: '' };
             },
 
             newAppointment() {
@@ -213,6 +221,8 @@
 
             responseError(status, data) {
                 if (status === 422) {
+                    if (data?.errors?.availability) return 'Uno de los estilistas ya tiene otra cita en ese horario. Elige otro horario o estilista.';
+                    if (data?.errors?.financial_link) return 'La cita tiene una venta vigente o pendiente de aprobación. No puede liberar su horario desde agenda.';
                     const labels = { client_id: 'cliente', service_id: 'servicio', stylists: 'estilistas', appointment_date: 'fecha y hora', duration_minutes: 'duración', notes: 'notas', status: 'estado', fecha: 'día seleccionado' };
                     const fields = [...new Set(Object.keys(data?.errors || {}).map(key => labels[key.split('.')[0]]).filter(Boolean))];
                     return 'Hay errores de validación.' + (fields.length ? ` Revisa: ${fields.join(', ')}.` : ' Revisa los datos de la cita.');
@@ -268,16 +278,29 @@
 
             // --- FLUXO DE COMPLETAR CITA ---
             completeAppointment(id) {
-                
+                this.changeAppointmentStatus(id, 'completada');
+            },
+
+            changeAppointmentStatus(id, status) {
+                if (this.saving) return;
+                const messages = {
+                    completada: '¿Marcar esta cita como completada?',
+                    cancelada: '¿Cancelar esta cita y liberar su horario?',
+                    no_asistio: '¿Registrar que no asistió y liberar su horario?',
+                    pendiente: '¿Reactivar esta cita? Se comprobará otra vez la disponibilidad.'
+                };
+                if (!messages[status]) return;
                 window.dispatchEvent(new CustomEvent('open-confirm', { 
                     detail: { 
-                        message: '¿Estás seguro de marcar esta cita como completada?',
-                        action: () => this.processComplete(id) 
+                        message: messages[status],
+                        action: () => this.processComplete(id, status)
                     } 
                 }));
             },
 
-            async processComplete(id) {
+            async processComplete(id, status = 'completada') {
+                if (this.saving) return;
+                this.saving = true;
                 this.error = '';
                 try {
                     let response = await fetch(`/api/appointments/${id}`, {
@@ -287,16 +310,18 @@
                             'Content-Type': 'application/json', 'Accept': 'application/json',
                             'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content
                         },
-                        body: JSON.stringify({ status: 'completada' })
+                        body: JSON.stringify({ status })
                     });
                     if (response.ok) {
-                        window.dispatchEvent(new CustomEvent('notify', { detail: '¡Cita marcada como completada!' }));
+                        window.dispatchEvent(new CustomEvent('notify', { detail: 'Estado de la cita actualizado.' }));
                         setTimeout(() => { window.location.reload(); }, 1000);
                     } else {
                         this.error = this.responseError(response.status, await response.json().catch(() => null));
                     }
                 } catch {
                     this.error = 'Fallo de red: no se pudo confirmar la operación. Comprueba la agenda antes de reintentar.';
+                } finally {
+                    this.saving = false;
                 }
             },
 
