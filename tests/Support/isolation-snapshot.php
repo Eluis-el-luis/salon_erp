@@ -6,7 +6,7 @@ try {
     $pdo = new PDO('mysql:host=127.0.0.1;port=3306;charset=utf8mb4', 'root', '', [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
     $snapshot = [];
     $phase = $argv[2] ?? '05';
-    $schemas = in_array($phase, ['H16', 'H15', 'H01A', 'H02A'], true) ? ['salon_erp', 'salon_erp_test', 'salon_erp_bootstrap_check'] : ['salon_erp', 'salon_erp_test'];
+    $schemas = in_array($phase, ['H16', 'H15', 'H01A', 'H02A', 'H04A'], true) ? ['salon_erp', 'salon_erp_test', 'salon_erp_bootstrap_check'] : ['salon_erp', 'salon_erp_test'];
     foreach ($schemas as $schema) {
         $tables = $pdo->query("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA='$schema' AND TABLE_TYPE='BASE TABLE' ORDER BY TABLE_NAME")->fetchAll(PDO::FETCH_COLUMN);
         foreach ($tables as $table) {
@@ -19,7 +19,7 @@ try {
             $snapshot[$schema][$table] = ['count' => count($rows), 'content' => hash('sha256', implode('', $rows)), 'schema' => hash('sha256', $ddl)];
         }
     }
-    if (! in_array($phase, ['05', '06', 'H12', 'H14A', 'H13', 'H13B', 'H13C', 'H16', 'H15', 'H01A', 'H02A'], true)) { throw new RuntimeException('Fase inválida'); }
+    if (! in_array($phase, ['05', '06', 'H12', 'H14A', 'H13', 'H13B', 'H13C', 'H16', 'H15', 'H01A', 'H02A', 'H04A'], true)) { throw new RuntimeException('Fase inválida'); }
     $file = dirname(__DIR__, 2).'/storage/app/private/isolation-'.$phase.'-before.json';
     if (($argv[1] ?? '') === 'before') {
         $handle = fopen($file, 'x');
@@ -43,7 +43,7 @@ try {
                 $developmentChanged = true;
             }
             if (! ($developmentChanged ?? false)) echo "DEVELOPMENT_ALL_COUNTS_CONTENT_AND_SCHEMA_EQUAL=True\n";
-            if (in_array($phase, ['H16', 'H15', 'H01A', 'H02A'], true)) {
+            if (in_array($phase, ['H16', 'H15', 'H01A', 'H02A', 'H04A'], true)) {
                 if ($snapshot['salon_erp_bootstrap_check'] !== $baseline['salon_erp_bootstrap_check']) { throw new RuntimeException('Diferencias en ensayo bootstrap'); }
                 echo "BOOTSTRAP_CHECK_ALL_COUNTS_CONTENT_AND_SCHEMA_EQUAL=True\n";
             }

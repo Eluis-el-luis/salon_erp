@@ -95,11 +95,11 @@ class InventarioService
         foreach ($venta->detalles as $detalle) {
             if ($detalle->service_id) {
                 foreach ($this->consumosDeDetalle($detalle) as $consumo) {
-                    $operaciones[] = [$consumo['articulo'], $consumo['cantidad'] * (float) $detalle->quantity];
+                    $operaciones[] = [$consumo['articulo'], $consumo['cantidad'] * (float) $detalle->quantity, true];
                 }
             }
             if ($detalle->item_id && ($item = Articulo::find($detalle->item_id))) {
-                $operaciones[] = [$item, (float) $detalle->quantity];
+                $operaciones[] = [$item, (float) $detalle->quantity, false];
             }
         }
 
@@ -459,11 +459,51 @@ class InventarioService
      * no guarda el lote exacto de cada consumo, por lo que la reposición es
      * agregada y mantiene consistentes artículo y totales de lote.
      */
-    public function revertirPorVenta($venta): void
+    public function bloquearEfectosVenta($venta): void
     {
         $this->bloquearUsuarios([auth()->id()]);
         // Los cálculos y el lote de devolución se conservan; solo sincronización.
         $this->bloquearArticulos(array_map(fn ($op) => $op[0]->id, $this->operacionesVenta($venta)));
+    }
+
+    public function revertirPorVenta($venta): void
+    {
+        $this->bloquearEfectosVenta($venta);
+        // No devolver una receta/cantidad que carece de salida original documentada.
+        $esperado = [];
+        $volumenEsperado = [];
+        foreach ($this->operacionesVenta($venta) as [$item, $cantidad, $insumo]) {
+            $fraccionable = $item->is_fractionable && (float) $item->total_volume > 0;
+            $unidades = $fraccionable && $insumo ? $cantidad / (float) $item->total_volume : $cantidad;
+            // Un producto vendido directamente sale por envases, no por volumen BOM.
+            $esperado[$item->id] = ($esperado[$item->id] ?? 0) + round($unidades, 4);
+            if ($fraccionable) {
+                $volumenEsperado[$item->id] = ($volumenEsperado[$item->id] ?? 0)
+                    + round($insumo ? $cantidad : $cantidad * (float) $item->total_volume, 4);
+            }
+        }
+        $movimientos = StockLedger::where('referencia_tipo', 'venta')->where('referencia_id', $venta->id)
+            ->orderBy('id')->lockForUpdate()->get();
+        $original = [];
+        $volumenOriginal = [];
+        foreach ($movimientos as $movimiento) {
+            if ($movimiento->origen === StockLedger::ORIGEN_REVERSION_VENTA) {
+                throw new ContabilidadException('La venta ya tiene una devolución de inventario registrada.');
+            }
+            if ($movimiento->origen === StockLedger::ORIGEN_VENTA && $movimiento->movimiento === 'salida') {
+                $original[$movimiento->item_id] = ($original[$movimiento->item_id] ?? 0) - (float) $movimiento->cantidad;
+                if ($movimiento->volumen !== null) {
+                    $volumenOriginal[$movimiento->item_id] = ($volumenOriginal[$movimiento->item_id] ?? 0) - (float) $movimiento->volumen;
+                }
+            }
+        }
+        foreach (array_unique(array_merge(array_keys($esperado), array_keys($original))) as $id) {
+            if (! array_key_exists($id, $esperado) || ! array_key_exists($id, $original)
+                || abs($esperado[$id] - $original[$id]) > 0.00001
+                || (isset($volumenEsperado[$id]) && (! isset($volumenOriginal[$id]) || abs($volumenEsperado[$id] - $volumenOriginal[$id]) > 0.00001))) {
+                throw new ContabilidadException('La devolución no coincide con las salidas originales. Requiere conciliación de inventario.');
+            }
+        }
         // Contexto de trazabilidad para el Kárdex inmutable
         $contexto = [
             'origen' => StockLedger::ORIGEN_REVERSION_VENTA,

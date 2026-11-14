@@ -707,9 +707,21 @@ class VentaController extends Controller
             }
 
             $motivo = trim($request->motivo);
+            (new InventarioService)->bloquearEfectosVenta($venta);
+            $venta->setRelation('pagos', $venta->pagos()->orderBy('id')->lockForUpdate()->get());
+
+            // Estado y evidencia actual: una retención/cotización no autoriza reversas.
+            $asientosOriginales = \App\Models\AsientoContable::where('referencia_id', $venta->id)
+                ->whereIn('modulo_origen', ['ventas', 'inventario'])->where('numero_asiento', 'not like', 'REV-%')->orderBy('id')->lockForUpdate()->get()->isNotEmpty();
+            $sinEfectos = in_array($venta->status, [Venta::ESTADO_BORRADOR, Venta::ESTADO_PENDIENTE_APROBACION], true);
+            if ($sinEfectos && ($asientosOriginales || $venta->pagos->isNotEmpty()
+                || ComisionGenerada::where('venta_id', $venta->id)->orderBy('id')->lockForUpdate()->get()->isNotEmpty()
+                || \App\Models\StockLedger::where('referencia_tipo', 'venta')->where('referencia_id', $venta->id)->orderBy('id')->lockForUpdate()->get()->isNotEmpty())) {
+                throw new \App\Exceptions\ContabilidadException('El documento retenido o borrador presenta efectos registrados. Requiere conciliación antes de anular.');
+            }
 
             // Las cotizaciones no generaron efectos: solo cambian de estado
-            if ($venta->status !== Venta::ESTADO_BORRADOR) {
+            if (! $sinEfectos) {
                 // 1. El inventario físico regresa (unidades y mililitros)
                 (new InventarioService())->revertirPorVenta($venta);
 
@@ -752,7 +764,7 @@ class VentaController extends Controller
 
                 // 4. Reversión contable espejo de todos los asientos de la venta
                 $contabilidad = new \App\Services\ContabilidadService();
-                $contabilidad->reversarVenta($venta, $motivo);
+                if ($asientosOriginales) $contabilidad->reversarVenta($venta, $motivo);
 
                 // 5. La cita asociada vuelve a pendiente para permitir refacturar
                 if ($venta->appointment_id) {
@@ -765,11 +777,14 @@ class VentaController extends Controller
                 'anulada_at' => now(),
                 'anulada_por' => auth()->id(),
                 'motivo_anulacion' => $motivo,
+                'payload_aprobacion' => null,
             ]);
 
             \Illuminate\Support\Facades\DB::commit();
 
-            return back()->with('success', 'Factura #' . $venta->id . ' anulada correctamente. El documento y su reversión quedaron registrados para auditoría.');
+            return back()->with('success', $sinEfectos
+                ? 'Factura #'.$venta->id.' anulada sin movimientos de devolución; no tenía efectos aplicados.'
+                : 'Factura #' . $venta->id . ' anulada correctamente. El documento y su reversión quedaron registrados para auditoría.');
         } catch (\App\Exceptions\ContabilidadException $e) {
             \Illuminate\Support\Facades\DB::rollBack();
             return back()->with('error', $e->getMessage());
