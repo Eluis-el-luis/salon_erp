@@ -2,10 +2,13 @@
 
 namespace App\Services;
 
+use App\Exceptions\ContabilidadException;
 use App\Models\Articulo;
 use App\Models\Lote;
 use App\Models\Servicio;
 use App\Models\StockLedger;
+use App\Models\Usuario;
+use Illuminate\Support\Facades\DB;
 
 /**
  * MANDAMIENTO DE INVENTARIO FRACCIONADO:
@@ -17,6 +20,125 @@ use App\Models\StockLedger;
  */
 class InventarioService
 {
+    /** Adquirir antes de items los bloqueos compartidos que exigirán sus FK. */
+    public function bloquearUsuarios(array $ids): void
+    {
+        if (DB::transactionLevel() === 0) {
+            throw new \LogicException('Inventario requiere una transacción activa.');
+        }
+        $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
+        sort($ids, SORT_NUMERIC);
+        foreach ($ids as $id) {
+            Usuario::whereKey($id)->sharedLock()->first();
+        }
+    }
+
+    /** Mutex por artículo, incluso antes de insertar hijos con FK. Sin commit propio. */
+    public function bloquearArticulos(array $ids)
+    {
+        if (DB::transactionLevel() === 0) {
+            throw new \LogicException('Inventario requiere una transacción activa.');
+        }
+        $ids = array_values(array_unique(array_map('intval', $ids)));
+        sort($ids, SORT_NUMERIC);
+        $items = collect();
+        foreach ($ids as $id) {
+            $item = Articulo::whereKey($id)->lockForUpdate()->first();
+            if ($item) {
+                $items->put($id, $item);
+            }
+        }
+
+        return $items;
+    }
+
+    /** Descubrir insumos antes de las FK de detalles/consumos. No cambia recetas. */
+    public function bloquearCarrito(array $cart): void
+    {
+        $this->bloquearUsuarios(array_merge([auth()->id()], array_column($cart, 'stylist_id')));
+        $ids = [];
+        $cantidades = [];
+        foreach ($cart as $linea) {
+            if (($linea['type'] ?? null) === 'servicio') {
+                // Incluir fórmula para el fallback actual de consumos cero.
+                $reales = collect($linea['consumo'] ?? []);
+                $estandar = Servicio::find($linea['id'])?->formulas->pluck('item_id')->all() ?? [];
+                $insumos = array_merge($reales->pluck('item_id')->all(), $estandar);
+                $validables = $reales->filter(fn ($c) => (float) ($c['cantidad'] ?? 0) > 0)->pluck('item_id')->all() ?: $estandar;
+            } else {
+                $insumos = [(int) $linea['id']];
+                $validables = $insumos;
+            }
+            $ids = array_merge($ids, $insumos);
+            $cantidades[] = [$validables, $linea['quantity'] ?? null];
+        }
+        $items = $this->bloquearArticulos($ids);
+        foreach ($cantidades as [$insumos, $cantidad]) {
+            foreach ($insumos as $id) {
+                if (isset($items[$id]) && ! $items[$id]->is_fractionable) {
+                    $this->validarUnidades($cantidad);
+                }
+            }
+        }
+    }
+
+    private function validarUnidades($cantidad): void
+    {
+        if (! is_numeric($cantidad) || ! is_finite((float) $cantidad) || (float) $cantidad <= 0 || floor((float) $cantidad) !== (float) $cantidad) {
+            throw new ContabilidadException('Las salidas no fraccionables requieren unidades enteras mayores que cero.');
+        }
+    }
+
+    private function operacionesVenta($venta): array
+    {
+        $operaciones = [];
+        foreach ($venta->detalles as $detalle) {
+            if ($detalle->service_id) {
+                foreach ($this->consumosDeDetalle($detalle) as $consumo) {
+                    $operaciones[] = [$consumo['articulo'], $consumo['cantidad'] * (float) $detalle->quantity];
+                }
+            }
+            if ($detalle->item_id && ($item = Articulo::find($detalle->item_id))) {
+                $operaciones[] = [$item, (float) $detalle->quantity];
+            }
+        }
+
+        return $operaciones;
+    }
+
+    /** Lecturas actuales después del mutex; no se suman volúmenes ni equivalentes. */
+    private function validarDemanda(array $operaciones): void
+    {
+        $items = $this->bloquearArticulos(array_map(fn ($op) => $op[0]->id, $operaciones));
+        $demanda = [];
+        foreach ($operaciones as [$item, $cantidad]) {
+            $actual = $items->get($item->id);
+            if (! $actual) {
+                throw new ContabilidadException('El artículo ya no está disponible.');
+            }
+            if ($actual->is_fractionable) {
+                continue;
+            }
+            $this->validarUnidades($cantidad);
+            $demanda[$item->id] = ($demanda[$item->id] ?? 0) + $cantidad;
+        }
+        foreach ($demanda as $id => $cantidad) {
+            $item = $items[$id];
+            if ((float) $item->existencia_actual < $cantidad) {
+                throw new ContabilidadException('Existencias insuficientes para '.$item->producto.'.');
+            }
+            $lotes = Lote::where('item_id', $id)->where('cantidad_disponible', '>', 0)
+                ->orderBy('fecha_entrada')->orderBy('id')->lockForUpdate()->get();
+            if ((float) $lotes->sum('cantidad_disponible') < $cantidad) {
+                throw new ContabilidadException('Lotes insuficientes para '.$item->producto.'. Requiere conciliación documentada.');
+            }
+            $saldo = StockLedger::where('item_id', $id)->orderByDesc('id')->lockForUpdate()->first();
+            if (! $saldo || (float) $saldo->saldo_cantidad < $cantidad) {
+                throw new ContabilidadException('Kárdex insuficiente para '.$item->producto.'. Requiere conciliación documentada.');
+            }
+        }
+    }
+
     /**
      * Descuenta el inventario de una venta (detalles cargados en $venta->detalles).
      *
@@ -24,6 +146,9 @@ class InventarioService
      */
     public function descontarPorVenta($venta): array
     {
+        $this->bloquearUsuarios(array_merge([auth()->id()], $venta->detalles->pluck('stylist_id')->all()));
+        $operaciones = $this->operacionesVenta($venta);
+        $this->validarDemanda($operaciones);
         $stockCritico = [];
         // Contexto de trazabilidad para el Kárdex inmutable (stock_ledger_entries)
         $contexto = [
@@ -36,7 +161,6 @@ class InventarioService
             if ($detalle->service_id != null) {
                 $this->descontarInsumosDeServicio($detalle, $stockCritico, $contexto);
             }
-
             if ($detalle->item_id != null) {
                 $this->descontarProductoFisico($detalle->item_id, $detalle->quantity, $stockCritico, $contexto);
             }
@@ -114,6 +238,11 @@ class InventarioService
      */
     protected function consumirVolumen(Articulo $articulo, float $cantidad, array &$stockCritico, ?array $contexto = null): void
     {
+        if (! $articulo->is_fractionable) {
+            $this->descontarProductoFisico($articulo->id, $cantidad, $stockCritico, $contexto);
+
+            return;
+        }
         // Insumo NO fraccionable en la receta: se consume por UNIDADES, sin
         // juego de volumen. (Antes el bucle de volumen drenaba toda la
         // existencia: integridad de inventario corregida.)
@@ -209,6 +338,10 @@ class InventarioService
         if (! $articulo) {
             return;
         }
+        if (! $articulo->is_fractionable) {
+            $this->validarDemanda([[$articulo, $cantidad]]);
+            $articulo = $this->bloquearArticulos([$itemId])->get($itemId);
+        }
 
         $articulo->existencia_actual -= $cantidad;
         $articulo->save();
@@ -228,6 +361,10 @@ class InventarioService
      */
     public function consumirLotesFIFO(Articulo $articulo, float $cantidad): void
     {
+        if (! $articulo->is_fractionable) {
+            $this->validarUnidades($cantidad);
+            $this->bloquearArticulos([$articulo->id]);
+        }
         if ($cantidad <= 0) {
             return;
         }
@@ -240,6 +377,9 @@ class InventarioService
             ->get();
 
         $pendiente = (float) $cantidad;
+        if (! $articulo->is_fractionable && (float) $lotes->sum('cantidad_disponible') < $pendiente) {
+            throw new ContabilidadException('Cobertura FIFO incompleta; requiere conciliación documentada.');
+        }
 
         foreach ($lotes as $lote) {
             if ($pendiente <= 0) {
@@ -250,6 +390,9 @@ class InventarioService
             $lote->cantidad_disponible -= $aDescontar;
             $lote->save();
             $pendiente -= $aDescontar;
+        }
+        if (! $articulo->is_fractionable && $pendiente > 0) {
+            throw new ContabilidadException('Cobertura FIFO incompleta; requiere conciliación documentada.');
         }
     }
 
@@ -318,6 +461,9 @@ class InventarioService
      */
     public function revertirPorVenta($venta): void
     {
+        $this->bloquearUsuarios([auth()->id()]);
+        // Los cálculos y el lote de devolución se conservan; solo sincronización.
+        $this->bloquearArticulos(array_map(fn ($op) => $op[0]->id, $this->operacionesVenta($venta)));
         // Contexto de trazabilidad para el Kárdex inmutable
         $contexto = [
             'origen' => StockLedger::ORIGEN_REVERSION_VENTA,
@@ -355,6 +501,9 @@ class InventarioService
         $articulo = Articulo::find($itemId);
         if (! $articulo || $cantidad <= 0) {
             return;
+        }
+        if (! $articulo->is_fractionable) {
+            $articulo = $this->bloquearArticulos([$itemId])->get($itemId);
         }
 
         $articulo->existencia_actual += $cantidad;
@@ -412,6 +561,7 @@ class InventarioService
      */
     public function registrarMerma(Articulo $articulo, string $tipo, float $cantidad, ?int $mermaId = null): float
     {
+        $this->validarDemanda([[$articulo, $cantidad]]);
         $contexto = [
             'origen' => StockLedger::ORIGEN_MERMA,
             'referencia_tipo' => 'merma',

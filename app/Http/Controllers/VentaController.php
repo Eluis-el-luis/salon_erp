@@ -362,6 +362,7 @@ class VentaController extends Controller
             }
 
             $detallesCreados = [];
+            (new InventarioService)->bloquearCarrito($request->cart);
 
             foreach ($request->cart as $index => $cartItem) {
                 $esServicio = $cartItem['type'] === 'servicio';

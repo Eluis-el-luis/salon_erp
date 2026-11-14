@@ -106,6 +106,7 @@ class CompraService
             ]);
 
             // LÍNEAS DEL DOCUMENTO (sin efectos físicos todavía)
+            (new InventarioService)->bloquearArticulos(array_column($lineas, 'id'));
             foreach ($lineas as $linea) {
                 $articulo = Articulo::lockForUpdate()->findOrFail($linea['id']);
 
@@ -200,6 +201,8 @@ class CompraService
      */
     protected function ejecutarIngresoMercaderia(FacturaCompra $factura, ?int $usuarioId): void
     {
+        (new InventarioService)->bloquearUsuarios([$usuarioId ?? auth()->id()]);
+        (new InventarioService)->bloquearArticulos($factura->lineas->pluck('item_id')->filter()->all());
         // INVENTARIO + LOTES + KÁRDEX (los datos landed viven en las líneas)
         foreach ($factura->lineas as $lineaDb) {
             $articulo = Articulo::lockForUpdate()->findOrFail($lineaDb->item_id);
@@ -262,6 +265,8 @@ class CompraService
             }
 
             // Validaciones ANTES de mutar: lotes intactos y stock suficiente
+            (new InventarioService)->bloquearUsuarios([$usuarioId ?? auth()->id()]);
+            (new InventarioService)->bloquearArticulos($factura->lineas->pluck('item_id')->filter()->all());
             foreach ($factura->lineas as $linea) {
                 $articulo = Articulo::lockForUpdate()->find($linea->item_id);
                 if (! $articulo) {

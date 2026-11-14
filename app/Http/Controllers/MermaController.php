@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Exceptions\ContabilidadException;
 use App\Models\Articulo;
 use App\Models\Merma;
 use App\Services\ContabilidadService;
@@ -33,7 +34,11 @@ class MermaController extends Controller
         DB::beginTransaction();
 
         try {
-            $articulo = Articulo::findOrFail($validated['item_id']);
+            (new InventarioService)->bloquearUsuarios([auth()->id()]);
+            $articulo = (new InventarioService)->bloquearArticulos([$validated['item_id']])->get($validated['item_id']);
+            if (! $articulo) {
+                throw new ContabilidadException('El artículo ya no está disponible.');
+            }
             $cantidad = (float) $validated['cantidad'];
 
             // La merma se registra PRIMERO (para trazabilidad en el kárdex);
@@ -64,6 +69,10 @@ class MermaController extends Controller
             DB::commit();
 
             return back()->with('success', 'Merma registrada y contabilizada correctamente.');
+        } catch (ContabilidadException $e) {
+            DB::rollBack();
+
+            return back()->withErrors(['error' => $e->getMessage()]);
         } catch (\Exception $e) {
             DB::rollBack();
             Log::error('Error al registrar merma de inventario', [
