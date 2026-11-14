@@ -7,14 +7,16 @@ use App\Models\Articulo;
 use App\Models\Lote;
 use App\Models\Proveedor;
 use App\Models\StockLedger;
+use App\Services\AprobacionService;
 use App\Services\CompraService;
 use App\Services\InventarioService;
-use App\Services\AprobacionService;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 use Maatwebsite\Excel\Facades\Excel;
 
 class InventarioController extends Controller
@@ -37,34 +39,82 @@ class InventarioController extends Controller
 
     public function store(Request $request)
     {
-        // Validamos usando los nombres reales de las columnas
-        $request->validate([
-            'producto' => 'required|string|max:255',
-            'type' => 'required|string',
-            'precio_c' => 'required|numeric|min:0',
-            'existencia_actual' => 'required|integer|min:0',
-        ]);
-
-        Articulo::create($request->all());
+        $data = $this->datosCatalogo($request);
+        Articulo::create(array_merge($data, ['existencia_actual' => 0, 'current_volume' => 0]));
 
         return response()->json(['message' => 'Producto agregado exitosamente']);
     }
 
-    // 3. Actualizar: Modificar cualquier dato del producto
+    // Catálogo comercial; las cantidades físicas pertenecen a operaciones documentadas.
     public function update(Request $request, $id)
     {
-        $request->validate([
-            'producto' => 'required|string|max:255',
-            'precio_c' => 'required|numeric|min:0',
-            'precio_usd' => 'required|numeric|min:0',
-            'existencia_actual' => 'required|integer|min:0',
-            'stock_min' => 'required|integer|min:0',
-        ]);
-
-        $articulo = Articulo::findOrFail($id);
-        $articulo->update($request->all());
+        $data = $this->datosCatalogo($request, (int) $id);
+        DB::transaction(function () use ($id, $data) {
+            $articulo = Articulo::lockForUpdate()->findOrFail($id);
+            $cambios = [];
+            foreach (['type', 'unit_measure', 'is_fractionable', 'total_volume'] as $field) {
+                if (! array_key_exists($field, $data)) {
+                    continue;
+                }
+                $igual = match ($field) {
+                    'is_fractionable' => (bool) $data[$field] === (bool) $articulo->$field,
+                    'total_volume' => (float) $data[$field] === (float) $articulo->$field,
+                    default => $data[$field] === $articulo->$field,
+                };
+                if (! $igual) {
+                    $cambios[] = $field;
+                }
+            }
+            if ($cambios && $this->tieneContextoFisico($articulo)) {
+                throw ValidationException::withMessages(array_fill_keys($cambios,
+                    'No se puede reinterpretar un artículo con existencias, historial o fórmulas vinculadas.'));
+            }
+            if ($cambios && ($data['is_fractionable'] ?? $articulo->is_fractionable) && (float) ($data['total_volume'] ?? $articulo->total_volume) <= 0) {
+                throw ValidationException::withMessages(['total_volume' => 'Defina una capacidad positiva para fraccionamiento.']);
+            }
+            $articulo->update($data);
+        });
 
         return response()->json(['message' => 'Producto actualizado correctamente']);
+    }
+
+    private function datosCatalogo(Request $request, ?int $id = null): array
+    {
+        // missing rechaza incluso cero/NULL: no admitir cantidades en este contrato.
+        $data = $request->validate([
+            'existencia_actual' => 'missing', 'current_volume' => 'missing',
+            'producto' => 'required|string|max:255', 'precio_c' => 'required|numeric|min:0',
+            'precio_usd' => 'sometimes|required|numeric|min:0', 'stock_min' => 'sometimes|required|integer|min:0',
+            'codigo' => ['nullable', 'string', 'max:255', Rule::unique('items', 'codigo')->ignore($id)],
+            'ubicacion' => 'nullable|string|max:255', 'categoria' => 'nullable|string|max:255', 'marca' => 'nullable|string|max:255',
+            'provider_id' => 'nullable|integer|exists:providers,id',
+            'type' => ($id ? 'sometimes|' : 'required|').'in:servicio,producto_venta,producto_interno',
+            'is_fractionable' => 'sometimes|required|boolean', 'unit_measure' => 'sometimes|required|string|max:10',
+            'total_volume' => 'sometimes|required|numeric|min:0|max:999999.99',
+        ], [
+            'existencia_actual.missing' => 'Las existencias no se modifican desde el catálogo; requieren una operación documentada.',
+            'current_volume.missing' => 'El volumen abierto no se modifica desde el catálogo; requiere una operación documentada.',
+        ]);
+        if (! $id && ($data['is_fractionable'] ?? false) && (float) ($data['total_volume'] ?? 0) <= 0) {
+            throw ValidationException::withMessages(['total_volume' => 'Defina una capacidad positiva para fraccionamiento.']);
+        }
+
+        return $data;
+    }
+
+    private function tieneContextoFisico(Articulo $articulo): bool
+    {
+        if ((float) $articulo->existencia_actual != 0 || (float) $articulo->current_volume != 0) {
+            return true;
+        }
+        // Incluye documentos retenidos e historial agotado/eliminado lógicamente.
+        foreach (['lotes', 'stock_ledger_entries', 'purchase_invoice_lines', 'sale_details', 'sale_detail_consumptions', 'service_formulas', 'mermas'] as $table) {
+            if (DB::table($table)->where('item_id', $articulo->id)->orderBy('id')->lockForUpdate()->first()) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     // 4. Eliminar: Quitar un producto del catálogo

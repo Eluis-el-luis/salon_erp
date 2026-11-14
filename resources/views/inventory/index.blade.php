@@ -163,11 +163,11 @@
                                 </div>
                                 <div>
                                     <label class="block text-xs font-bold text-gray-700 mb-1">Volumen Total</label>
-                                    <input type="number" step="0.01" x-model.number="form.total_volume" @input="form.current_volume = form.total_volume" placeholder="Ej. 1000" class="w-full shadow-sm border rounded py-2 px-3 text-gray-700 focus:ring-emerald-500">
+                                    <input type="number" step="0.01" x-model.number="form.total_volume" placeholder="Ej. 1000" class="w-full shadow-sm border rounded py-2 px-3 text-gray-700 focus:ring-emerald-500">
                                 </div>
                                 <div>
                                     <label class="block text-xs font-bold text-gray-700 mb-1">Volumen Actual</label>
-                                    <input type="number" step="0.01" x-model.number="form.current_volume" class="w-full shadow-sm border rounded py-2 px-3 text-gray-700 focus:ring-emerald-500 bg-gray-100">
+                                    <output x-text="physical.current_volume"></output>
                                 </div>
                             </div>
                             <p x-show="form.is_fractionable" class="text-xs text-blue-600 mt-2 italic">Al facturar servicios ligados a este producto, se descontarán mililitros de aquí en lugar de botellas enteras.</p>
@@ -187,7 +187,8 @@
                         <div class="col-span-2 grid grid-cols-3 gap-4 mt-2">
                             <div>
                                 <label class="block text-xs font-bold text-gray-700 mb-1">Stock Actual (Botellas)</label>
-                                <input type="number" x-model.number="form.existencia_actual" class="w-full shadow-sm border rounded py-2 px-3 text-gray-700 focus:ring-emerald-500">
+                                <output x-text="physical.existencia_actual"></output>
+                                <p>El catálogo no ingresa existencias. Registre las entradas mediante operaciones documentadas.</p>
                             </div>
                             <div>
                                 <label class="block text-xs font-bold text-gray-700 mb-1">Stock Mínimo</label>
@@ -220,11 +221,12 @@
             openModal: false,
             editMode: false, 
             editId: null,    
+            physical: { existencia_actual: 0, current_volume: 0 },
             
             form: {
                 codigo: '', producto: '', categoria: '', marca: '', ubicacion: '',
-                type: 'producto_venta', precio_c: 0, precio_usd: 0, existencia_actual: 0, stock_min: 5,
-                provider_id: '', is_fractionable: false, unit_measure: 'ml', total_volume: 0, current_volume: 0
+                type: 'producto_venta', precio_c: 0, precio_usd: 0, stock_min: 5,
+                provider_id: '', is_fractionable: false, unit_measure: 'ml', total_volume: 0
             },
             
             tasaCambio: 37, 
@@ -248,10 +250,11 @@
             resetForm() {
                 this.editMode = false;
                 this.editId = null;
+                this.physical = { existencia_actual: 0, current_volume: 0 };
                 this.form = {
                     codigo: '', producto: '', categoria: '', marca: '', ubicacion: '',
-                    type: 'producto_venta', precio_c: 0, precio_usd: 0, existencia_actual: 0, stock_min: 5,
-                    provider_id: '', is_fractionable: false, unit_measure: 'ml', total_volume: 0, current_volume: 0
+                    type: 'producto_venta', precio_c: 0, precio_usd: 0, stock_min: 5,
+                    provider_id: '', is_fractionable: false, unit_measure: 'ml', total_volume: 0
                 };
             },
             
@@ -263,6 +266,7 @@
             editProduct(product) {
                 this.editMode = true;
                 this.editId = product.id;
+                this.physical = { existencia_actual: product.existencia_actual ?? 0, current_volume: product.current_volume ?? 0 };
                 this.form = {
                     codigo: product.codigo || '',
                     producto: product.producto || '',
@@ -272,13 +276,11 @@
                     type: product.type || 'producto_venta',
                     precio_c: product.precio_c || 0,
                     precio_usd: product.precio_usd || 0,
-                    existencia_actual: product.existencia_actual || 0,
-                    stock_min: product.stock_min || 5,
+                    stock_min: product.stock_min ?? 5,
                     provider_id: product.provider_id || '',
                     is_fractionable: product.is_fractionable == 1,
-                    unit_measure: product.unit_measure || 'ml', 
-                    total_volume: product.total_volume || 0,
-                    current_volume: product.current_volume || 0
+                    unit_measure: product.unit_measure,
+                    total_volume: product.total_volume ?? 0
                 };
                 this.openModal = true;
             },
@@ -310,8 +312,9 @@
                         setTimeout(() => { window.location.reload(); }, 1000);
                     } else {
                         let data = await response.json();
-                        alert('Error al guardar. Revisa la consola.');
-                        console.log(data);
+                        alert(response.status === 422
+                            ? Object.values(data.errors ?? {}).flat().join('\n') || 'Revise los datos del artículo.'
+                            : 'No se pudo guardar el artículo. Compruebe su sesión e inténtelo de nuevo.');
                     }
                 } catch (error) {
                     console.error('Error de conexión:', error);

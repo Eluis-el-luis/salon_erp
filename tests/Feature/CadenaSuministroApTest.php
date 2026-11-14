@@ -53,8 +53,10 @@ class CadenaSuministroApTest extends TestCase
             'name' => 'Admin',
             'email' => 'admin@t.com',
             'password' => 'password',
-            'role' => 'admin',
-            'role_id' => Rol::where('name', 'Administrador')->first()->id,
+            // Las ventas de estos casos deben ejecutarse inmediatamente:
+            // solo el propietario está exento del umbral actual de aprobación.
+            'role' => 'alvaro',
+            'role_id' => Rol::where('name', 'Álvaro (Propietario)')->first()->id,
             'is_active' => true,
         ]);
 

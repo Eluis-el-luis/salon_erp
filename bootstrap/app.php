@@ -23,6 +23,8 @@ return Application::configure(basePath: dirname(__DIR__))
         $exceptions->shouldRenderJsonWhen(
             // Los endpoints BI del dashboard (panel/api/*) responden JSON también
             // sin sesión: el fetch() del SPA recibe 401 en lugar de un redirect HTML.
-            fn (Request $request) => $request->is('api/*') || $request->is('panel/api/*'),
+            // El formulario de inventario solicita también errores JSON mediante Accept.
+            fn (Request $request) => $request->is('api/*') || $request->is('panel/api/*')
+                || ($request->is('inventario', 'inventario/*') && $request->expectsJson()),
         );
     })->create();
