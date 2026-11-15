@@ -6,7 +6,7 @@ try {
     $pdo = new PDO('mysql:host=127.0.0.1;port=3306;charset=utf8mb4', 'root', '', [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
     $snapshot = [];
     $phase = $argv[2] ?? '05';
-    $schemas = in_array($phase, ['H16', 'H15', 'H01A', 'H02A', 'H04A', 'H03B1', 'H03B2', 'H03B2C', 'H04B'], true) ? ['salon_erp', 'salon_erp_test', 'salon_erp_bootstrap_check'] : ['salon_erp', 'salon_erp_test'];
+    $schemas = in_array($phase, ['H16', 'H15', 'H01A', 'H02A', 'H04A', 'H03B1', 'H03B2', 'H03B2C', 'H04B', 'H01B2A'], true) ? ['salon_erp', 'salon_erp_test', 'salon_erp_bootstrap_check'] : ['salon_erp', 'salon_erp_test'];
     foreach ($schemas as $schema) {
         $tables = $pdo->query("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA='$schema' AND TABLE_TYPE='BASE TABLE' ORDER BY TABLE_NAME")->fetchAll(PDO::FETCH_COLUMN);
         foreach ($tables as $table) {
@@ -19,7 +19,7 @@ try {
             $snapshot[$schema][$table] = ['count' => count($rows), 'content' => hash('sha256', implode('', $rows)), 'schema' => hash('sha256', $ddl)];
         }
     }
-    if (! in_array($phase, ['05', '06', 'H12', 'H14A', 'H13', 'H13B', 'H13C', 'H16', 'H15', 'H01A', 'H02A', 'H04A', 'H03B1', 'H03B2', 'H03B2C', 'H04B'], true)) { throw new RuntimeException('Fase inválida'); }
+    if (! in_array($phase, ['05', '06', 'H12', 'H14A', 'H13', 'H13B', 'H13C', 'H16', 'H15', 'H01A', 'H02A', 'H04A', 'H03B1', 'H03B2', 'H03B2C', 'H04B', 'H01B2A'], true)) { throw new RuntimeException('Fase inválida'); }
     $file = dirname(__DIR__, 2).'/storage/app/private/isolation-'.$phase.'-before.json';
     if (($argv[1] ?? '') === 'before') {
         $handle = fopen($file, 'x');
@@ -29,6 +29,29 @@ try {
         fclose($handle);
     } elseif (($argv[1] ?? '') === 'after') {
         $baseline = json_decode(file_get_contents($file), true, 512, JSON_THROW_ON_ERROR);
+        if ($phase === 'H01B2A') {
+            foreach ($baseline['salon_erp_test'] as $table => $original) {
+                if ($table === 'migrations') continue;
+                if (($snapshot['salon_erp_test'][$table] ?? null) !== $original) {
+                    throw new RuntimeException('Cambió una tabla histórica de test: '.$table);
+                }
+            }
+            $expectedNew = ['inventory_opening_lines','inventory_openings'];
+            $newTables = array_values(array_diff(array_keys($snapshot['salon_erp_test']),array_keys($baseline['salon_erp_test'])));
+            sort($newTables);
+            if ($newTables !== $expectedNew || $snapshot['salon_erp_test']['migrations']['count'] !== 79) {
+                throw new RuntimeException('Esquema documental final inesperado');
+            }
+            $oldRows = [];
+            $q = $pdo->query("SELECT * FROM salon_erp_test.migrations WHERE migration <> '2026_11_14_000005_create_inventory_opening_documents'");
+            while ($row = $q->fetch(PDO::FETCH_ASSOC)) $oldRows[] = hash('sha256',serialize($row));
+            sort($oldRows,SORT_STRING);
+            if (count($oldRows) !== $baseline['salon_erp_test']['migrations']['count']
+                || hash('sha256',implode('',$oldRows)) !== $baseline['salon_erp_test']['migrations']['content']) {
+                throw new RuntimeException('Cambió el registro de las 78 migraciones previas');
+            }
+            echo "TEST_HISTORICAL_COUNTS_CONTENT_SCHEMA_AND_78_MIGRATION_ROWS_EQUAL=True\n";
+        }
         if (! in_array($phase, ['05', 'H13C'], true)) {
             if ($snapshot['salon_erp'] !== $baseline['salon_erp']) {
                 foreach (array_unique(array_merge(array_keys($baseline['salon_erp']), array_keys($snapshot['salon_erp']))) as $table) {
@@ -43,7 +66,7 @@ try {
                 $developmentChanged = true;
             }
             if (! ($developmentChanged ?? false)) echo "DEVELOPMENT_ALL_COUNTS_CONTENT_AND_SCHEMA_EQUAL=True\n";
-            if (in_array($phase, ['H16', 'H15', 'H01A', 'H02A', 'H04A', 'H03B1', 'H03B2', 'H03B2C', 'H04B'], true)) {
+            if (in_array($phase, ['H16', 'H15', 'H01A', 'H02A', 'H04A', 'H03B1', 'H03B2', 'H03B2C', 'H04B', 'H01B2A'], true)) {
                 if ($snapshot['salon_erp_bootstrap_check'] !== $baseline['salon_erp_bootstrap_check']) { throw new RuntimeException('Diferencias en ensayo bootstrap'); }
                 echo "BOOTSTRAP_CHECK_ALL_COUNTS_CONTENT_AND_SCHEMA_EQUAL=True\n";
             }

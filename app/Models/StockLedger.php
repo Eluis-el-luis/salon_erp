@@ -204,8 +204,14 @@ class StockLedger extends Model
      */
     public static function registrarApertura(Articulo $articulo, ?int $usuarioId = null, ?string $notas = null): ?self
     {
+        if (\Illuminate\Support\Facades\DB::transactionLevel() === 0) {
+            throw new \LogicException('La apertura heredada requiere una transacción y el mutex del artículo.');
+        }
+        // Misma semántica heredada, con lectura actual. No usar la copia previa
+        // al bloqueo para decidir versión, cantidades o ausencia de movimientos.
+        $articulo = Articulo::whereKey($articulo->getKey())->lockForUpdate()->firstOrFail();
         if((int)$articulo->inventory_representation_version===2)throw new \App\Exceptions\ContabilidadException('La apertura heredada no admite versión 2. H01-B está pendiente.');
-        if (static::where('item_id', $articulo->id)->exists()) {
+        if (static::where('item_id', $articulo->id)->orderBy('id')->lockForUpdate()->first()) {
             return null;
         }
 
