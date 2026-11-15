@@ -79,7 +79,7 @@
                 <span class="text-xs font-semibold text-blue-600 uppercase">Producto</span>
                 <h3 class="font-bold text-gray-800 mt-1">{{ $producto->producto }}</h3>
                 <p class="text-blue-700 font-bold mt-2">C$ {{ number_format($producto->precio_c, 2) }}</p>
-                <p class="text-xs text-gray-500 mt-1">Stock: {{ $producto->existencia_actual }}</p>
+                <p class="text-xs text-gray-500 mt-1">Stock: {{ $producto->existencia_actual }}@if((int)$producto->inventory_representation_version === 2) envases cerrados; abierto: {{ $producto->current_volume }} {{ $producto->unit_measure }}@endif</p>
             </div>
             @endforeach
 
@@ -391,7 +391,7 @@
                                 <div class="text-sm font-bold text-gray-800" x-text="fila.producto"></div>
                                 <div class="text-[11px] text-gray-400" x-text="'Estándar: ' + fila.estandar + ' ' + fila.unit_measure"></div>
                             </div>
-                            <input type="number" step="0.1" min="0" x-model.number="fila.real"
+                            <input type="text" inputmode="decimal" x-model="fila.real"
                                    class="w-24 text-center shadow-sm border border-gray-300 rounded py-1 px-2 text-sm font-bold text-blue-700">
                             <span class="text-xs text-gray-500" x-text="fila.unit_measure"></span>
                         </div>
@@ -417,6 +417,8 @@
         return [
             'id' => $servicio->id,
             'name' => $servicio->name,
+            'composition_reference' => \App\Services\CapturaConsumoService::activa()
+                ? app(\App\Services\CapturaConsumoService::class)->referenciaDisponible($servicio->id) : null,
             'price' => (float) $servicio->price,
             'variantes' => $servicio->variantes->where('is_active', true)->map(function ($variante) {
                 return [
@@ -553,6 +555,7 @@
                         type: 'servicio',
                         quantity: 1,
                         appointment_id: parseInt(appointmentId),
+                        composition_reference: this.servicioInfo(parseInt(urlParams.get('service_id')))?.composition_reference || null,
                     };
                     const price = parseFloat(urlParams.get('price'));
                     const stylistIds = (urlParams.get('stylist_ids') || urlParams.get('stylist_id') || '')
@@ -782,9 +785,16 @@
             guardarConsumo() {
                 const item = this.cart[this.modalConsumo.index];
                 if (item) {
-                    item.consumo = this.modalConsumo.filas.map(function (f) {
-                        return { item_id: f.item_id, cantidad: parseFloat(f.real) || 0 };
-                    });
+                    const rows = [];
+                    for (const f of this.modalConsumo.filas) {
+                        const raw = String(f.real ?? '').trim();
+                        if (!/^\d+(?:\.\d{1,2})?$/.test(raw) || !Number.isFinite(Number(raw)) || Number(raw) > 99999999.99) {
+                            window.dispatchEvent(new CustomEvent('notify', { detail: `${f.producto}: indique una cantidad válida, no negativa y con máximo dos decimales.` }));
+                            return;
+                        }
+                        rows.push({ item_id: f.item_id, cantidad: raw });
+                    }
+                    item.consumo = rows;
                 }
                 this.modalConsumo = { open: false, index: null, item: null, filas: [] };
             },
@@ -809,7 +819,8 @@
                         type: product.type,
                         quantity: 1,
                         variant_id: product.variant_id || null,
-                        consumo: product.consumo || null
+                        consumo: product.consumo || null,
+                        composition_reference: product.composition_reference || this.servicioInfo(product.id)?.composition_reference || null
                     });
                 }
             },

@@ -59,7 +59,7 @@
         <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
             <div class="card p-5">
                 <p class="text-xs font-bold text-gray-500 uppercase">Existencia</p>
-                <p class="text-2xl font-black text-gray-900">{{ $articulo->existencia_actual }} <span class="text-sm text-gray-400">{{ $articulo->unit_measure ?? 'uds' }}</span></p>
+                <p class="text-2xl font-black text-gray-900">{{ $articulo->existencia_actual }} <span class="text-sm text-gray-400">{{ (int)$articulo->inventory_representation_version === 2 ? 'envases cerrados' : ($articulo->unit_measure ?? 'uds') }}</span></p>
             </div>
             <div class="card p-5">
                 <p class="text-xs font-bold text-gray-500 uppercase">Costo Promedio / Und</p>
@@ -137,7 +137,12 @@
                                     <td class="px-6 py-3 {{ $vencido ? 'text-red-600 font-bold' : 'text-gray-600' }}">
                                         {{ $lote->fecha_vencimiento?->format('d/m/Y') ?? '—' }}
                                     </td>
-                                    <td class="px-6 py-3 text-right text-gray-800">{{ $lote->cantidad_disponible }}</td>
+                                    <td class="px-6 py-3 text-right text-gray-800">
+                                        {{ $lote->cantidad_disponible }}
+                                        @if((int)$lote->inventory_representation_version === 2)
+                                            cerrados + {{ $lote->volumen_abierto }} {{ $lote->unidad_nativa }} abiertos
+                                        @endif
+                                    </td>
                                     <td class="px-6 py-3 text-right text-gray-600">C$ {{ number_format($lote->costo_unitario, 4) }}</td>
                                     <td class="px-6 py-3">
                                         @if($vencido)

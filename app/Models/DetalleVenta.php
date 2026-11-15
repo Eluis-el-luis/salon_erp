@@ -22,6 +22,7 @@ class DetalleVenta extends Model
     ];
 
     protected $casts = [
+        'consumption_snapshot' => 'array',
         'quantity' => 'integer',
         'unit_price' => 'float',
     ];

@@ -39,7 +39,10 @@ class MermaController extends Controller
             if (! $articulo) {
                 throw new ContabilidadException('El artículo ya no está disponible.');
             }
-            $cantidad = (float) $validated['cantidad'];
+            if(app(\App\Services\InventarioFraccionableService::class)->exige($articulo)) {
+                \App\Support\InventoryDecimal::scaled($validated['cantidad'],$validated['tipo']==='unidad'?0:2,$validated['tipo']==='unidad'?99999999:9999999999);
+            }
+            $cantidad = $validated['cantidad'];
 
             // La merma se registra PRIMERO (para trazabilidad en el kárdex);
             // el descuento físico, lotes FIFO y valor al costo real los resuelve
@@ -64,6 +67,7 @@ class MermaController extends Controller
                 : '1.1.4';
 
             $contabilidad = new ContabilidadService;
+            if(\App\Services\CapturaConsumoService::activa())$codigoInventario=$contabilidad->codigoInventarioArticulo($articulo);
             $contabilidad->contabilizarMerma($merma->fresh(), $codigoInventario);
 
             DB::commit();

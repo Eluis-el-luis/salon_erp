@@ -444,10 +444,11 @@ class NotificationService
     /** Stock crítico (≤ stock_min) */
     public function notifyStockCritico(Articulo $articulo): void
     {
+        if(!$articulo->stockCritico())return;
         $this->createByType(
             self::TYPE_STOCK_CRITICO,
             'Stock crítico',
-            "{$articulo->producto} tiene {$articulo->existencia_actual} {$articulo->unit_measure} (mín: {$articulo->stock_min}).",
+            "{$articulo->producto} tiene {$articulo->unidadesEquivalentesDisponibles()} envases/unidades equivalentes (mín: {$articulo->stock_min}).",
             ['item_id' => $articulo->id, 'url' => "/inventario?stock=critico"],
             'normal'
         );
@@ -456,6 +457,7 @@ class NotificationService
     /** Stock agotado (0) */
     public function notifyStockAgotado(Articulo $articulo): void
     {
+        if($articulo->unidadesEquivalentesDisponibles()>0)return;
         $this->createByType(
             self::TYPE_STOCK_AGOTADO,
             '⚠ STOCK AGOTADO',

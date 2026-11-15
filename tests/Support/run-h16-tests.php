@@ -23,6 +23,15 @@ try {
         try {$pdo->query("SELECT 1 FROM `$schema`.`users` LIMIT 0");throw new RuntimeException('Other database accessible');}
         catch(PDOException $error) {if(($error->errorInfo[1]??0)!==1142) throw $error;}
     }
+    $mode=$argv[1]??'';
+    if(str_starts_with($mode,'h03b2') && $mode!=='h03b2-migrate') {
+        if((int)$pdo->query('SELECT COUNT(*) FROM migrations')->fetchColumn()!==77)throw new RuntimeException('H03-B2 expects exactly 77 migrations');
+        foreach(['2026_11_14_000001_add_fractional_inventory_representation','2026_11_14_000002_create_stock_ledger_lot_allocations','2026_11_14_000003_add_consumption_composition_evidence'] as $migration) {
+            $q=$pdo->prepare('SELECT COUNT(*) FROM migrations WHERE migration=?');$q->execute([$migration]);
+            if((int)$q->fetchColumn()!==1)throw new RuntimeException('H03-B2 schema incomplete');
+        }
+        echo 'SCHEMA: H03-B1 + consumption evidence; 77 migrations'.PHP_EOL;
+    }
     $backup='E:/salon-erp-backups/salon_erp_test_20261112_074028_3813668.sql';
     if(!is_file($backup) || filesize($backup)===0 || !preg_match('/^([A-Fa-f0-9]{64})\s/',file_get_contents($backup.'.sha256'),$match) || strtolower($match[1])!==hash_file('sha256',$backup)) throw new RuntimeException('Test backup missing or hash mismatch');
     echo 'PREFLIGHT: salon_erp_test / salon_erp_tester@localhost / 3306; exact privileges; both other databases denied; backup SHA256 verified'.PHP_EOL;
@@ -34,8 +43,17 @@ try {
     if(file_put_contents($file,$enabled,LOCK_EX)!==strlen($enabled)) throw new RuntimeException('Cannot write reset flag');
     unset($before,$enabled);
     $mode=$argv[1]??'';
-    if(!in_array($mode,['','checks-only','links-only','h15','h15-regressions','h01a','h01a-regressions','h02a','h02a-races','h02a-regressions','h04a'],true)) throw new RuntimeException('Unexpected test selection');
+    if(!in_array($mode,['','checks-only','links-only','h15','h15-regressions','h01a','h01a-regressions','h02a','h02a-races','h02a-regressions','h04a','h03b1-install','h03b1-guards','h03b1','h03b2-migrate','h03b2','h03b2-races','h03b2-accounts','h03b2-rollback','h03b2-guards'],true)) throw new RuntimeException('Unexpected test selection');
     $paths=match($mode) {
+        'h03b2-guards'=>['ConsumptionSnapshotGuardTest'],
+        'h03b2-rollback'=>['ConsumptionSnapshotRollbackTest'],
+        'h03b2-migrate'=>['ConsumptionSnapshotInstallationTest'],
+        'h03b2-accounts'=>['InventoryAccountConsistencyTest'],
+        'h03b2'=>['FractionalInventoryV2Test'],
+        'h03b2-races'=>['FractionalInventoryV2ConcurrencyTest'],
+        'h03b1-guards'=>['FractionalSchemaInstallationTest'],
+        'h03b1-install'=>['FractionalSchemaInstallationTest'],
+        'h03b1'=>['FractionalTraceSchemaTest','InventoryUnitIntegrityTest','SaleCancellationEvidenceTest','CatalogInventoryProtectionTest','InventoryUnitConcurrencyTest'],
         'h04a'=>['SaleCancellationEvidenceTest','InventoryUnitIntegrityTest','InventoryUnitConcurrencyTest'],
         'h02a'=>['InventoryUnitIntegrityTest'],
         'h02a-races'=>['InventoryUnitConcurrencyTest'],
@@ -49,8 +67,9 @@ try {
         default=>['AppointmentAvailabilityTest','ApiAgendaSecurityTest','AppointmentServicesTest','AgendaNavigationTest','AgendaStateControlsTest','AppointmentConcurrencyTest','AppointmentSaleLinksTest'],
     };
     $args=[PHP_BINARY,'-d','display_errors=0','-d','zend.exception_ignore_args=1',$root.'/vendor/phpunit/phpunit/phpunit','--configuration',$root.'/phpunit.xml','--do-not-cache-result','--no-progress','--stop-on-error','--stop-on-failure'];
+    if($mode==='h03b1-guards') array_push($args,'--filter','test_versioned_metadata_blocks_both_down_methods_before_any_ddl');
     foreach($paths as $path) $args[]=$root.'/tests/Feature/'.$path.'.php';
-    $log=$root.'/storage/app/private/'.(str_starts_with($mode,'h15') || str_starts_with($mode,'h01a') || str_starts_with($mode,'h02a') || $mode==='h04a'?$mode:'h16'.($mode!==''?'-'.str_replace('-only','',$mode):'')).'-phpunit.log';
+    $log=$root.'/storage/app/private/'.(str_starts_with($mode,'h15') || str_starts_with($mode,'h01a') || str_starts_with($mode,'h02a') || $mode==='h04a' || str_starts_with($mode,'h03b')?$mode:'h16'.($mode!==''?'-'.str_replace('-only','',$mode):'')).'-phpunit.log';
     $process=proc_open($args,[0=>['pipe','r'],1=>['file',$log,'w'],2=>['redirect',1]],$pipes,$root);
     if(!is_resource($process)) throw new RuntimeException('Cannot launch PHPUnit');
     fclose($pipes[0]);$exit=proc_close($process);

@@ -273,6 +273,10 @@ class CompraService
                     continue; // artículo eliminado del catálogo: nada físico que revertir
                 }
 
+                if (app(InventarioFraccionableService::class)->exige($articulo)) {
+                    throw new \App\Exceptions\ContabilidadException('La reversión física versionada requiere H04-B; no se modifica esta compra.');
+                }
+
                 $esFraccionable = $articulo->is_fractionable && (float) $articulo->total_volume > 0;
                 $nuevaExistencia = (float) $articulo->existencia_actual - (float) $linea->cantidad;
                 $nuevoVolumen = $esFraccionable
@@ -351,6 +355,12 @@ class CompraService
         $lineas = [];
 
         foreach ($lineasRequest as $fila) {
+            $item=Articulo::findOrFail($fila['id']);
+            if(app(InventarioFraccionableService::class)->exige($item)) {
+                $units=\App\Support\InventoryDecimal::scaled($fila['cantidad']??null,0,99999999);
+                if(!$units)throw new \App\Exceptions\ContabilidadException('Se requieren envases enteros positivos.');
+                \App\Support\InventoryDecimal::physical($item->total_volume,$units);
+            }
             $cantidad = round((float) ($fila['cantidad'] ?? 0), 4);
             $costo = round((float) ($fila['costo'] ?? $fila['costo_unitario'] ?? 0), 6);
 
@@ -385,6 +395,10 @@ class CompraService
      */
     protected function ingresarStock(Articulo $articulo, array $linea, $lineaDb, FacturaCompra $factura, ?int $usuarioId): void
     {
+        if(app(InventarioFraccionableService::class)->exige($articulo)) {
+            app(InventarioFraccionableService::class)->ingresar($articulo,$lineaDb,$factura,$usuarioId);
+            return;
+        }
         $cantidad = (float) $linea['cantidad'];
         $costoFinal = (float) $linea['costo_unitario_final'];
         $esFraccionable = $articulo->is_fractionable && (float) $articulo->total_volume > 0;

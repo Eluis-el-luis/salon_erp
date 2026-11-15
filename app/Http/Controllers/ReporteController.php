@@ -58,10 +58,10 @@ class ReporteController extends Controller
         $inventario = Articulo::where('type', '!=', 'servicio')->orderBy('existencia_actual', 'asc')->get();
         
         $valorInventario = $inventario->sum(function($articulo) {
-            return $articulo->existencia_actual * $articulo->precio_c;
+            return $articulo->unidadesEquivalentesDisponibles() * $articulo->precio_c;
         });
         
-        $articulosCriticos = $inventario->where('existencia_actual', '<=', 'stock_min');
+        $articulosCriticos = $inventario->filter(fn($i)=>$i->stockCritico());
 
         // ==========================================
         // REPORTE 4: DIFERENCIAL CAMBIARIO (Mesa de Cambio)

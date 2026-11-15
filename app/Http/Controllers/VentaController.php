@@ -115,6 +115,10 @@ class VentaController extends Controller
             }
 
             // PRE-APROBACIÓN: solo el documento se persiste. La cita se completa,
+            if (\App\Services\CapturaConsumoService::activa()) {
+                foreach($venta->detalles()->get() as $detail) app(\App\Services\CapturaConsumoService::class)->guardar($detail,
+                    ['type'=>'servicio','id'=>$detail->service_id,'quantity'=>$detail->quantity]);
+            }
             // el inventario se descuenta y el asiento se genera al aprobar.
             if ($requiereAprobacion) {
                 $venta->update(['payload_aprobacion' => [
@@ -203,7 +207,7 @@ class VentaController extends Controller
             return response()->json(['error' => 'ACCESO DENEGADO: Por seguridad, debes abrir tu turno de caja inicializando el fondo antes de poder cobrar.'], 403);
         }
 
-        $request->validate([
+        try { $request->validate([
             'cart' => 'required|array',
             // nullable: si el POS omite el descuento, se aplica el % del grupo del cliente
             'discount' => 'nullable|numeric|min:0',
@@ -232,7 +236,10 @@ class VentaController extends Controller
             'draft_id' => 'nullable|integer|exists:sales,id',
             // PRE-APROBACIÓN: fuerza la retención de la venta para supervisión
             'requiere_aprobacion' => 'nullable|boolean',
-        ]);
+        ]); } catch (\Illuminate\Validation\ValidationException $e) {
+            if($request->expectsJson())return response()->json(['message'=>'Revise los datos de la venta.','errors'=>$e->errors()],422);
+            throw $e;
+        }
 
         $accion = $request->action ?? 'pagar';
 
@@ -332,6 +339,9 @@ class VentaController extends Controller
                     );
                 }
 
+                if(\App\Services\CapturaConsumoService::activa())foreach($venta->detalles as $d) {
+                    if(($d->consumption_snapshot['version']??null)!==2)throw new \App\Exceptions\ContabilidadException('Cotización heredada sin composición verificable: requiere conciliación.');
+                }
                 $venta->detalles()->delete();
                 $venta->update([
                     'client_id' => $request->client_id,
@@ -362,7 +372,7 @@ class VentaController extends Controller
             }
 
             $detallesCreados = [];
-            (new InventarioService)->bloquearCarrito($request->cart);
+            $composiciones=(new InventarioService)->bloquearCarrito($request->cart);
 
             foreach ($request->cart as $index => $cartItem) {
                 $esServicio = $cartItem['type'] === 'servicio';
@@ -399,7 +409,7 @@ class VentaController extends Controller
 
             // BOM DINÁMICO: persistir el consumo real editado por recepción
             // (fuente de verdad del descuento de inventario y su reversión).
-            $this->registrarConsumosReales($request->cart, $detallesCreados);
+            $this->registrarConsumosReales($request->cart, $detallesCreados,$composiciones);
 
             $venta->load('detalles');
 
@@ -544,9 +554,13 @@ class VentaController extends Controller
      * InventarioService usará estos valores como fuente de verdad para
      * descontar inventario y revertirlo exactamente al anular.
      */
-    protected function registrarConsumosReales(array $cart, array $detalles): void
+    protected function registrarConsumosReales(array $cart, array $detalles,array $composiciones=[]): void
     {
         foreach ($cart as $index => $cartItem) {
+            if (\App\Services\CapturaConsumoService::activa()) {
+                app(\App\Services\CapturaConsumoService::class)->guardar($detalles[$index],$cartItem,$composiciones[$index]??null);
+                continue;
+            }
             $consumos = $cartItem['consumo'] ?? null;
 
             if (($cartItem['type'] ?? null) !== 'servicio' || !is_array($consumos) || count($consumos) === 0) {
@@ -840,7 +854,8 @@ class VentaController extends Controller
                         'quantity' => (int) $d->quantity,
                         'stylist_id' => $d->stylist_id,
                         'variant_id' => $d->service_variant_id,
-                        'consumo' => $d->consumos->map(fn ($c) => [
+                        'composition_reference' => $d->consumption_snapshot['reference'] ?? null,
+                        'consumo' => ($d->consumption_snapshot && $d->consumption_snapshot['mode']!=='complete') ? null : $d->consumos->map(fn ($c) => [
                             'item_id' => $c->item_id,
                             'cantidad' => (float) $c->quantity_actual,
                         ])->values(),

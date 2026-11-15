@@ -29,7 +29,7 @@ class InventarioController extends Controller
         $soloCriticos = $request->query('stock') === 'critico';
 
         $articulos = Articulo::where('type', '!=', 'servicio')
-            ->when($soloCriticos, fn ($q) => $q->whereColumn('existencia_actual', '<=', 'stock_min'))
+            ->when($soloCriticos, fn ($q) => $q->criticos())
             ->orderBy('producto', 'asc')
             ->get();
         $proveedores = Proveedor::all();
@@ -40,7 +40,12 @@ class InventarioController extends Controller
     public function store(Request $request)
     {
         $data = $this->datosCatalogo($request);
-        Articulo::create(array_merge($data, ['existencia_actual' => 0, 'current_volume' => 0]));
+        $item=new Articulo(array_merge($data, ['existencia_actual' => 0, 'current_volume' => 0]));
+        // Únicamente altas nuevas vacías y dentro del ensayo activado; nunca backfill.
+        if(\App\Services\CapturaConsumoService::activa()&&$item->is_fractionable) {
+            $item->forceFill(['inventory_representation_version'=>2]);
+        }
+        $item->save();
 
         return response()->json(['message' => 'Producto agregado exitosamente']);
     }
@@ -72,6 +77,19 @@ class InventarioController extends Controller
             if ($cambios && ($data['is_fractionable'] ?? $articulo->is_fractionable) && (float) ($data['total_volume'] ?? $articulo->total_volume) <= 0) {
                 throw ValidationException::withMessages(['total_volume' => 'Defina una capacidad positiva para fraccionamiento.']);
             }
+            if ((int)$articulo->inventory_representation_version === 2 && ($data['is_fractionable'] ?? $articulo->is_fractionable)) {
+                if (array_key_exists('total_volume', $data)) {
+                    try { \App\Support\InventoryDecimal::scaled($data['total_volume'], 2, 99999999); }
+                    catch (\App\Exceptions\ContabilidadException $e) { throw ValidationException::withMessages(['total_volume' => $e->getMessage()]); }
+                }
+                if (!in_array($data['unit_measure'] ?? $articulo->unit_measure, ['ml', 'gr', 'oz'], true)) {
+                    throw ValidationException::withMessages(['unit_measure' => 'Seleccione una unidad nativa explícita: ml, gr u oz.']);
+                }
+            }
+            // Una alta V2 vacía puede dejar de ser fraccionable; no hay existencias ni historia que convertir.
+            if ($cambios && (int)$articulo->inventory_representation_version === 2 && !($data['is_fractionable'] ?? $articulo->is_fractionable)) {
+                $articulo->inventory_representation_version = null;
+            }
             $articulo->update($data);
         });
 
@@ -97,6 +115,11 @@ class InventarioController extends Controller
         ]);
         if (! $id && ($data['is_fractionable'] ?? false) && (float) ($data['total_volume'] ?? 0) <= 0) {
             throw ValidationException::withMessages(['total_volume' => 'Defina una capacidad positiva para fraccionamiento.']);
+        }
+        if(!$id&&\App\Services\CapturaConsumoService::activa()&&($data['is_fractionable']??false)) {
+            try {\App\Support\InventoryDecimal::scaled($data['total_volume']??null,2,99999999);}
+            catch(\App\Exceptions\ContabilidadException $e){throw ValidationException::withMessages(['total_volume'=>$e->getMessage()]);}
+            if(!in_array($data['unit_measure']??null,['ml','gr','oz'],true))throw ValidationException::withMessages(['unit_measure'=>'Seleccione una unidad nativa explícita: ml, gr u oz.']);
         }
 
         return $data;
@@ -267,11 +290,15 @@ class InventarioController extends Controller
 
                 // Artículos con stock físico previo al ledger corporativo
                 $requiereApertura = $entradas->isEmpty()
+                    && (int)$articulo->inventory_representation_version!==2
                     && ((float) $articulo->existencia_actual > 0 || (float) $articulo->current_volume > 0);
 
                 // Lotes abiertos con caducidad (FIFO + vencimiento)
                 $lotes = Lote::where('item_id', $articulo->id)
-                    ->where('cantidad_disponible', '>', 0)
+                    ->where(function($q) use($articulo) {
+                        $q->where('cantidad_disponible','>',0);
+                        if((int)$articulo->inventory_representation_version===2)$q->orWhere('volumen_abierto','>',0);
+                    })
                     ->orderBy('fecha_entrada')
                     ->orderBy('id')
                     ->get();
@@ -332,12 +359,12 @@ class InventarioController extends Controller
         $fechaLimite = Carbon::now()->addDays($dias);
 
         $lotesProximos = Lote::with('articulo')
-            ->where('cantidad_disponible', '>', 0)
+            ->where(function($q){$q->where('cantidad_disponible','>',0);if(\App\Services\CapturaConsumoService::activa())$q->orWhere('volumen_abierto','>',0);})
             ->whereNotNull('fecha_vencimiento')
             ->where('fecha_vencimiento', '<=', Carbon::now()->addDays($dias))
             ->orderBy('fecha_vencimiento', 'asc')
             ->get()
-            ->groupBy('articulo_id')
+            ->groupBy('item_id')
             ->map(function ($lotes, $articuloId) {
                 $articulo = $lotes->first()->articulo;
 
@@ -349,6 +376,8 @@ class InventarioController extends Controller
                             'fecha_vencimiento' => $lote->fecha_vencimiento->format('d/m/Y'),
                             'dias_restantes' => $lote->fecha_vencimiento->diffInDays(now(), false),
                             'cantidad_disponible' => $lote->cantidad_disponible,
+                            'volumen_abierto' => $lote->volumen_abierto,
+                            'unidad_nativa' => $lote->unidad_nativa,
                         ];
                     }),
                 ];
@@ -356,7 +385,7 @@ class InventarioController extends Controller
 
         return response()->json([
             'alertas' => $lotesProximos->values(),
-            'total_alertas' => $lotesProximos->sum('cantidad_disponible'),
+            'total_alertas' => $lotesProximos->sum(fn($grupo)=>$grupo['lotes']->count()),
         ]);
     }
 }

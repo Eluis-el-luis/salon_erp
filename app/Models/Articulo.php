@@ -12,6 +12,23 @@ class Articulo extends Model
 
     protected $table = 'items';
 
+    public function unidadesEquivalentesDisponibles(): float
+    {
+        return (float)$this->existencia_actual + ((int)$this->inventory_representation_version===2 && (float)$this->total_volume>0
+            ? (float)$this->current_volume/(float)$this->total_volume : 0);
+    }
+
+    public function stockCritico(): bool
+    {
+        return $this->unidadesEquivalentesDisponibles()<=(float)$this->stock_min;
+    }
+
+    public function scopeCriticos($query)
+    {
+        if(!\App\Services\CapturaConsumoService::activa())return $query->whereColumn('existencia_actual','<=','stock_min');
+        return $query->whereRaw('(CASE WHEN inventory_representation_version = 2 THEN existencia_actual + current_volume / NULLIF(total_volume,0) ELSE existencia_actual END) <= stock_min');
+    }
+
     protected $fillable = [
         'codigo',
         'ubicacion',
@@ -141,6 +158,17 @@ class Articulo extends Model
             }
         }
 
+        // Solo la representación nueva pondera también el remanente abierto.
+        // Es un indicador de catálogo por lotes; el COGS sigue leyendo el kárdex.
+        foreach(self::whereIn('id',array_keys($mapa))->get() as $item) {
+            if((int)$item->inventory_representation_version!==2)continue;
+            $quantity=0;$value=0;
+            foreach($item->lotes as $lot) {
+                $native=(float)$lot->cantidad_disponible*(float)$lot->capacidad_envase+(float)$lot->volumen_abierto;
+                $quantity+=$native;$value+=$native*(float)$lot->costo_unitario;
+            }
+            if($quantity>0)$mapa[$item->id]=['costo_unitario'=>round($value/$quantity,6),'fuente'=>'lotes'];
+        }
         return $mapa;
     }
 }

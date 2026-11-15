@@ -70,7 +70,7 @@
                         <!-- Control de Stock -->
                         <td class="px-6 py-4 whitespace-nowrap text-center">
                             <div class="flex flex-col items-center justify-center">
-                                @if($articulo->existencia_actual <= $articulo->stock_min)
+                                @if($articulo->stockCritico())
                                     <span class="px-3 py-1 inline-flex text-sm leading-5 font-black rounded-full bg-red-100 text-red-700 border border-red-200" title="¡Stock Crítico!">
                                         ⚠ {{ $articulo->existencia_actual }} und.
                                     </span>
@@ -78,6 +78,9 @@
                                     <span class="px-3 py-1 inline-flex text-sm leading-5 font-bold rounded-full bg-green-100 text-green-800">
                                         {{ $articulo->existencia_actual }} und.
                                     </span>
+                                @endif
+                                @if((int)$articulo->inventory_representation_version === 2)
+                                    <span>cerrados + {{ $articulo->current_volume }} {{ $articulo->unit_measure }} abiertos</span>
                                 @endif
                                 <span class="text-[10px] text-gray-400 mt-1 font-bold">Mínimo: {{ $articulo->stock_min }}</span>
                             </div>

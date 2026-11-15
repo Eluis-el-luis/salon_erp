@@ -344,7 +344,37 @@ class ContabilidadService
             ->where('origen', StockLedger::ORIGEN_VENTA)
             ->get();
 
-        if ($consumosVenta->isNotEmpty()) {
+        $inventarioPorCosto = ['insumos' => [], 'mercaderia' => []];
+        $modernos = $sale->detalles->filter(fn ($d) => ($d->consumption_snapshot['version'] ?? null) === 2);
+        if ($modernos->isNotEmpty()) {
+            if ($modernos->count() !== $sale->detalles->count()) {
+                throw new ContabilidadException('La venta mezcla composiciones sin evidencia compatible.');
+            }
+            $details = $modernos->keyBy('id');
+            $serviciosCent = 0;
+            $productosCent = 0;
+            foreach ($consumosVenta as $consumo) {
+                $detail = $details->get($consumo->sale_detail_id);
+                if (! $detail) {
+                    throw new ContabilidadException('Movimiento sin detalle de origen verificable.');
+                }
+                $value = abs(\App\Support\InventoryDecimal::signed($consumo->getRawOriginal('valor')));
+                $articulo = Articulo::withTrashed()->find($consumo->item_id);
+                if (! $articulo) {
+                    throw new ContabilidadException('Artículo de origen no verificable para la salida contable.');
+                }
+                $codigo = $this->codigoInventarioArticulo($articulo);
+                $grupo = $detail->service_id ? 'insumos' : 'mercaderia';
+                $inventarioPorCosto[$grupo][$codigo] = ($inventarioPorCosto[$grupo][$codigo] ?? 0) + $value;
+                if ($detail->service_id) {
+                    $serviciosCent += $value;
+                } else {
+                    $productosCent += $value;
+                }
+            }
+            $costoInsumosConsumidos = $serviciosCent / 100;
+            $costoMercaderiaProductos = $productosCent / 100;
+        } elseif ($consumosVenta->isNotEmpty()) {
             $itemsProductos = $sale->detalles->whereNotNull('item_id')->pluck('item_id')->unique()->flip();
 
             foreach ($consumosVenta as $consumo) {
@@ -438,6 +468,8 @@ class ContabilidadService
             'descuento_productos' => $descuentoProductos,
             'costo_insumos' => $costoInsumosConsumidos,
             'costo_mercaderia' => $costoMercaderiaProductos,
+            // Los mapas están en centavos: nunca se agrupa antes de resolver el artículo.
+            'inventario_por_costo' => $modernos->isNotEmpty() ? $inventarioPorCosto : null,
         ];
     }
 
@@ -525,14 +557,8 @@ class ContabilidadService
                 'descripcion' => 'Costo de insumos en servicio',
             ]);
 
-            DetalleAsiento::create([
-                'asiento_id' => $asientoCosto->id,
-                'cuenta_id' => $this->getCuentaIdByCodigo('1.1.5'),
-                'moneda_id' => $monedaBase,
-                'debe' => 0,
-                'haber' => round($d['costo_insumos'], 2),
-                'descripcion' => 'Baja de inventario por consumo interno',
-            ]);
+            $this->acreditarInventarioCosto($asientoCosto->id, $monedaBase,
+                $d['inventario_por_costo']['insumos'] ?? null, $d['costo_insumos'], '1.1.5', 'Baja de inventario por consumo interno');
 
             $this->validarCuadre($asientoCosto->id);
         }
@@ -558,16 +584,34 @@ class ContabilidadService
                 'descripcion' => 'Costo de productos vendidos',
             ]);
 
-            DetalleAsiento::create([
-                'asiento_id' => $asientoCostoMercaderia->id,
-                'cuenta_id' => $this->getCuentaIdByCodigo('1.1.4'),
-                'moneda_id' => $monedaBase,
-                'debe' => 0,
-                'haber' => round($d['costo_mercaderia'], 2),
-                'descripcion' => 'Baja de inventario de productos',
-            ]);
+            $this->acreditarInventarioCosto($asientoCostoMercaderia->id, $monedaBase,
+                $d['inventario_por_costo']['mercaderia'] ?? null, $d['costo_mercaderia'], '1.1.4', 'Baja de inventario de productos');
 
             $this->validarCuadre($asientoCostoMercaderia->id);
+        }
+    }
+
+    private function acreditarInventarioCosto(int $asientoId, int $monedaId, ?array $porCuenta, float $costo, string $cuentaHeredada, string $descripcion): void
+    {
+        // La ruta heredada no se reclasifica al interpretar documentos anteriores.
+        $centavos = \App\Support\InventoryDecimal::scaled(number_format($costo, 2, '.', ''), 2, 999999999999999);
+        $porCuenta ??= [$cuentaHeredada => $centavos];
+        if (array_sum($porCuenta) !== $centavos) {
+            throw new ContabilidadException('COGS y créditos de inventario no coinciden.');
+        }
+        ksort($porCuenta, SORT_STRING);
+        foreach ($porCuenta as $codigo => $monto) {
+            if ($monto === 0) {
+                continue;
+            }
+            if ($monto < 0 || ! in_array($codigo, ['1.1.4', '1.1.5'], true)) {
+                throw new ContabilidadException('Distribución de inventario inválida.');
+            }
+            DetalleAsiento::create([
+                'asiento_id' => $asientoId, 'cuenta_id' => $this->getCuentaIdByCodigo($codigo),
+                'moneda_id' => $monedaId, 'debe' => 0,
+                'haber' => \App\Support\InventoryDecimal::text($monto), 'descripcion' => $descripcion,
+            ]);
         }
     }
 
@@ -1049,7 +1093,7 @@ class ContabilidadService
      * contable (CMV/CST/merma): fraccionables e internos → insumos 1.1.5;
      * producto de reventa no fraccionable → productos 1.1.4.
      */
-    protected function codigoInventarioArticulo($articulo): string
+    public function codigoInventarioArticulo($articulo): string
     {
         if (! $articulo) {
             return '1.1.5';

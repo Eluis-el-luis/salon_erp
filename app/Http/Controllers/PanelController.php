@@ -78,7 +78,7 @@ class PanelController extends Controller
 
         // ALERTAS DE INVENTARIO: críticos AHORA (drill-down: /inventario?stock=critico)
         $stockCritico = Articulo::where('type', '!=', 'servicio')
-            ->whereColumn('existencia_actual', '<=', 'stock_min')
+            ->criticos()
             ->count();
 
         // ÚLTIMOS MOVIMIENTOS (eager loading: cajero + cliente + conteo de pagos)

@@ -53,16 +53,19 @@ class InventarioService
     }
 
     /** Descubrir insumos antes de las FK de detalles/consumos. No cambia recetas. */
-    public function bloquearCarrito(array $cart): void
+    public function bloquearCarrito(array $cart): array
     {
         $this->bloquearUsuarios(array_merge([auth()->id()], array_column($cart, 'stylist_id')));
         $ids = [];
         $cantidades = [];
-        foreach ($cart as $linea) {
+        $fotos=[];
+        foreach ($cart as $index=>$linea) {
+            if(CapturaConsumoService::activa())$fotos[$index]=app(CapturaConsumoService::class)->foto($linea);
             if (($linea['type'] ?? null) === 'servicio') {
                 // Incluir fórmula para el fallback actual de consumos cero.
                 $reales = collect($linea['consumo'] ?? []);
-                $estandar = Servicio::find($linea['id'])?->formulas->pluck('item_id')->all() ?? [];
+                $estandar = isset($fotos[$index])?array_column($fotos[$index]['ingredients'],'item_id')
+                    : (Servicio::find($linea['id'])?->formulas->pluck('item_id')->all() ?? []);
                 $insumos = array_merge($reales->pluck('item_id')->all(), $estandar);
                 $validables = $reales->filter(fn ($c) => (float) ($c['cantidad'] ?? 0) > 0)->pluck('item_id')->all() ?: $estandar;
             } else {
@@ -80,6 +83,7 @@ class InventarioService
                 }
             }
         }
+        return $fotos;
     }
 
     private function validarUnidades($cantidad): void
@@ -95,10 +99,25 @@ class InventarioService
         foreach ($venta->detalles as $detalle) {
             if ($detalle->service_id) {
                 foreach ($this->consumosDeDetalle($detalle) as $consumo) {
-                    $operaciones[] = [$consumo['articulo'], $consumo['cantidad'] * (float) $detalle->quantity, true];
+                    $cantidad=$detalle->consumption_snapshot
+                        ? \App\Support\InventoryDecimal::text(\App\Support\InventoryDecimal::physical($consumo['cantidad'],$detalle->quantity))
+                        : $consumo['cantidad'] * (float) $detalle->quantity;
+                    $operaciones[] = [$consumo['articulo'], $cantidad, true];
                 }
             }
-            if ($detalle->item_id && ($item = Articulo::find($detalle->item_id))) {
+            if ($detalle->item_id) {
+                $item = Articulo::find($detalle->item_id);
+                if (! $item) {
+                    if ($detalle->consumption_snapshot || CapturaConsumoService::activa()) {
+                        throw new ContabilidadException('El artículo está archivado o no está disponible; no puede confirmarse su salida.');
+                    }
+                    continue;
+                }
+                $foto = $detalle->consumption_snapshot;
+                if ($foto && (($foto['item_id'] ?? null) !== (int)$item->id || ($foto['item_type'] ?? null) !== $item->type
+                    || ($foto['fractional'] ?? null) !== (bool)$item->is_fractionable)) {
+                    throw new ContabilidadException('La clasificación del artículo cambió o no tiene fotografía verificable. Requiere conciliación.');
+                }
                 $operaciones[] = [$item, (float) $detalle->quantity, false];
             }
         }
@@ -111,12 +130,19 @@ class InventarioService
     {
         $items = $this->bloquearArticulos(array_map(fn ($op) => $op[0]->id, $operaciones));
         $demanda = [];
-        foreach ($operaciones as [$item, $cantidad]) {
+        foreach ($operaciones as $operacion) {
+            [$item, $cantidad]=$operacion;
             $actual = $items->get($item->id);
             if (! $actual) {
                 throw new ContabilidadException('El artículo ya no está disponible.');
             }
             if ($actual->is_fractionable) {
+                $v2=app(InventarioFraccionableService::class);
+                if($v2->exige($actual)) {
+                    $demanda[$item->id]=($demanda[$item->id]??0)+(($operacion[2]??false)
+                        ? \App\Support\InventoryDecimal::scaled($cantidad)
+                        : \App\Support\InventoryDecimal::physical($actual->total_volume,$cantidad));
+                }
                 continue;
             }
             $this->validarUnidades($cantidad);
@@ -124,6 +150,10 @@ class InventarioService
         }
         foreach ($demanda as $id => $cantidad) {
             $item = $items[$id];
+            if($item->is_fractionable) {
+                app(InventarioFraccionableService::class)->validar($item,(int)$cantidad);
+                continue;
+            }
             if ((float) $item->existencia_actual < $cantidad) {
                 throw new ContabilidadException('Existencias insuficientes para '.$item->producto.'.');
             }
@@ -158,6 +188,7 @@ class InventarioService
         ];
 
         foreach ($venta->detalles as $detalle) {
+            $contexto['sale_detail_id']=$detalle->consumption_snapshot? $detalle->id:null;
             if ($detalle->service_id != null) {
                 $this->descontarInsumosDeServicio($detalle, $stockCritico, $contexto);
             }
@@ -174,7 +205,9 @@ class InventarioService
         // BOM DINÁMICO: consume lo capturado como consumo real (POS) o la
         // fórmula estándar si la línea no guardó consumos.
         foreach ($this->consumosDeDetalle($detalle) as $consumo) {
-            $cantidadADescontar = $consumo['cantidad'] * (float) $detalle->quantity;
+            $cantidadADescontar = $detalle->consumption_snapshot
+                ? \App\Support\InventoryDecimal::text(\App\Support\InventoryDecimal::physical($consumo['cantidad'],$detalle->quantity))
+                : $consumo['cantidad'] * (float) $detalle->quantity;
             $this->consumirVolumen($consumo['articulo'], $cantidadADescontar, $stockCritico, $contexto);
         }
     }
@@ -191,6 +224,7 @@ class InventarioService
      */
     public function consumosDeDetalle($detalle): array
     {
+        if($detalle->consumption_snapshot||CapturaConsumoService::activa())return app(CapturaConsumoService::class)->resolver($detalle);
         $detalle->loadMissing('consumos.articulo');
 
         if ($detalle->consumos->isNotEmpty()) {
@@ -236,8 +270,13 @@ class InventarioService
      * unidad nueva (total_volume).
      * FASE 4 AVANZADA: También descuenta del lote correspondiente (FIFO por volumen).
      */
-    protected function consumirVolumen(Articulo $articulo, float $cantidad, array &$stockCritico, ?array $contexto = null): void
+    protected function consumirVolumen(Articulo $articulo, $cantidad, array &$stockCritico, ?array $contexto = null): void
     {
+        if(app(InventarioFraccionableService::class)->exige($articulo)) {
+            $articulo=$this->bloquearArticulos([$articulo->id])->get($articulo->id);
+            app(InventarioFraccionableService::class)->consumir($articulo,\App\Support\InventoryDecimal::scaled($cantidad),false,$contexto,$contexto['sale_detail_id']??null);
+            $this->registrarStockCritico($articulo->refresh(),$stockCritico);return;
+        }
         if (! $articulo->is_fractionable) {
             $this->descontarProductoFisico($articulo->id, $cantidad, $stockCritico, $contexto);
 
@@ -303,6 +342,8 @@ class InventarioService
             $contexto['referencia_tipo'] ?? null,
             $contexto['referencia_id'] ?? null,
             auth()->id(),
+            null,
+            $contexto['sale_detail_id']??null,
         );
     }
 
@@ -338,6 +379,12 @@ class InventarioService
         if (! $articulo) {
             return;
         }
+        if(app(InventarioFraccionableService::class)->exige($articulo)) {
+            $articulo=$this->bloquearArticulos([$itemId])->get($itemId);
+            $n=\App\Support\InventoryDecimal::scaled($cantidad,0,99999999);
+            app(InventarioFraccionableService::class)->consumir($articulo,$n*\App\Support\InventoryDecimal::scaled($articulo->total_volume),true,$contexto,$contexto['sale_detail_id']??null);
+            $this->registrarStockCritico($articulo->refresh(),$stockCritico);return;
+        }
         if (! $articulo->is_fractionable) {
             $this->validarDemanda([[$articulo, $cantidad]]);
             $articulo = $this->bloquearArticulos([$itemId])->get($itemId);
@@ -361,6 +408,7 @@ class InventarioService
      */
     public function consumirLotesFIFO(Articulo $articulo, float $cantidad): void
     {
+        if(app(InventarioFraccionableService::class)->exige($articulo))throw new ContabilidadException('Use el consumo versionado completo, no un débito aislado de lotes.');
         if (! $articulo->is_fractionable) {
             $this->validarUnidades($cantidad);
             $this->bloquearArticulos([$articulo->id]);
@@ -402,6 +450,7 @@ class InventarioService
      */
     public function consumirLotesFIFOVolumen(Articulo $articulo, float $volumenMl): void
     {
+        if(app(InventarioFraccionableService::class)->exige($articulo))throw new ContabilidadException('Use el consumo versionado completo, no un débito aislado de lotes.');
         if ($volumenMl <= 0 || ! $articulo->is_fractionable) {
             return;
         }
@@ -462,6 +511,15 @@ class InventarioService
     public function bloquearEfectosVenta($venta): void
     {
         $this->bloquearUsuarios([auth()->id()]);
+        if(CapturaConsumoService::activa()) {
+            // Descubrir IDs no interpreta capturas heredadas. La devolución las valida después.
+            $ids=$venta->detalles->pluck('item_id')->filter()->all();
+            foreach($venta->detalles as $d) {
+                $ids=array_merge($ids,array_column($d->consumption_snapshot['ingredients']??[],'item_id'),$d->consumos->pluck('item_id')->all());
+            }
+            $ids=array_merge($ids,StockLedger::where('referencia_tipo','venta')->where('referencia_id',$venta->id)->pluck('item_id')->filter()->all());
+            $this->bloquearArticulos($ids);return;
+        }
         // Los cálculos y el lote de devolución se conservan; solo sincronización.
         $this->bloquearArticulos(array_map(fn ($op) => $op[0]->id, $this->operacionesVenta($venta)));
     }
@@ -469,6 +527,8 @@ class InventarioService
     public function revertirPorVenta($venta): void
     {
         $this->bloquearEfectosVenta($venta);
+        foreach($this->operacionesVenta($venta) as [$item]) if((int)$item->inventory_representation_version===2)
+            throw new ContabilidadException('Devolución versión 2 bloqueada hasta H04-B; no se inventan lotes ni costos.');
         // No devolver una receta/cantidad que carece de salida original documentada.
         $esperado = [];
         $volumenEsperado = [];
@@ -599,9 +659,9 @@ class InventarioService
      * valoración (promedio móvil del ledger; nunca el precio de venta).
      * Debe ejecutarse dentro de la transacción del caso de uso.
      */
-    public function registrarMerma(Articulo $articulo, string $tipo, float $cantidad, ?int $mermaId = null): float
+    public function registrarMerma(Articulo $articulo, string $tipo, $cantidad, ?int $mermaId = null): float
     {
-        $this->validarDemanda([[$articulo, $cantidad]]);
+        $this->validarDemanda([[$articulo, $cantidad, $tipo==='volumen']]);
         $contexto = [
             'origen' => StockLedger::ORIGEN_MERMA,
             'referencia_tipo' => 'merma',
@@ -648,6 +708,11 @@ class InventarioService
      */
     public function calcularCostoPromedioVolumen(Articulo $articulo): float
     {
+        if((int)$articulo->inventory_representation_version===2) {
+            $last=StockLedger::where('item_id',$articulo->id)->latest('id')->first();
+            $q=$last?\App\Support\InventoryDecimal::stored($last->getRawOriginal('saldo_volumen')):0;
+            return $q?\App\Support\InventoryDecimal::ratio(\App\Support\InventoryDecimal::signed($last->getRawOriginal('saldo_valor')),1000000,$q)/1000000:0;
+        }
         if (! $articulo->is_fractionable || $articulo->total_volume <= 0) {
             return 0;
         }

@@ -44,6 +44,7 @@ class StockLedger extends Model
 
     protected $fillable = [
         'item_id',
+        'sale_detail_id',
         'fecha',
         'movimiento',
         'origen',
@@ -110,7 +111,9 @@ class StockLedger extends Model
         $referenciaId = null,
         ?int $usuarioId = null,
         ?string $notas = null,
+        ?int $saleDetailId = null,
     ): self {
+        if((int)$articulo->inventory_representation_version===2)throw new \App\Exceptions\ContabilidadException('Use el escritor físico versión 2 para conservar asignaciones.');
         $esFraccionable = $articulo->is_fractionable && (float) $articulo->total_volume > 0;
         $totalVolumen = $esFraccionable ? (float) $articulo->total_volume : 0.0;
 
@@ -172,7 +175,7 @@ class StockLedger extends Model
             ? round($saldoValor / $saldoPrimario, 6)
             : 0.0;
 
-        return static::create([
+        $data = [
             'item_id' => $articulo->id,
             'fecha' => now(),
             'movimiento' => $movimiento,
@@ -189,7 +192,9 @@ class StockLedger extends Model
             'costo_promedio' => $costoPromedio,
             'usuario_id' => $usuarioId ?? auth()->id(),
             'notas' => $notas,
-        ]);
+        ];
+        if($saleDetailId!==null)$data['sale_detail_id']=$saleDetailId;
+        return static::create($data);
     }
 
     /**
@@ -199,6 +204,7 @@ class StockLedger extends Model
      */
     public static function registrarApertura(Articulo $articulo, ?int $usuarioId = null, ?string $notas = null): ?self
     {
+        if((int)$articulo->inventory_representation_version===2)throw new \App\Exceptions\ContabilidadException('La apertura heredada no admite versión 2. H01-B está pendiente.');
         if (static::where('item_id', $articulo->id)->exists()) {
             return null;
         }
