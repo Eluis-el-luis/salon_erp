@@ -24,7 +24,7 @@ try {
         throw new RuntimeException('V2 scope rejected');
     }
     $input = json_decode(fgets(STDIN), true, 512, JSON_THROW_ON_ERROR);
-    if (! in_array($input['operation'], ['purchase', 'sale', 'merma'], true)) {
+    if (! in_array($input['operation'], ['purchase', 'sale', 'merma', 'annul'], true)) {
         throw new RuntimeException('Operation rejected');
     }
     $connection = (int) $db->selectOne('SELECT CONNECTION_ID() AS id')->id;
@@ -32,13 +32,14 @@ try {
     fflush(STDOUT);
     $held = false;
     $db->beforeExecuting(function ($sql) {
-        if (str_contains($sql, 'from `items`') && str_contains($sql, 'for update')) {
+        if (str_contains($sql, 'for update')) {
             echo '{"event":"attempt"}'.PHP_EOL;
             fflush(STDOUT);
         }
     });
     $db->listen(function ($q) use ($input, &$held) {
-        if ($input['hold'] && ! $held && str_contains($q->sql, 'from `items`') && str_contains($q->sql, 'for update')) {
+        $table = ($input['lock'] ?? 'items') === 'appointments' ? 'appointments' : 'items';
+        if ($input['hold'] && ! $held && str_contains($q->sql, 'from `'.$table.'`') && str_contains($q->sql, 'for update')) {
             $held = true;
             echo '{"event":"locked"}'.PHP_EOL;
             fflush(STDOUT);
@@ -56,7 +57,8 @@ try {
         $ok = true;
         $id = $doc->id;
     } else {
-        $request = Request::create($input['operation'] === 'sale' ? '/sales' : '/mermas', 'POST', $input['payload'], [], [], ['HTTP_ACCEPT' => 'application/json']);
+        $url = match ($input['operation']) { 'sale'=>'/sales', 'annul'=>'/ventas/'.(int)$input['sale_id'].'/anular', default=>'/mermas' };
+        $request = Request::create($url, 'POST', $input['payload'], [], [], ['HTTP_ACCEPT' => 'application/json']);
         $kernel = $app->make(Illuminate\Contracts\Http\Kernel::class);
         $response = $kernel->handle($request);
         $status = $response->getStatusCode();

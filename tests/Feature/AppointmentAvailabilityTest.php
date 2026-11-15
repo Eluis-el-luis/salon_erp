@@ -211,13 +211,44 @@ class AppointmentAvailabilityTest extends TestCase
         $this->assertTrue($reached); $this->assertSame($before,$this->financialSnapshot());
         $this->assertSame('pendiente',Cita::findOrFail($id)->status);
     }
-    public function test_annulment_keeps_refactoring_state_and_releases_financial_block_only(): void
+    public static function annulmentModes(): array
     {
+        return [['legacy'], ['devolucion_completa'], ['sin_restitucion']];
+    }
+
+    #[DataProvider('annulmentModes')]
+    public function test_annulment_keeps_refactoring_state_and_releases_financial_block_only(string $mode): void
+    {
+        if ($mode !== 'legacy') config(['salon.inventory_fractional_v2'=>true]);
         $this->cashAndAccounts(); $id=$this->reserve();
+        if ($mode === 'devolucion_completa') {
+            // La reapertura exige una restitución real; no una devolución vacía.
+            $item=\App\Models\Articulo::create(['producto'=>'Insumo H16 devolución','type'=>'producto_venta','precio_c'=>100,
+                'is_fractionable'=>true,'total_volume'=>100,'unit_measure'=>'ml','existencia_actual'=>0,'current_volume'=>0,'stock_min'=>0]);
+            DB::table('items')->where('id',$item->id)->update(['inventory_representation_version'=>2]);
+            app(\App\Services\CompraService::class)->registrarFactura(['provider_id'=>\App\Models\Proveedor::create(['name'=>'H16 devolución'])->id,
+                'condicion_pago'=>'credito','articulos'=>[['id'=>$item->id,'cantidad'=>1,'costo'=>'10']]]);
+            DB::table('service_formulas')->insert(['service_id'=>$this->service->id,'item_id'=>$item->id,'quantity_used'=>20]);
+        }
         $this->post('/sales/bill-appointment/'.$id,[])->assertOk(); $sale=Venta::sole();
-        $this->post('/ventas/'.$sale->id.'/anular',['motivo'=>'Reversión de fixture H16','pin_supervisor'=>'8462'])->assertRedirect();
-        $this->assertSame('anulada',$sale->fresh()->status); $this->assertSame('pendiente',Cita::findOrFail($id)->status);
+        $evidence=['motivo'=>'Reversión de fixture H16','pin_supervisor'=>'8462'];
+        if ($mode !== 'legacy') $evidence += ['inventory_intent'=>$mode,'execution_declaration'=>'prestada',
+            'execution_reference'=>'ACTA-H16','execution_description'=>'Prestación retrospectivamente constatada',
+            'execution_verified_on'=>today()->toDateString(),'execution_confirmed'=>1,
+            'verification_reference'=>'FIS-H16','verification_description'=>'Restitución verificada al mismo envase abierto original',
+            'verified_on'=>today()->toDateString(),'verification_confirmed'=>1];
+        $this->post('/ventas/'.$sale->id.'/anular',$evidence)->assertRedirect()->assertSessionHas('success');
+        $this->assertSame('anulada',$sale->fresh()->status); $this->assertSame($mode==='sin_restitucion'?'completada':'pendiente',Cita::findOrFail($id)->status);
+        if ($mode==='devolucion_completa') {
+            $this->assertSame(0,(int)$item->fresh()->existencia_actual);
+            $this->assertSame('100.00',$item->fresh()->current_volume);
+        }
         $this->post('/api/appointments',$this->payload)->assertUnprocessable();
+        if ($mode==='sin_restitucion') {
+            $this->post('/sales/bill-appointment/'.$id,[])->assertUnprocessable();
+            $this->put('/api/appointments/'.$id,['status'=>'cancelada'])->assertUnprocessable();
+            return;
+        }
         $this->put('/api/appointments/'.$id,['status'=>'cancelada'])->assertOk(); $this->reserve();
     }
 }

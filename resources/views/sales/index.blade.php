@@ -1,7 +1,7 @@
 @extends('layouts.app')
 
 @section('content')
-<div class="space-y-6" x-data="{ anularId: null }">
+<div class="space-y-6" x-data="{ anularId: null, anularExecution: false, inventoryIntent: '', executionDeclaration: '' }">
     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
         <div>
             <h2 class="page-title">Historial de Ventas</h2>
@@ -112,7 +112,7 @@
 
                                     {{-- ANULAR --}}
                                     @if($puedeAnular && in_array($venta->status, ['pagada', 'emitida', 'borrador', 'pendiente_aprobacion']))
-                                        <button @click="anularId = {{ $venta->id }}" class="text-red-500 hover:text-red-700 font-bold transition whitespace-nowrap">
+                                        <button @click="$refs.annulmentForm.reset(); inventoryIntent = ''; executionDeclaration = ''; anularExecution = @js((bool)$venta->appointment_id && !in_array($venta->status, ['borrador','pendiente_aprobacion'])); anularId = {{ $venta->id }}" class="text-red-500 hover:text-red-700 font-bold transition whitespace-nowrap">
                                             Anular
                                         </button>
                                     @endif
@@ -136,9 +136,9 @@
             <div class="relative bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
                 <div class="bg-red-600 text-white px-6 py-4">
                     <h3 class="text-lg font-bold">Anular Factura</h3>
-                    <p class="text-red-100 text-xs">El documento NO se borrará: se revertirá contablemente y el inventario regresará.</p>
+                    <p class="text-red-100 text-xs">El documento se conserva. La anulación comercial no acredita devolución de materiales.</p>
                 </div>
-                <form method="POST" :action="'/ventas/' + anularId + '/anular'">
+                <form x-ref="annulmentForm" method="POST" :data-requires-execution="String(anularExecution)" :action="'/ventas/' + anularId + '/anular'">
                     @csrf
                     <div class="p-6 space-y-4">
                         <div>
@@ -147,6 +147,39 @@
                                       class="w-full text-sm shadow-sm border border-gray-300 rounded-lg py-2 px-3 focus:ring-2 focus:ring-red-500"
                                       placeholder="Ej. Cliente canceló el servicio / error de digitación..."></textarea>
                         </div>
+                        @if(\App\Services\CapturaConsumoService::activa())
+                            <label class="block">Modalidad de inventario
+                                <select name="inventory_intent" x-model="inventoryIntent" required class="w-full">
+                                    <option value="" disabled>Selecciona una modalidad</option>
+                                    <option value="sin_restitucion">Sin restitución física</option>
+                                    <option value="devolucion_completa">Devolución física completa</option>
+                                    <option value="correccion_completa">Corrección completa de salida errónea</option>
+                                </select>
+                            </label>
+                            <fieldset x-show="inventoryIntent && inventoryIntent !== 'sin_restitucion'" :disabled="!inventoryIntent || inventoryIntent === 'sin_restitucion'">
+                                <legend>Constatación física completa</legend>
+                                <label class="block">Referencia documental <input class="w-full" name="verification_reference" required minlength="3" maxlength="160"></label>
+                                <label class="block">Material recibido o error verificado <textarea class="w-full" name="verification_description" required minlength="10" maxlength="2000"></textarea></label>
+                                <label class="block">Fecha de constatación <input type="date" name="verified_on" required max="{{ now()->toDateString() }}"></label>
+                                <label class="block"><input type="checkbox" name="verification_confirmed" value="1" required> Confirmo personalmente los lotes originales y el estado físico: los envases vendidos como cerrados siguen cerrados; cualquier volumen corresponde al mismo envase abierto, sin mezclar remanentes.</label>
+                            </fieldset>
+                            <fieldset x-show="anularExecution" :disabled="!anularExecution">
+                                <legend>Constatación retrospectiva de la ejecución</legend>
+                                <p>Esta declaración se registra ahora; no es una constancia creada cuando ocurrió el servicio.</p>
+                                <select name="execution_declaration" x-model="executionDeclaration" required class="w-full">
+                                    <option value="" disabled>Selecciona una declaración</option>
+                                    <option value="prestada">Prestación efectivamente realizada y constatada</option>
+                                    <option value="no_prestada">Prestación no realizada y constatada</option>
+                                    <option value="no_determinada">Prestación no determinada</option>
+                                </select>
+                                <label class="block">Referencia documental <input class="w-full" name="execution_reference" required minlength="3" maxlength="160"></label>
+                                <label class="block">Qué se constató <textarea class="w-full" name="execution_description" required minlength="10" maxlength="2000"></textarea></label>
+                                <label class="block">Fecha acreditada de atención (opcional) <input type="date" name="execution_attended_on" :disabled="executionDeclaration !== 'prestada'" max="{{ now()->toDateString() }}"></label>
+                                <label class="block">Fecha de constatación <input type="date" name="execution_verified_on" required max="{{ now()->toDateString() }}"></label>
+                                <label class="block"><input type="checkbox" name="execution_confirmed" value="1" required> Confirmo personalmente esta constatación.</label>
+                            </fieldset>
+                            <p data-annulment-error role="alert"></p>
+                        @endif
                         <p class="text-[11px] text-gray-400 italic">
                             Se registrará quién anuló, cuándo y por qué. Si la factura tiene comisiones ya pagadas en nómina, la anulación será rechazada.
                         </p>
@@ -154,7 +187,11 @@
                     <div class="px-6 py-4 bg-gray-50 border-t border-gray-100 flex flex-row-reverse gap-3">
                         {{-- DOBLE CONFIRMACIÓN: abre el modal de PIN de supervisor --}}
                         <button type="button"
+                                @if(\App\Services\CapturaConsumoService::activa())
+                                @click="window.authorizeAnnulment($event.target.closest('form'))"
+                                @else
                                 @click="window.dispatchEvent(new CustomEvent('open-pin', { detail: { mensaje: 'Anular una factura exige el PIN de un supervisor (Álvaro / Administrador).', form: $event.target.closest('form') } }))"
+                                @endif
                                 class="btn bg-red-600 hover:bg-red-700 text-white font-bold py-2.5 px-4 rounded-xl flex-1">
                             Continuar a Autorización
                         </button>

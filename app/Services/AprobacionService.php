@@ -176,7 +176,7 @@ class AprobacionService
 
             // 8. Citas asociadas: se completan recién al aprobar
             if ($venta->appointment_id) {
-                app(AgendaService::class)->completarDesdeVenta([(int)$venta->appointment_id]);
+                app(AgendaService::class)->completarDesdeVenta([(int)$venta->appointment_id], $venta->id);
             }
 
             return $venta->fresh();

@@ -34,7 +34,7 @@ class VentaController extends Controller
     public function __construct(private NotificationService $notifications) {}
     public function facturarCita(Request $request, $id)
     {
-        \Illuminate\Support\Facades\Log::info('facturarCita called', ['user_id' => auth()->id(), 'cookies' => $request->cookie()]);
+        \Illuminate\Support\Facades\Log::info('facturarCita called', ['user_id' => auth()->id()]);
 
         $cajaAbierta = \App\Models\SesionCaja::where('user_id', auth()->id())
                                               ->where('estado', 'abierta')
@@ -143,7 +143,7 @@ class VentaController extends Controller
                 ], 201);
             }
 
-            app(AgendaService::class)->completarDesdeVenta([$cita->id]);
+            app(AgendaService::class)->completarDesdeVenta([$cita->id], $venta->id);
 
             $venta->load('detalles');
 
@@ -280,6 +280,7 @@ class VentaController extends Controller
                 throw new \App\Exceptions\ContabilidadException('Una venta solo puede vincularse a una cita. Facture las citas por separado.');
             }
             if ($accion !== 'cotizar') app(AgendaService::class)->validarParaFacturar($citasValidadas);
+            else app(AgendaService::class)->validarVinculosDocumentales($citasValidadas);
             $subtotal = collect($request->cart)->sum(function($item) {
                 return $item['precio_c'] * $item['quantity'];
             });
@@ -329,7 +330,7 @@ class VentaController extends Controller
                 // para conservar la trazabilidad (la cotización se convierte en venta).
                 $venta = Venta::lockForUpdate()->findOrFail($request->draft_id);
 
-                if ($accion !== 'cotizar' && $venta->appointment_id && !in_array((int)$venta->appointment_id, $citasValidadas, true)) {
+                if ($venta->appointment_id && !in_array((int)$venta->appointment_id, $citasValidadas, true)) {
                     throw new \App\Exceptions\ContabilidadException('El vínculo de la cita cambió. Vuelva a consultar la venta.');
                 }
 
@@ -403,7 +404,7 @@ class VentaController extends Controller
                 ]);
 
                 if (isset($cartItem['appointment_id']) && $accion !== 'cotizar' && !$requiereAprobacion) {
-                    app(AgendaService::class)->completarDesdeVenta([(int)$cartItem['appointment_id']]);
+                    app(AgendaService::class)->completarDesdeVenta([(int)$cartItem['appointment_id']], $venta->id);
                 }
             }
 
@@ -695,13 +696,18 @@ class VentaController extends Controller
         ]);
 
         // DOBLE CONFIRMACIÓN: exige el PIN de un supervisor antes de tocar datos
-        $this->autorizarPin($request, soloSupervisor: true);
+        $supervisor = $this->autorizarPin($request, soloSupervisor: true);
 
         \Illuminate\Support\Facades\DB::beginTransaction();
 
         try {
             $venta = app(AgendaService::class)->bloquearVenta((int)$id, false);
             $venta->load(['detalles', 'pagos']);
+            if (\App\Services\CapturaConsumoService::activa()) {
+                // La venta es exclusiva; sus fotografías inmutables solo requieren lectura actual compartida.
+                $venta->setRelation('detalles', $venta->detalles()->orderBy('id')->sharedLock()->get());
+                foreach ($venta->detalles as $detalle) $detalle->setRelation('consumos', $detalle->consumos()->orderBy('id')->sharedLock()->get());
+            }
 
             if ($venta->status === Venta::ESTADO_ANULADA) {
                 throw new \App\Exceptions\ContabilidadException('La factura #' . $venta->id . ' ya está anulada.');
@@ -735,9 +741,13 @@ class VentaController extends Controller
             }
 
             // Las cotizaciones no generaron efectos: solo cambian de estado
+            $evidence = \App\Services\CapturaConsumoService::activa()
+                ? app(\App\Services\AnulacionVentaService::class)->preparar($venta, $request, $supervisor->id, $sinEfectos) : null;
             if (! $sinEfectos) {
                 // 1. El inventario físico regresa (unidades y mililitros)
-                (new InventarioService())->revertirPorVenta($venta);
+                if ($evidence !== null) {
+                    if ($evidence['inventory_intent'] !== 'sin_restitucion') app(\App\Services\InventarioFraccionableService::class)->restituirVenta($venta, $evidence);
+                } else (new InventarioService())->revertirPorVenta($venta);
 
                 // 2. Divisas: se devuelven al cliente los USD cobrados y reingresa
                 //    el vuelto USD entregado. Se usa el turno abierto del cajero
@@ -778,14 +788,15 @@ class VentaController extends Controller
 
                 // 4. Reversión contable espejo de todos los asientos de la venta
                 $contabilidad = new \App\Services\ContabilidadService();
-                if ($asientosOriginales) $contabilidad->reversarVenta($venta, $motivo);
+                if ($asientosOriginales) $contabilidad->reversarVenta($venta, $motivo, $evidence !== null && $evidence['inventory_intent'] === 'sin_restitucion');
 
                 // 5. La cita asociada vuelve a pendiente para permitir refacturar
                 if ($venta->appointment_id) {
-                    app(AgendaService::class)->restaurarTrasAnulacion((int)$venta->appointment_id);
+                    app(AgendaService::class)->restaurarTrasAnulacion((int)$venta->appointment_id, $evidence);
                 }
             }
 
+            if ($evidence !== null) $venta->annulment_evidence = $evidence;
             $venta->update([
                 'status' => Venta::ESTADO_ANULADA,
                 'anulada_at' => now(),

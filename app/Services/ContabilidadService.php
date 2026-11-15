@@ -756,7 +756,7 @@ class ContabilidadService
      *
      * @return int Cantidad de asientos de reversión generados.
      */
-    public function reversarVenta($venta, string $motivo): int
+    public function reversarVenta($venta, string $motivo, bool $conservarCostos = false): int
     {
         $periodo = $this->resolverPeriodo(Carbon::now());
         $monedaBase = $this->getMonedaBaseId();
@@ -764,9 +764,15 @@ class ContabilidadService
         $originales = AsientoContable::where('referencia_id', $venta->id)
             ->whereIn('modulo_origen', ['ventas', 'inventario'])
             ->where('numero_asiento', 'not like', 'REV-%')
-            ->with('detalles')
+            ->with(['detalles' => fn ($q) => $q->orderBy('id')->lockForUpdate()])
+            ->orderBy('id')->lockForUpdate()
             ->get();
 
+        if ($conservarCostos) {
+            if (!CapturaConsumoService::activa() || DB::transactionLevel() === 0) throw new ContabilidadException('Reversión diferenciada fuera del contrato autorizado.');
+            // AnulacionVentaService comprobó previamente cuentas e importes contra el kárdex.
+            $originales = $originales->where('modulo_origen','ventas');
+        }
         DB::beginTransaction();
         try {
             foreach ($originales as $original) {
@@ -795,7 +801,7 @@ class ContabilidadService
             }
 
             DB::commit();
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             DB::rollBack();
             throw $e;
         }

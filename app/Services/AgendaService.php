@@ -39,7 +39,7 @@ class AgendaService
     {
         return DB::transaction(function () use ($id) {
             $cita = $this->bloquearCitas([$id])->get($id);
-            $comercial = $cita->status === 'pendiente' && !$this->ventaVigente($id);
+            $comercial = $cita->status === 'pendiente' && !$this->ejecucionBloqueada($id) && !$this->ventaVigente($id);
             return [
                 'appointment' => [
                     'id' => $cita->id, 'client_id' => $cita->client_id, 'service_id' => $cita->service_id,
@@ -74,7 +74,7 @@ class AgendaService
             $cambioServicio = $servicio !== (int)$cita->service_id;
             $comercial = $cliente !== (int)$cita->client_id || $cambioServicio
                 || $fecha !== $cita->appointment_date || $nuevos !== $anteriores;
-            if ($comercial && ($cita->status !== 'pendiente' || $this->ventaVigente($id))) {
+            if ($comercial && ($cita->status !== 'pendiente' || $this->ejecucionBloqueada($id) || $this->ventaVigente($id))) {
                 throw ValidationException::withMessages(['editing' => 'Esta cita solo permite editar notas. No se modificaron sus datos comerciales.']);
             }
             $updates = [];
@@ -100,6 +100,9 @@ class AgendaService
         }
         return DB::transaction(function () use ($id, $estado) {
             $cita = $this->bloquearCitas([$id])->get($id);
+            if ($estado !== 'completada' && $this->ejecucionBloqueada($id)) throw ValidationException::withMessages([
+                'execution' => 'La ejecución fue constatada y anulada sin restitución. Conserva su ocupación histórica; solo permite editar notas.',
+            ]);
             if (in_array($estado, ['cancelada', 'no_asistio'], true)) {
                 // Lectura actual. Ventas adquiere antes los mismos mutex y la cita.
                 if ($this->ventaVigente($id)) throw ValidationException::withMessages([
@@ -161,7 +164,7 @@ class AgendaService
         return CarbonImmutable::parse($value, config('app.timezone'))->setTimezone(config('app.timezone'));
     }
 
-    public function validarParaFacturar(array $ids): Collection
+    public function validarParaFacturar(array $ids, ?int $ventaActual = null): Collection
     {
         try {
             $citas = $this->bloquearCitas($ids);
@@ -169,6 +172,7 @@ class AgendaService
             throw new ContabilidadException($error->validator->errors()->first());
         }
         foreach ($citas as $cita) {
+            $this->exigirEjecucionFacturable((int)$cita->id, $ventaActual);
             if (!in_array($cita->status, self::OCUPAN, true)) throw new ContabilidadException(
                 'La cita #'.$cita->id.' está cancelada o marcada no_asistio. Reactívela primero desde agenda validando disponibilidad.'
             );
@@ -176,11 +180,42 @@ class AgendaService
         return $citas;
     }
 
-    public function completarDesdeVenta(array $ids): void
+    public function completarDesdeVenta(array $ids, ?int $ventaActual = null): void
     {
-        foreach ($this->validarParaFacturar($ids) as $cita) {
+        foreach ($this->validarParaFacturar($ids, $ventaActual) as $cita) {
             if ($cita->status !== 'completada') $cita->update(['status' => 'completada']);
         }
+    }
+
+    /** También protege nuevas cotizaciones sin imponerles estados de facturación. */
+    public function validarVinculosDocumentales(array $ids): void
+    {
+        foreach ($this->bloquearCitas($ids) as $cita) $this->exigirEjecucionFacturable((int)$cita->id);
+    }
+
+    private function exigirEjecucionFacturable(int $id, ?int $ventaActual = null): void
+    {
+        if ($this->ejecucionBloqueada($id)) throw new ContabilidadException('Esta ejecución ya fue prestada y su venta anulada sin restitución. No admite otra facturación ordinaria ni un segundo consumo.');
+        if (CapturaConsumoService::activa() && Venta::where('appointment_id',$id)->whereIn('status',Venta::ESTADOS_DEVENGADOS)
+            ->when($ventaActual !== null, fn ($q) => $q->where('id','<>',$ventaActual))->orderBy('id')->lockForUpdate()->first(['id'])) {
+            throw new ContabilidadException('Esta ejecución ya tiene una venta aplicada. No admite otro documento ni un segundo consumo.');
+        }
+    }
+
+    private function ejecucionBloqueada(int $id): bool
+    {
+        if (!CapturaConsumoService::activa()) return false; // Columna no desplegada en desarrollo.
+        $sales = Venta::where('appointment_id',$id)->where('status',Venta::ESTADO_ANULADA)->orderBy('id')->lockForUpdate()->get();
+        foreach ($sales as $sale) {
+            $e = $sale->annulment_evidence;
+            if ($e === null) continue; // No clasificar historia previa.
+            if (($e['version']??null)===1 && ($e['effects_applied']??null)===false) continue;
+            if (($e['version']??null)!==1 || !isset($e['appointment_execution'])) throw new ContabilidadException('Evidencia histórica de ejecución incompleta; requiere conciliación.');
+            $x = $e['appointment_execution'];
+            if (($x['version']??null)!==1 || (int)($x['appointment_id']??0)!==$id || empty($x['reference']) || empty($x['verifier_id']) || empty($x['recorded_at'])) throw new ContabilidadException('Constatación de ejecución incompatible.');
+            if ($e['inventory_intent']==='sin_restitucion' && $x['declaration']==='prestada') return true;
+        }
+        return false;
     }
 
     /** Aprobación/anulación: descubrir vínculo, mutex, cita y finalmente venta actual. */
@@ -188,16 +223,20 @@ class AgendaService
     {
         $anterior = Venta::findOrFail($id);
         $ids = $anterior->appointment_id ? [(int)$anterior->appointment_id] : [];
-        if ($paraFacturar) $this->validarParaFacturar($ids);
+        if ($paraFacturar) $this->validarParaFacturar($ids, $id);
         else $this->bloquearCitas($ids);
         $venta = Venta::lockForUpdate()->findOrFail($id);
         if ($venta->appointment_id !== $anterior->appointment_id) throw new ContabilidadException('El vínculo de la cita cambió. Vuelva a consultar la venta.');
         return $venta;
     }
 
-    public function restaurarTrasAnulacion(int $id): void
+    public function restaurarTrasAnulacion(int $id, ?array $evidence = null): void
     {
         $cita = $this->bloquearCitas([$id])->get($id);
+        if (($evidence['inventory_intent']??null)==='sin_restitucion' && ($evidence['appointment_execution']['declaration']??null)==='prestada') {
+            $cita->update(['status'=>'completada']);
+            return;
+        }
         // Conserva la regla existente de refacturación: ambos estados ocupan igual.
         if ($cita->status === 'completada') $cita->update(['status' => 'pendiente']);
     }

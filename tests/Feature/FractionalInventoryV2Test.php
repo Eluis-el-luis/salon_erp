@@ -225,7 +225,7 @@ class FractionalInventoryV2Test extends TestCase
         $f = $this->buyV2($i);
         $id = $this->consume($i, 100);
         $before = $this->effects();
-        $this->post('/ventas/'.$id.'/anular', ['motivo' => 'fixture', 'pin_supervisor' => '4826'])->assertRedirect()->assertSessionHas('error');
+        $this->post('/ventas/'.$id.'/anular', ['motivo' => 'fixture', 'pin_supervisor' => '4826'])->assertRedirect()->assertSessionHasErrors('inventory_intent');
         $this->assertSame($before, $this->effects());
         try {
             app(CompraService::class)->anularFactura($f->id, 'fixture');
@@ -303,7 +303,7 @@ class FractionalInventoryV2Test extends TestCase
             if ($action === 'reject') {
                 app(AprobacionService::class)->rechazarVenta($id, 'fixture', auth()->id());
             } else {
-                $this->post('/ventas/'.$id.'/anular', ['motivo' => 'fixture', 'pin_supervisor' => '4826'])->assertRedirect()->assertSessionHas('success');
+                $this->post('/ventas/'.$id.'/anular', ['motivo' => 'fixture', 'pin_supervisor' => '4826', 'inventory_intent'=>'sin_restitucion'])->assertRedirect()->assertSessionHas('success');
             }
             $this->assertSame($ledger, DB::table('stock_ledger_entries')->count());
             $this->assertSame($entries, DB::table('asientos_contables')->count());

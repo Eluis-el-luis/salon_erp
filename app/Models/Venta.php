@@ -52,6 +52,7 @@ class Venta extends Model
     ];
 
     protected $casts = [
+        'annulment_evidence' => 'array',
         'payload_aprobacion' => 'array',
         'aprobada_at' => 'datetime',
     ];

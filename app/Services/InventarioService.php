@@ -34,7 +34,7 @@ class InventarioService
     }
 
     /** Mutex por artículo, incluso antes de insertar hijos con FK. Sin commit propio. */
-    public function bloquearArticulos(array $ids)
+    public function bloquearArticulos(array $ids, bool $archivados = false)
     {
         if (DB::transactionLevel() === 0) {
             throw new \LogicException('Inventario requiere una transacción activa.');
@@ -43,7 +43,7 @@ class InventarioService
         sort($ids, SORT_NUMERIC);
         $items = collect();
         foreach ($ids as $id) {
-            $item = Articulo::whereKey($id)->lockForUpdate()->first();
+            $item = Articulo::query()->when($archivados, fn ($q) => $q->withTrashed())->whereKey($id)->lockForUpdate()->first();
             if ($item) {
                 $items->put($id, $item);
             }
@@ -518,7 +518,12 @@ class InventarioService
                 $ids=array_merge($ids,array_column($d->consumption_snapshot['ingredients']??[],'item_id'),$d->consumos->pluck('item_id')->all());
             }
             $ids=array_merge($ids,StockLedger::where('referencia_tipo','venta')->where('referencia_id',$venta->id)->pluck('item_id')->filter()->all());
-            $this->bloquearArticulos($ids);return;
+            $bloqueados = $this->bloquearArticulos($ids, true);
+            foreach ($bloqueados->keys() as $id) {
+                // El mutex del artículo precede a lotes FIFO y evidencia del kárdex.
+                Lote::where('item_id', $id)->orderBy('fecha_entrada')->orderBy('id')->lockForUpdate()->get();
+            }
+            return;
         }
         // Los cálculos y el lote de devolución se conservan; solo sincronización.
         $this->bloquearArticulos(array_map(fn ($op) => $op[0]->id, $this->operacionesVenta($venta)));
