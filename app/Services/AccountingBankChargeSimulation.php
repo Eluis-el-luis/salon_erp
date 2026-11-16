@@ -19,7 +19,19 @@ final class AccountingBankChargeSimulation
         if($o->purpose!=='simulation'||$o->environment!=='testing'||$o->content_hash!==hash('sha256',AccountingPolicyService::canonical($this->expected($g,$n))))$this->reject('UUID existente con contenido, actor o autorización distintos.');
     }
     public function executeForInternalHarness(int $grantId,array $input,string $contract): object {
-        Boundary::assert($contract);$identity=app(AccountingEventIdentityService::class);$n=$identity->normalize($input);
+        Boundary::assert($contract);
+        return $this->executeWithinBoundary($grantId,$input,$contract);
+    }
+    public function executeForSyntheticHttp(int $grantId,array $input): object {
+        $contract=\App\Support\AccountingHttpSimulationBoundary::CONTRACT;
+        \App\Support\AccountingHttpSimulationBoundary::assert($contract);
+        $g=DB::table('accounting_policy_authorizations')->find($grantId);
+        if(!$g||(int)$g->actor_id!==(int)auth()->id())abort(403);
+        try { return $this->executeWithinBoundary($grantId,$input,$contract); }
+        catch(ValidationException $e){if(str_contains($e->getMessage(),'UUID existente'))abort(409,'UUID original con contenido distinto.');throw $e;}
+    }
+    private function executeWithinBoundary(int $grantId,array $input,string $contract): object {
+        \App\Support\AccountingSimulationAccess::assert($contract);$identity=app(AccountingEventIdentityService::class);$n=$identity->normalize($input);
         // Un resultado ya confirmado es historia: no volver a resolver cuentas o habilitación vigente.
         $peek=DB::table('accounting_event_operations')->where('operation_uuid',$n['uuid'])->first();
         if($peek&&$peek->status==='confirmed') {
@@ -28,11 +40,11 @@ final class AccountingBankChargeSimulation
         $entryLevel=DB::transactionLevel();$at=DateTimeImmutable::createFromInterface(now('UTC'));
         try {
             return DB::transaction(function()use($grantId,$n,$contract,$identity,$at,$entryLevel){
-                $g=app(AccountingEventAuthorizationService::class)->pinForInternalHarness($grantId,$at,$contract);
+                $g=app(AccountingEventAuthorizationService::class)->pinForSimulationContext($grantId,$at,$contract);
                 AccountingSimulationPosting::assertPolicyScope((int)$g->policy_version_id,(int)$g->bank_account_id);
                 // Igual orden relativo que el preparador B1: recursos/cuentas antes de UUID.
                 app(BankBalanceService::class)->lockAccounts([(int)$g->bank_account_id]);
-                app(AccountingEventAuthorizationService::class)->validatePinnedForInternalHarness($g->id,$at,$contract);
+                app(AccountingEventAuthorizationService::class)->validatePinnedForSimulationContext($g->id,$at,$contract);
                 $content=$this->expected($g,$n);$hash=hash('sha256',AccountingPolicyService::canonical($content));
                 $attrs=['operation_uuid'=>$n['uuid'],'content_hash'=>$hash,'content'=>AccountingPolicyService::canonical($content),
                     'policy_version_id'=>$g->policy_version_id,'policy_hash'=>$g->policy_hash,'purpose'=>'simulation','event_key'=>$g->event_key,
@@ -45,7 +57,7 @@ final class AccountingBankChargeSimulation
                     $this->sameContent($old,$g,$n);if($old->status==='confirmed')return $this->verifiedResult($old);
                     if($old->status!=='prepared'||$old->result_movement_id!==null||$old->result_asiento_id!==null)$this->reject('Preparado incompleto o incompatible.');$opId=$old->id;
                 }
-                $permit=AccountingSimulationPosting::forPrepared($opId,$grantId,$at,$contract);
+                $permit=AccountingSimulationPosting::forContext($opId,$grantId,$at,$contract);
                 $bank=app(BankBalanceService::class)->lockAccounts([$permit->bankId])->get($permit->bankId);$previous=(float)$bank->saldo_actual;
                 $movement=MovimientoBancario::create(['cuenta_bancaria_id'=>$bank->id,'moneda_id'=>$bank->moneda_id,'tipo'=>'cargo','monto'=>$n['amount'],
                     'fecha'=>$n['recognition_date'],'concepto'=>$n['description'],'modulo_origen'=>'cargos_bancarios','referencia_id'=>0,

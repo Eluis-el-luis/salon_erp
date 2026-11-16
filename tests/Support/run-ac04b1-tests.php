@@ -12,7 +12,9 @@ try {
         'reconciliation-preflight'=>[],'reconciliation-core'=>['BankReconciliationTest'],'reconciliation-race'=>['BankReconciliationConcurrencyTest'],
         'reconciliation-regressions'=>['AccountIntegrityTest','AccountHierarchyConcurrencyTest','AccountingPolicyTest','AccountingAccountResolverTest','BankBalanceIntegrityTest','AccountingEventDocumentationTest','AccountingEventRollbackGuardTest','AccountingBankChargeSimulationTest','AccountingAdministrationTest'],
         'refund-preflight'=>[],'refund-install'=>['BankChargeRefundInstallationTest'],'refund-core'=>['BankChargeRefundTest'],'refund-race'=>['BankChargeRefundConcurrencyTest'],'refund-guard'=>['BankChargeRefundRollbackGuardTest'],
-        'refund-regressions'=>['AccountIntegrityTest','AccountHierarchyConcurrencyTest','AccountingPolicyTest','AccountingAccountResolverTest','BankBalanceIntegrityTest','AccountingEventDocumentationTest','AccountingEventRollbackGuardTest','AccountingBankChargeSimulationTest','AccountingAdministrationTest','BankReconciliationTest']];
+        'refund-regressions'=>['AccountIntegrityTest','AccountHierarchyConcurrencyTest','AccountingPolicyTest','AccountingAccountResolverTest','BankBalanceIntegrityTest','AccountingEventDocumentationTest','AccountingEventRollbackGuardTest','AccountingBankChargeSimulationTest','AccountingAdministrationTest','BankReconciliationTest'],
+        'web-preflight'=>[],'web-core'=>['PilotDemoHttpExecutionTest'],'web-boundary'=>['PilotDemoBoundarySeparationTest'],'web-race'=>['PilotDemoHttpConcurrencyTest'],'web-race-resume'=>['PilotDemoHttpConcurrencyTest'],'web-history'=>['PilotDemoHistoricalTest'],'demo-preflight'=>[],'demo-core'=>['PilotDemoReadOnlyTest'],'demo-http'=>['PilotDemoHttpBoundaryTest'],
+        'demo-regressions'=>['AccountIntegrityTest','AccountHierarchyConcurrencyTest','AccountingPolicyTest','AccountingAccountResolverTest','BankBalanceIntegrityTest','AccountingEventDocumentationTest','AccountingEventRollbackGuardTest','AccountingBankChargeSimulationTest','AccountingAdministrationTest','BankReconciliationTest','BankChargeRefundTest','BankChargeRefundRollbackGuardTest']];
     if(!isset($groups[$mode])||PHP_VERSION!=='8.3.30'||realpath(getcwd())!==realpath($root))throw new RuntimeException('Modo/raíz/PHP inválido');
     require $root.'/tests/bootstrap.php';if(SALON_TEST_DATABASE_RESET_ALLOWED)throw new RuntimeException('Reset debe ser cero');
     $pdo=new PDO('mysql:host=127.0.0.1;port=3306;dbname=salon_erp_test;charset=utf8mb4','salon_erp_tester',$_ENV['DB_PASSWORD'],[PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION]);
@@ -23,7 +25,7 @@ try {
     foreach($grants as $g)if(!str_starts_with($g,'GRANT USAGE ')){[$p,$s]=explode(' ON ',$g,2);$ps=explode(', ',substr($p,6));sort($ps);if($ps!==$expected||$s!=='`'.str_replace('_',chr(92).'_','salon_erp_test').'`.* TO `salon_erp_tester`@`localhost`')throw new RuntimeException('Privilegios inesperados');}
     foreach(['salon_erp','salon_erp_bootstrap_check'] as $s){try{$pdo->query("SELECT 1 FROM `$s`.users LIMIT 0");throw new RuntimeException('Base ajena accesible');}catch(PDOException $e){if(($e->errorInfo[1]??0)!==1142)throw $e;}}
     $files=array_map(fn($f)=>basename($f,'.php'),glob($root.'/database/migrations/*.php'));sort($files);
-    $refund=str_starts_with($mode,'refund-');if(count($files)!==($refund?82:81))throw new RuntimeException('Archivos de migraciones');
+    $refund=str_starts_with($mode,'refund-');$web=str_starts_with($mode,'web-');$demo=str_starts_with($mode,'demo-')||$web;if(count($files)!==(($refund||$demo)?82:81))throw new RuntimeException('Archivos de migraciones');
     if(in_array($mode,['refund-preflight','refund-install'],true))$files=array_values(array_diff($files,['2026_11_16_000003_create_bank_charge_refunds']));
     if(in_array($mode,['preflight','install'],true))$files=array_values(array_diff($files,['2026_11_16_000002_add_accounting_event_documentation']));
     if($files!==$pdo->query('SELECT migration FROM migrations ORDER BY migration')->fetchAll(PDO::FETCH_COLUMN))throw new RuntimeException('Migraciones aplicadas distintas');
@@ -44,12 +46,14 @@ try {
     $backupPhase=(str_starts_with($mode,'pilot-')||str_starts_with($mode,'admin-'))?'AC04B2A':'AC04B1';
     if(str_starts_with($mode,'reconciliation-'))$backupPhase='AC04B2B2R';
     if($refund)$backupPhase='AC04B2B3A';
+    if($demo)$backupPhase='AC04B2B4A';if($web)$backupPhase='AC04B2B4B';
     $b=json_decode(file_get_contents($root.'/storage/app/private/'.strtolower($backupPhase).'-backup.json'),true,512,JSON_THROW_ON_ERROR);
-    if(!str_starts_with($b['file'],'E:/salon-erp-backups/salon_erp_test_'.$backupPhase.'_')||!$b['source_unchanged']||$b['migrations']!==($backupPhase==='AC04B1'?80:81)||filesize($b['file'])!==$b['bytes']||hash_file('sha256',$b['file'])!==$b['sha256'])throw new RuntimeException('Nuevo respaldo inválido');
+    if(!str_starts_with($b['file'],'E:/salon-erp-backups/salon_erp_test_'.$backupPhase.'_')||!$b['source_unchanged']||$b['migrations']!==($backupPhase==='AC04B1'?80:($demo?82:81))||filesize($b['file'])!==$b['bytes']||hash_file('sha256',$b['file'])!==$b['sha256'])throw new RuntimeException('Nuevo respaldo inválido');
     if(!str_starts_with(file_get_contents($b['file'].'.sha256'),$b['sha256'].'  '))throw new RuntimeException('Sidecar inválido');
     echo 'PREFLIGHT: PHP 8.3.30; MySQL 8.4.3; salon_erp_test / salon_erp_tester@localhost /3306; roles NONE; privilegios exactos; bases ajenas denegadas; '.count($files).' migraciones; NUEVO respaldo SHA256 válido'.PHP_EOL;$pdo=null;
     if(!$groups[$mode])$exit=0;
     else {
+        if($mode==='web-race-resume')putenv('AC04B2B4B_RESUME=after_fixture_rejection');
         if($mode==='pilot-race-final')putenv('AC04B2A_RACE_YEAR=2036');
         if($mode==='pilot-race-current')putenv('AC04B2A_RACE_YEAR=2037');
         if($mode==='pilot-race-verified')putenv('AC04B2A_RACE_YEAR=2031');

@@ -25,6 +25,10 @@ final class AccountingAccountResolver
     public function inspectPinnedForInternalHarness(array $requests,DateTimeImmutable $at,int $versionId,string $contract): array
     {
         \App\Support\AccountingSimulationBoundary::assert($contract);
+        return $this->inspectPinnedForSimulationContext($requests,$at,$versionId,$contract);
+    }
+    public function inspectPinnedForSimulationContext(array $requests,DateTimeImmutable $at,int $versionId,string $contract): array {
+        \App\Support\AccountingSimulationAccess::assert($contract);
         if(DB::transactionLevel()===0)throw new \LogicException('Versión fijada requiere transacción exterior.');
         return $this->inspectInternal($requests,$at,$versionId,true);
     }

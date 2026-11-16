@@ -43,6 +43,19 @@ use Illuminate\Support\Facades\Route;
 // =================================================================
 // RUTAS PÚBLICAS (No requieren sesión)
 // =================================================================
+// Solo consulta/revisión del arnés aislado; no confirmación financiera HTTP.
+Route::prefix('__pilot-demo')->middleware(\App\Http\Middleware\PilotDemoAccess::class)->group(function(){
+    Route::get('/login',[\App\Http\Controllers\PilotDemoController::class,'login'])->name('pilot.demo.login');
+    Route::post('/login',[\App\Http\Controllers\PilotDemoController::class,'authenticate'])->middleware('throttle:5,1');
+    Route::post('/logout',[\App\Http\Controllers\PilotDemoController::class,'logout'])->name('pilot.demo.logout');
+    Route::get('/',[\App\Http\Controllers\PilotDemoController::class,'index'])->name('pilot.demo.index');
+    Route::post('/review',[\App\Http\Controllers\PilotDemoController::class,'review'])->name('pilot.demo.review');
+    if(defined('SALON_HTTP_SYNTHETIC_CHARGE')&&SALON_HTTP_SYNTHETIC_CHARGE===\App\Support\AccountingHttpSimulationBoundary::CONTRACT){
+        Route::post('/confirm',[\App\Http\Controllers\PilotDemoController::class,'confirm'])->middleware('throttle:30,1')->name('pilot.demo.confirm');
+    }
+    Route::get('/lookup',[\App\Http\Controllers\PilotDemoController::class,'lookup'])->name('pilot.demo.lookup');
+    Route::get('/operations/{uuid}',[\App\Http\Controllers\PilotDemoController::class,'document'])->name('pilot.demo.document');
+});
 Route::get('/login', [AutenticacionController::class, 'mostrarFormularioLogin'])->name('login');
 Route::post('/login', [AutenticacionController::class, 'login'])->middleware('throttle:5,1');
 Route::post('/logout', [AutenticacionController::class, 'logout'])->name('logout');

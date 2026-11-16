@@ -1,0 +1,449 @@
+--- a/routes/web.php
++++ b/routes/web.php
+@@ -43,6 +43,16 @@
+ // =================================================================
+ // RUTAS PÚBLICAS (No requieren sesión)
+ // =================================================================
++// Solo consulta/revisión del arnés aislado; no confirmación financiera HTTP.
++Route::prefix('__pilot-demo')->middleware(\App\Http\Middleware\PilotDemoAccess::class)->group(function(){
++    Route::get('/login',[\App\Http\Controllers\PilotDemoController::class,'login'])->name('pilot.demo.login');
++    Route::post('/login',[\App\Http\Controllers\PilotDemoController::class,'authenticate'])->middleware('throttle:5,1');
++    Route::post('/logout',[\App\Http\Controllers\PilotDemoController::class,'logout'])->name('pilot.demo.logout');
++    Route::get('/',[\App\Http\Controllers\PilotDemoController::class,'index'])->name('pilot.demo.index');
++    Route::post('/review',[\App\Http\Controllers\PilotDemoController::class,'review'])->name('pilot.demo.review');
++    Route::get('/lookup',[\App\Http\Controllers\PilotDemoController::class,'lookup'])->name('pilot.demo.lookup');
++    Route::get('/operations/{uuid}',[\App\Http\Controllers\PilotDemoController::class,'document'])->name('pilot.demo.document');
++});
+ Route::get('/login', [AutenticacionController::class, 'mostrarFormularioLogin'])->name('login');
+ Route::post('/login', [AutenticacionController::class, 'login'])->middleware('throttle:5,1');
+ Route::post('/logout', [AutenticacionController::class, 'logout'])->name('logout');
+--- a/tests/Support/run-ac04b1-tests.php
++++ b/tests/Support/run-ac04b1-tests.php
+@@ -12,7 +12,9 @@
+         'reconciliation-preflight'=>[],'reconciliation-core'=>['BankReconciliationTest'],'reconciliation-race'=>['BankReconciliationConcurrencyTest'],
+         'reconciliation-regressions'=>['AccountIntegrityTest','AccountHierarchyConcurrencyTest','AccountingPolicyTest','AccountingAccountResolverTest','BankBalanceIntegrityTest','AccountingEventDocumentationTest','AccountingEventRollbackGuardTest','AccountingBankChargeSimulationTest','AccountingAdministrationTest'],
+         'refund-preflight'=>[],'refund-install'=>['BankChargeRefundInstallationTest'],'refund-core'=>['BankChargeRefundTest'],'refund-race'=>['BankChargeRefundConcurrencyTest'],'refund-guard'=>['BankChargeRefundRollbackGuardTest'],
+-        'refund-regressions'=>['AccountIntegrityTest','AccountHierarchyConcurrencyTest','AccountingPolicyTest','AccountingAccountResolverTest','BankBalanceIntegrityTest','AccountingEventDocumentationTest','AccountingEventRollbackGuardTest','AccountingBankChargeSimulationTest','AccountingAdministrationTest','BankReconciliationTest']];
++        'refund-regressions'=>['AccountIntegrityTest','AccountHierarchyConcurrencyTest','AccountingPolicyTest','AccountingAccountResolverTest','BankBalanceIntegrityTest','AccountingEventDocumentationTest','AccountingEventRollbackGuardTest','AccountingBankChargeSimulationTest','AccountingAdministrationTest','BankReconciliationTest'],
++        'demo-preflight'=>[],'demo-core'=>['PilotDemoReadOnlyTest'],'demo-http'=>['PilotDemoHttpBoundaryTest'],
++        'demo-regressions'=>['AccountIntegrityTest','AccountHierarchyConcurrencyTest','AccountingPolicyTest','AccountingAccountResolverTest','BankBalanceIntegrityTest','AccountingEventDocumentationTest','AccountingEventRollbackGuardTest','AccountingBankChargeSimulationTest','AccountingAdministrationTest','BankReconciliationTest','BankChargeRefundTest','BankChargeRefundRollbackGuardTest']];
+     if(!isset($groups[$mode])||PHP_VERSION!=='8.3.30'||realpath(getcwd())!==realpath($root))throw new RuntimeException('Modo/raíz/PHP inválido');
+     require $root.'/tests/bootstrap.php';if(SALON_TEST_DATABASE_RESET_ALLOWED)throw new RuntimeException('Reset debe ser cero');
+     $pdo=new PDO('mysql:host=127.0.0.1;port=3306;dbname=salon_erp_test;charset=utf8mb4','salon_erp_tester',$_ENV['DB_PASSWORD'],[PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION]);
+@@ -23,7 +25,7 @@
+     foreach($grants as $g)if(!str_starts_with($g,'GRANT USAGE ')){[$p,$s]=explode(' ON ',$g,2);$ps=explode(', ',substr($p,6));sort($ps);if($ps!==$expected||$s!=='`'.str_replace('_',chr(92).'_','salon_erp_test').'`.* TO `salon_erp_tester`@`localhost`')throw new RuntimeException('Privilegios inesperados');}
+     foreach(['salon_erp','salon_erp_bootstrap_check'] as $s){try{$pdo->query("SELECT 1 FROM `$s`.users LIMIT 0");throw new RuntimeException('Base ajena accesible');}catch(PDOException $e){if(($e->errorInfo[1]??0)!==1142)throw $e;}}
+     $files=array_map(fn($f)=>basename($f,'.php'),glob($root.'/database/migrations/*.php'));sort($files);
+-    $refund=str_starts_with($mode,'refund-');if(count($files)!==($refund?82:81))throw new RuntimeException('Archivos de migraciones');
++    $refund=str_starts_with($mode,'refund-');$demo=str_starts_with($mode,'demo-');if(count($files)!==(($refund||$demo)?82:81))throw new RuntimeException('Archivos de migraciones');
+     if(in_array($mode,['refund-preflight','refund-install'],true))$files=array_values(array_diff($files,['2026_11_16_000003_create_bank_charge_refunds']));
+     if(in_array($mode,['preflight','install'],true))$files=array_values(array_diff($files,['2026_11_16_000002_add_accounting_event_documentation']));
+     if($files!==$pdo->query('SELECT migration FROM migrations ORDER BY migration')->fetchAll(PDO::FETCH_COLUMN))throw new RuntimeException('Migraciones aplicadas distintas');
+@@ -44,8 +46,9 @@
+     $backupPhase=(str_starts_with($mode,'pilot-')||str_starts_with($mode,'admin-'))?'AC04B2A':'AC04B1';
+     if(str_starts_with($mode,'reconciliation-'))$backupPhase='AC04B2B2R';
+     if($refund)$backupPhase='AC04B2B3A';
++    if($demo)$backupPhase='AC04B2B4A';
+     $b=json_decode(file_get_contents($root.'/storage/app/private/'.strtolower($backupPhase).'-backup.json'),true,512,JSON_THROW_ON_ERROR);
+-    if(!str_starts_with($b['file'],'E:/salon-erp-backups/salon_erp_test_'.$backupPhase.'_')||!$b['source_unchanged']||$b['migrations']!==($backupPhase==='AC04B1'?80:81)||filesize($b['file'])!==$b['bytes']||hash_file('sha256',$b['file'])!==$b['sha256'])throw new RuntimeException('Nuevo respaldo inválido');
++    if(!str_starts_with($b['file'],'E:/salon-erp-backups/salon_erp_test_'.$backupPhase.'_')||!$b['source_unchanged']||$b['migrations']!==($backupPhase==='AC04B1'?80:($demo?82:81))||filesize($b['file'])!==$b['bytes']||hash_file('sha256',$b['file'])!==$b['sha256'])throw new RuntimeException('Nuevo respaldo inválido');
+     if(!str_starts_with(file_get_contents($b['file'].'.sha256'),$b['sha256'].'  '))throw new RuntimeException('Sidecar inválido');
+     echo 'PREFLIGHT: PHP 8.3.30; MySQL 8.4.3; salon_erp_test / salon_erp_tester@localhost /3306; roles NONE; privilegios exactos; bases ajenas denegadas; '.count($files).' migraciones; NUEVO respaldo SHA256 válido'.PHP_EOL;$pdo=null;
+     if(!$groups[$mode])$exit=0;
+--- a/tests/Support/ac04b1-isolation.php
++++ b/tests/Support/ac04b1-isolation.php
+@@ -2,7 +2,7 @@
+ 
+ ini_set('zend.exception_ignore_args','1');$root=dirname(__DIR__,2);
+ try {
+-    $phase=$argv[2]??'AC04B1';if(!in_array($phase,['AC04B1','AC04B2A','AC04B2B1','AC04B2B2R','AC04B2B3A'],true))throw new RuntimeException('Fase inválida');$pilot=$phase!=='AC04B1';$administration=$phase==='AC04B2B1';$refund=$phase==='AC04B2B3A';
++    $phase=$argv[2]??'AC04B1';if(!in_array($phase,['AC04B1','AC04B2A','AC04B2B1','AC04B2B2R','AC04B2B3A','AC04B2B4A'],true))throw new RuntimeException('Fase inválida');$pilot=$phase!=='AC04B1';$administration=$phase==='AC04B2B1';$refund=$phase==='AC04B2B3A';$demo=$phase==='AC04B2B4A';
+     $mode=$argv[1]??'';if(!in_array($mode,['before','after'],true))throw new RuntimeException('Modo inválido');
+     $pdo=new PDO('mysql:host=127.0.0.1;port=3306;charset=utf8mb4','root','',[PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION]);
+     $file=$root.'/storage/app/private/'.strtolower($phase).'-isolation-before.json';$base=$mode==='after'?json_decode(file_get_contents($file),true,512,JSON_THROW_ON_ERROR):[];$snap=[];
+@@ -27,6 +27,7 @@
+         if($administration)$append=['accounting_policy_versions','accounting_account_bindings','accounting_policy_audits','accounting_policy_authorizations','cuentas_contables'];
+         if($phase==='AC04B2B2R')$append=array_merge($append,['conciliaciones_bancarias','transferencias','sesiones_caja','cash_sessions','operaciones_cambio','saldos_moneda','diferenciales_cambiarios']);
+         if($refund)$append=array_merge($append,['migrations','conciliaciones_bancarias']);
++        if($demo)$append=[];
+         foreach($base['salon_erp_test'] as $table=>$b) {
+             $a=$snap['salon_erp_test'][$table]??throw new RuntimeException('Tabla previa ausente');
+             if(in_array($table,$append,true)?array_diff($b['rows'],$a['rows']):$b['rows']!==$a['rows'])throw new RuntimeException('Filas previas cambiaron: '.$table);
+@@ -35,7 +36,7 @@
+         }
+         $added=array_values(array_diff(array_keys($snap['salon_erp_test']),array_keys($base['salon_erp_test'])));sort($added);
+         if($added!==($refund?['bank_charge_reversal_lines','bank_charge_reversals']:($pilot?[]:['accounting_entry_line_resolutions','accounting_event_operations','accounting_policy_authorizations'])))throw new RuntimeException('Tablas nuevas inesperadas');
+-        if((int)$pdo->query('SELECT COUNT(*) FROM salon_erp_test.migrations')->fetchColumn()!==($refund?82:81))throw new RuntimeException('Migraciones distintas');
++        if((int)$pdo->query('SELECT COUNT(*) FROM salon_erp_test.migrations')->fetchColumn()!==(($refund||$demo)?82:81))throw new RuntimeException('Migraciones distintas');
+         if(!$pilot&&(int)$pdo->query('SELECT COUNT(*) FROM salon_erp_test.asientos_contables WHERE accounting_policy_version_id IS NOT NULL OR accounting_policy_hash IS NOT NULL OR accounting_authorization_id IS NOT NULL')->fetchColumn()!==0)throw new RuntimeException('Se atribuyó política a asiento');
+         echo "OTHER_DATABASES_EXACT=True; OLD_ROWS_PRESERVED=True; LEGACY_ENTRIES_UNATTRIBUTED=True\n";
+         if($phase==='AC04B2B2R')foreach($snap['salon_erp_test'] as $table=>$data){$delta=count($data['rows'])-count($base['salon_erp_test'][$table]['rows']);if($delta)echo json_encode(['table'=>$table,'new_fixture_rows'=>$delta]),PHP_EOL;}
+--- a/tests/Support/ac04b1-backup.php
++++ b/tests/Support/ac04b1-backup.php
+@@ -3,8 +3,8 @@
+ ini_set('zend.exception_ignore_args','1');
+ $root=dirname(__DIR__,2);$exit=1;
+ try {
+-    $phase=$argv[1]??'AC04B1';if(!in_array($phase,['AC04B1','AC04B2A','AC04B2B2R','AC04B2B3A'],true))throw new RuntimeException('Fase inválida');
+-    $expectedMigrations=$phase==='AC04B1'?80:81;
++    $phase=$argv[1]??'AC04B1';if(!in_array($phase,['AC04B1','AC04B2A','AC04B2B2R','AC04B2B3A','AC04B2B4A'],true))throw new RuntimeException('Fase inválida');
++    $expectedMigrations=$phase==='AC04B1'?80:($phase==='AC04B2B4A'?82:81);
+     if(PHP_VERSION!=='8.3.30'||realpath(getcwd())!==realpath($root))throw new RuntimeException('Raíz/PHP inválido');
+     require $root.'/tests/bootstrap.php';
+     if(SALON_TEST_DATABASE_RESET_ALLOWED)throw new RuntimeException('Reset debe estar deshabilitado');
+--- /dev/null
++++ b/app/Services/PilotDemoReadOnly.php
+@@ -0,0 +1,99 @@
++<?php
++
++namespace App\Services;
++
++use Illuminate\Support\Facades\DB;
++use Illuminate\Validation\ValidationException;
++use PDO;
++
++/** Proyección y revisión sin persistencia. Nunca invoca escritores financieros. */
++final class PilotDemoReadOnly
++{
++    public const CONTRACT='AC04B2B4A_READ_ONLY_DEMO_V1';
++    private ?PDO $pdo=null;
++    public static function installation(): void {
++        abort_unless(defined('SALON_PILOT_DEMO_READONLY')&&SALON_PILOT_DEMO_READONLY===self::CONTRACT
++            &&defined('SALON_TEST_DATABASE_BOOTSTRAPPED')&&SALON_TEST_DATABASE_BOOTSTRAPPED
++            &&defined('SALON_TEST_DATABASE_RESET_ALLOWED')&&!SALON_TEST_DATABASE_RESET_ALLOWED
++            &&app()->environment('testing')&&in_array(PHP_SAPI,['cli','cli-server'],true),404);
++        try{
++            \Tests\Support\TestDatabaseSafety::assertApplicationRoot(dirname(__DIR__,2),app()->basePath());
++            \Tests\Support\TestDatabaseSafety::assertConfiguration(app()->environment(),config('database'));
++            foreach(DB::getConnections() as $name=>$connection){if($name!=='mysql')throw new \LogicException('Conexión alternativa');\Tests\Support\TestDatabaseSafety::assertConnection($connection->getConfig());}
++        }catch(\Throwable){abort(404);}
++    }
++    private function connection(): PDO {
++        self::installation();if($this->pdo)return $this->pdo;
++        $cfg=config('database.connections.mysql');
++        $p=new PDO('mysql:host=127.0.0.1;port=3306;dbname=salon_erp_test;charset=utf8mb4','salon_erp_tester',$cfg['password'],[PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION,PDO::ATTR_EMULATE_PREPARES=>false]);
++        $i=$p->query('SELECT DATABASE() AS database_name,CURRENT_USER() AS account_name,@@port AS server_port,CURRENT_ROLE() AS roles')->fetch(PDO::FETCH_OBJ);
++        \Tests\Support\TestDatabaseSafety::assertServerIdentity($i);if($i->roles!=='NONE')throw new \RuntimeException('Roles SQL inesperados');
++        $p->exec('SET SESSION TRANSACTION READ ONLY');$p->beginTransaction();$this->pdo=$p;return $p;
++    }
++    public function __destruct(){if($this->pdo?->inTransaction())$this->pdo->rollBack();}
++    private function rows(string $sql,array $parameters=[]): array {$s=$this->connection()->prepare($sql);$s->execute($parameters);return $s->fetchAll(PDO::FETCH_OBJ);}
++    private function one(string $sql,array $parameters=[]): ?object {return $this->rows($sql,$parameters)[0]??null;}
++    private function actor(): int {
++        self::installation();$u=auth()->id()?DB::table('users')->where('id',auth()->id())->first():null;
++        if(!$u||!$u->is_active||!in_array($u->role,['alvaro','contador'],true))abort(403);
++        $this->connection();return (int)$u->id;
++    }
++    private function invalid(string $m): never {throw ValidationException::withMessages(['demo'=>$m]);}
++    private function grant(int $id,bool $owned=true): object {
++        $actor=$this->actor();$g=$this->one('SELECT * FROM accounting_policy_authorizations WHERE id=?',[$id]);
++        if(!$g||($owned&&(int)$g->actor_id!==$actor))abort(403);
++        $e=json_decode($g->evidence,true,512,JSON_THROW_ON_ERROR);
++        if($g->purpose!=='simulation'||$g->environment!=='testing'||$g->action!=='enablement'||$g->event_key!==AccountingEventAuthorizationService::EVENT||$g->currency!=='NIO'||($e['version']??null)!==1||hash('sha256',AccountingPolicyService::canonical($e))!==$g->evidence_hash)$this->invalid('Habilitación sintética incompatible.');
++        foreach($e['authorization']??[] as $key=>$value)if(!property_exists($g,$key)||($value===null?$g->$key!==null:(string)$value!==(string)$g->$key))$this->invalid('Evidencia documental incompatible.');
++        return $g;
++    }
++    private function context(object $g): array {
++        $bank=$this->one('SELECT b.id,b.alias,b.activa,b.cuenta_contable_id,m.codigo AS currency FROM cuentas_bancarias b JOIN monedas m ON m.id=b.moneda_id WHERE b.id=?',[$g->bank_account_id]);
++        $policy=$this->one('SELECT id,version_number,status,kind,content_hash,valid_from,valid_until FROM accounting_policy_versions WHERE id=?',[$g->policy_version_id]);
++        if(!$bank||$bank->currency!=='NIO'||!$policy||$policy->content_hash!==$g->policy_hash||$policy->status!=='published'||$policy->kind!=='enterprise')$this->invalid('Banco o versión documental incompatibles.');
++        $bindings=$this->rows("SELECT id,semantic_role,account_id,account_snapshot FROM accounting_account_bindings WHERE policy_version_id=? AND bank_account_id=? AND semantic_role IN ('fondos.banco','gasto.cargo_bancario') ORDER BY semantic_role",[$policy->id,$bank->id]);
++        if(count($bindings)!==2)$this->invalid('Faltan las dos asociaciones documentadas.');
++        foreach($bindings as $b){$b->snapshot=json_decode($b->account_snapshot,true,512,JSON_THROW_ON_ERROR);}
++        $revoked=(bool)$this->one("SELECT id FROM accounting_policy_authorizations WHERE action='revocation' AND parent_id IN (?,?) LIMIT 1",[$g->id,$g->parent_id]);
++        return compact('bank','policy','bindings','revoked');
++    }
++    public function index(): array {
++        $actor=$this->actor();
++        $grants=$this->rows("SELECT a.id,a.bank_account_id,a.valid_from,a.valid_until,b.alias FROM accounting_policy_authorizations a JOIN cuentas_bancarias b ON b.id=a.bank_account_id JOIN monedas m ON m.id=b.moneda_id WHERE a.actor_id=? AND a.purpose='simulation' AND a.environment='testing' AND a.action='enablement' AND a.event_key='bancos.cargo_gasto.nio' AND m.codigo='NIO' ORDER BY a.id DESC",[$actor]);
++        $operations=$this->rows("SELECT operation_uuid,status,classification,amount,recognition_date FROM accounting_event_operations WHERE created_by=? AND purpose='simulation' AND environment='testing' AND event_key='bancos.cargo_gasto.nio' ORDER BY id DESC LIMIT 100",[$actor]);
++        return compact('grants','operations');
++    }
++    public function review(array $input): array {
++        $actor=$this->actor();$keys=['authorization_id','uuid','classification','amount','recognition_date','reference','description'];
++        if(array_diff(array_keys($input),$keys)||!isset($input['authorization_id'])||!ctype_digit((string)$input['authorization_id']))$this->invalid('Campos desconocidos o habilitación inválida.');
++        $g=$this->grant((int)$input['authorization_id']);unset($input['authorization_id']);$n=app(AccountingEventIdentityService::class)->normalize($input);$ctx=$this->context($g);
++        $content=app(AccountingEventIdentityService::class)->simulationContent($g,$n,$actor);$hash=hash('sha256',AccountingPolicyService::canonical($content));
++        $existing=$this->one('SELECT * FROM accounting_event_operations WHERE operation_uuid=?',[$n['uuid']]);
++        if($existing){if((int)$existing->created_by!==$actor)abort(403);app(AccountingEventIdentityService::class)->verifyDocument($existing);if($existing->content_hash!==$hash)abort(409,'Conflicto de identidad: consulte el UUID original; no genere otro automáticamente.');}
++        $problems=[];$now=now('UTC')->format('Y-m-d H:i:s');
++        if($ctx['revoked'])$problems[]='Autorización retirada: solo historia consultable.';
++        if($g->valid_from>$now||$g->valid_until<=$now)$problems[]='Habilitación fuera de vigencia actual.';
++        if(!$ctx['bank']->activa)$problems[]='Banco inactivo.';
++        $period=$this->rows('SELECT estado FROM periodos_contables WHERE fecha_inicio<=? AND fecha_fin>=?',[$n['recognition_date'],$n['recognition_date']]);
++        if(count($period)!==1||$period[0]->estado!=='abierto')$problems[]='Período no disponible o cerrado. Esta revisión no crea períodos.';
++        return $ctx+compact('n','g','hash','existing','problems');
++    }
++    public function document(string $uuid): array {
++        $actor=$this->actor();$uuid=strtolower(trim($uuid));if(!preg_match('/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/D',$uuid))abort(404);
++        $o=$this->one('SELECT * FROM accounting_event_operations WHERE operation_uuid=?',[$uuid]);if(!$o||(int)$o->created_by!==$actor)abort(403);
++        if($o->purpose!=='simulation'||$o->environment!=='testing'||$o->event_key!==AccountingEventAuthorizationService::EVENT)$this->invalid('Documento fuera del ensayo.');
++        app(AccountingEventIdentityService::class)->verifyDocument($o);$g=$this->grant((int)$o->authorization_id,false);$ctx=$this->context($g);
++        foreach(['policy_version_id','policy_hash','bank_account_id','currency'] as $key)if((string)$o->$key!==(string)$g->$key)$this->invalid('Referencias históricas cruzadas.');
++        $movement=null;$entry=null;$details=[];$resolutions=[];$refund=null;$refundLines=[];
++        if($o->status==='prepared'){if($o->result_movement_id!==null||$o->result_asiento_id!==null)$this->invalid('Prepared incompleto o contradictorio.');}
++        elseif($o->status==='confirmed'){
++            $movement=$this->one('SELECT * FROM movimientos_bancarios WHERE id=?',[$o->result_movement_id]);$entry=$this->one('SELECT * FROM asientos_contables WHERE id=?',[$o->result_asiento_id]);
++            $details=$this->rows('SELECT * FROM detalle_asientos WHERE asiento_id=? ORDER BY id',[$o->result_asiento_id]);$resolutions=$this->rows('SELECT * FROM accounting_entry_line_resolutions WHERE operation_id=? ORDER BY semantic_role',[$o->id]);
++            if(!$movement||!$entry||count($details)!==2||count($resolutions)!==2||(int)$movement->cuenta_bancaria_id!==(int)$o->bank_account_id||(int)$movement->asiento_contable_id!==(int)$entry->id||$movement->monto!==$o->amount||$movement->tipo!=='cargo'||$entry->accounting_policy_hash!==$o->policy_hash)$this->invalid('Resultado confirmado sin correspondencias íntegras.');
++            foreach($resolutions as $r){$line=array_values(array_filter($details,fn($l)=>(int)$l->id===(int)$r->detail_id))[0]??null;if(!$line||(int)$line->cuenta_id!==(int)$r->account_id||(int)$r->asiento_id!==(int)$entry->id)$this->invalid('Correspondencia de cuenta incompatible.');}
++            $refund=$this->one("SELECT * FROM bank_charge_reversals WHERE original_operation_id=? AND status='confirmed' AND created_by=?",[$o->id,$actor]);
++            if($refund){$e=json_decode($refund->evidence,true,512,JSON_THROW_ON_ERROR);if($refund->purpose!=='simulation'||($e['synthetic']??null)!==true||hash('sha256',AccountingPolicyService::canonical($e))!==$refund->evidence_hash)$this->invalid('Devolución documental incompatible.');$refundLines=$this->rows('SELECT * FROM bank_charge_reversal_lines WHERE reversal_id=? ORDER BY id',[$refund->id]);if(count($refundLines)!==2)$this->invalid('Devolución sin enlaces completos.');}
++        }else $this->invalid('Estado documental no reconocido.');
++        return $ctx+compact('o','g','movement','entry','details','resolutions','refund','refundLines');
++    }
++}
+--- /dev/null
++++ b/app/Http/Controllers/PilotDemoController.php
+@@ -0,0 +1,25 @@
++<?php
++namespace App\Http\Controllers;
++use App\Services\PilotDemoReadOnly;
++use App\Models\Usuario;
++use Illuminate\Http\Request;
++use Illuminate\Support\Facades\{Auth,Hash};
++class PilotDemoController extends Controller
++{
++    private function render(callable $read){
++        try{return $read();}catch(\Illuminate\Validation\ValidationException $e){return redirect()->route('pilot.demo.index')->withErrors($e->errors())->withInput(request()->only(['authorization_id','uuid','classification','amount','recognition_date','reference','description']));}
++        catch(\Symfony\Component\HttpKernel\Exception\HttpExceptionInterface $e){throw $e;}
++        catch(\PDOException|\JsonException|\RuntimeException $e){abort(503,'Resultado temporalmente desconocido o no disponible. Consulte por UUID; no reenvíe otra operación.');}
++    }
++    public function login(){return view('accounting.pilot-demo',['screen'=>'login']);}
++    public function authenticate(Request $request){
++        $d=$request->validate(['email'=>'required|email','password'=>'required|string|max:1024']);$u=Usuario::where('email',$d['email'])->first();
++        if(!$u||!$u->is_active||!in_array($u->role,['alvaro','contador'],true)||!Hash::check($d['password'],$u->password))return back()->withErrors(['email'=>'Acceso de ensayo no válido.'])->onlyInput('email');
++        Auth::login($u,false);$request->session()->regenerate();return redirect()->route('pilot.demo.index');
++    }
++    public function logout(Request $request){Auth::logout();$request->session()->invalidate();$request->session()->regenerateToken();return redirect()->route('pilot.demo.login');}
++    public function index(PilotDemoReadOnly $demo){return $this->render(fn()=>view('accounting.pilot-demo',$demo->index()+['screen'=>'index']));}
++    public function review(Request $request,PilotDemoReadOnly $demo){return $this->render(fn()=>view('accounting.pilot-demo',['screen'=>'review','review'=>$demo->review($request->except('_token'))]));}
++    public function document(string $uuid,PilotDemoReadOnly $demo){return $this->render(fn()=>view('accounting.pilot-demo',['screen'=>'document','document'=>$demo->document($uuid)]));}
++    public function lookup(Request $request){$d=$request->validate(['uuid'=>'required|string|max:36']);return redirect()->route('pilot.demo.document',['uuid'=>strtolower(trim($d['uuid']))]);}
++}
+--- /dev/null
++++ b/app/Http/Middleware/PilotDemoAccess.php
+@@ -0,0 +1,13 @@
++<?php
++namespace App\Http\Middleware;
++use App\Services\PilotDemoReadOnly;
++use Closure;
++use Illuminate\Http\Request;
++class PilotDemoAccess
++{
++    public function handle(Request $request,Closure $next){
++        PilotDemoReadOnly::installation();
++        if(!$request->is('__pilot-demo/login')&&!auth()->check())return redirect()->route('pilot.demo.login');
++        return $next($request);
++    }
++}
+--- /dev/null
++++ b/resources/views/accounting/pilot-demo.blade.php
+@@ -0,0 +1,56 @@
++<!doctype html>
++<html lang="es">
++<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Demostración contable — solo consulta</title><link rel="stylesheet" href="/__pilot-demo/assets/app.css"></head>
++<body class="bg-gray-50 text-gray-900"><main class="max-w-5xl mx-auto p-6 space-y-6">
++<header class="space-y-2"><p class="text-sm font-bold text-amber-800">SIMULACIÓN FINANCIERA · INFORMACIÓN SINTÉTICA · SIN APROBACIÓN EMPRESARIAL</p><h1 class="text-2xl font-bold">Cargo contable configurable</h1><p>Demostración de consulta y revisión. Esta interfaz no registra preparados, cargos ni devoluciones.</p>
++@if($screen !== 'login')<a class="text-emerald-700 underline" href="{{ route('pilot.demo.index') }}">Inicio / nuevo borrador sin persistencia</a><form method="post" action="{{ route('pilot.demo.logout') }}">@csrf<button class="btn btn-secondary">Cerrar sesión de demostración</button></form>@endif</header>
++@if($errors->any())<div role="alert" tabindex="-1" id="error-summary" class="border border-red-300 bg-red-50 p-4 rounded-lg"><h2 class="font-bold">Revise los datos</h2>@foreach($errors->messages() as $field=>$messages)@foreach($messages as $message)<p><a class="underline" href="#{{ $field }}">{{ $message }}</a></p>@endforeach
++@endforeach</div><script>document.getElementById('error-summary').focus();</script>@endif
++@if($screen === 'login')
++<section class="card p-6"><h2 class="text-xl font-bold">Acceso al entorno de ensayo</h2><p>Utilice únicamente credenciales locales de test. No se usan las credenciales del ERP ordinario.</p><form method="post" action="{{ route('pilot.demo.login') }}" class="space-y-4">@csrf
++<label class="block" for="email">Correo de ensayo<input class="input" id="email" name="email" type="email" autocomplete="username" required value="{{ old('email') }}" aria-describedby="email-error"></label>@error('email')<p id="email-error" class="text-red-700">{{ $message }}</p>@enderror
++<label class="block" for="password">Contraseña<input class="input" id="password" name="password" type="password" autocomplete="current-password" required></label><button class="btn btn-primary">Iniciar sesión de consulta</button></form></section>
++@elseif($screen === 'index')
++<section class="card p-6 space-y-4"><h2 class="text-xl font-bold">Revisar un cargo de ensayo</h2><p>Seleccione una habilitación propia y su banco. La revisión no concede permiso de contabilización.</p>
++<form method="post" action="{{ route('pilot.demo.review') }}" class="space-y-4">@csrf
++<label class="block" for="authorization_id">Banco NIO / habilitación sintética<select class="input" name="authorization_id" id="authorization_id" required><option value="">Seleccione</option>@foreach($grants as $g)<option value="{{ $g->id }}" @selected((string)old('authorization_id')===(string)$g->id)>{{ $g->alias }} · NIO · habilitación #{{ $g->id }} · {{ $g->valid_from }} — {{ $g->valid_until }} UTC</option>@endforeach</select></label>
++@php
++    $uuid = old('uuid') ?: (string)\Illuminate\Support\Str::uuid();
++@endphp
++<label class="block" for="uuid">UUID de operación<input class="input" id="uuid" name="uuid" required value="{{ $uuid }}" aria-describedby="uuid-help uuid-error"></label><p id="uuid-help">Ante respuesta perdida, consulte primero el UUID original. No genere otro para resolver un resultado incierto.</p>
++<label class="block" for="classification">Clasificación<select class="input" name="classification" id="classification" required><option value="">Seleccione</option><option value="maintenance" @selected(old('classification')==='maintenance')>Mantenimiento</option><option value="commission" @selected(old('classification')==='commission')>Comisión</option></select></label>
++<label class="block" for="amount">Importe NIO exacto<input class="input" id="amount" name="amount" inputmode="decimal" required placeholder="50.00" value="{{ old('amount') }}" aria-describedby="amount-error"></label>
++<label class="block" for="recognition_date">Fecha contable de revisión<input class="input" id="recognition_date" name="recognition_date" type="date" required value="{{ old('recognition_date',now()->toDateString()) }}"></label>
++<label class="block" for="reference">Referencia documental sintética<input class="input" id="reference" name="reference" maxlength="60" required value="{{ old('reference') }}"></label><label class="block" for="description">Descripción<input class="input" id="description" name="description" maxlength="150" required value="{{ old('description') }}"></label>
++@foreach(['uuid','classification','amount','recognition_date','reference','description','authorization_id'] as $field)@error($field)<p id="{{ $field }}-error" class="text-red-700">{{ $message }}</p>@enderror
++@endforeach
++<button class="btn btn-primary">Revisar sin registrar</button></form></section>
++<section class="card p-6 space-y-3"><h2 class="text-xl font-bold">Consultar por UUID</h2><p>Solo documentos propios; el UUID no otorga acceso.</p><form method="get" action="{{ route('pilot.demo.lookup') }}"><label for="lookup_uuid">UUID original</label><input class="input" id="lookup_uuid" name="uuid" required><button class="btn btn-secondary">Consultar resultado</button></form>
++@foreach($operations as $o)<article class="border-b py-3"><a class="text-emerald-700 underline" href="{{ route('pilot.demo.document',$o->operation_uuid) }}">{{ $o->operation_uuid }}</a><p>{{ $o->status }} · {{ $o->classification }} · NIO {{ $o->amount }} · {{ $o->recognition_date }}</p></article>@endforeach</section>
++@elseif($screen === 'review')
++@php
++    $r = $review;
++@endphp
++<section class="card p-6 space-y-3"><h2 class="text-xl font-bold">Revisión sin persistencia</h2><dl><dt>Banco y moneda</dt><dd>{{ $r['bank']->alias }} · NIO</dd><dt>Clasificación</dt><dd>{{ $r['n']['classification'] }}</dd><dt>Importe</dt><dd>NIO {{ $r['n']['amount'] }}</dd><dt>Referencia</dt><dd>{{ $r['n']['reference'] }}</dd><dt>Fecha</dt><dd>{{ $r['n']['recognition_date'] }}</dd><dt>UUID</dt><dd class="break-all">{{ $r['n']['uuid'] }}</dd><dt>Hash documental calculado</dt><dd class="break-all">{{ $r['hash'] }}</dd></dl><p>Versión #{{ $r['policy']->version_number }} · hash {{ $r['policy']->content_hash }}</p>
++@foreach($r['bindings'] as $b)<p>{{ $b->semantic_role }} → #{{ $b->account_id }} {{ $b->snapshot['code'] }} {{ $b->snapshot['name'] }}</p>@endforeach
++@foreach($r['problems'] as $problem)<p role="status" class="text-amber-800">{{ $problem }}</p>@endforeach
++@if($r['existing'])<p>Documento existente: {{ $r['existing']->status }}. No se modificó.</p><a class="underline" href="{{ route('pilot.demo.document',$r['n']['uuid']) }}">Consultar resultado original</a>@endif
++<p id="confirm-help">Confirmación financiera no habilitada por HTTP. El ensayo financiero continúa exclusivamente mediante el arnés CLI ya autorizado, con sus preflight y guardias.</p><button disabled aria-describedby="confirm-help" class="btn btn-secondary">Confirmar cargo — bloqueado en esta interfaz</button></section>
++@elseif($screen === 'document')
++@php
++    $d = $document;
++    $originalContent = json_decode($d['o']->content, true, 512, JSON_THROW_ON_ERROR);
++@endphp
++<section class="card p-6 space-y-3"><h2 class="text-xl font-bold">Documento {{ $d['o']->status }}</h2><p class="break-all">UUID {{ $d['o']->operation_uuid }}</p><p>{{ $d['bank']->alias }} · NIO {{ $d['o']->amount }} · {{ $d['o']->classification }} · {{ $d['o']->recognition_date }}</p><p>Versión #{{ $d['policy']->version_number }} · hash original {{ $d['o']->policy_hash }}</p><p>Habilitación sintética #{{ $d['g']->id }} {{ $d['revoked'] ? 'retirada; historia conservada' : 'documentada; no habilita esta interfaz' }}</p>
++<p>Referencia: {{ $originalContent['reference'] }} · {{ $originalContent['description'] }}</p><p class="break-all">Hash del contenido original: {{ $d['o']->content_hash }}</p>
++@foreach($d['bindings'] as $b)
++<p>Cuenta fotografiada: {{ $b->semantic_role }} · #{{ $b->account_id }} · {{ $b->snapshot['code'] }} {{ $b->snapshot['name'] }}</p>
++@endforeach
++@if($d['o']->status === 'prepared')<p role="status" class="text-amber-800">Prepared no equivale a éxito financiero. No tiene movimiento ni asiento confirmado. Solo consulta, sin continuación por HTTP.</p>@else
++<p>Movimiento #{{ $d['movement']->id }} · {{ $d['movement']->tipo }} · NIO {{ $d['movement']->monto }} · conciliación {{ $d['movement']->estado_conciliacion }}</p><p>Extracto asociado: {{ $d['movement']->conciliacion_id ?? 'ninguno' }} · fecha de conciliación {{ $d['movement']->fecha_conciliacion ?? 'ninguna' }}</p>
++<h3 class="font-bold">Asiento original #{{ $d['entry']->id }} · {{ $d['entry']->numero_asiento }}</h3>@foreach($d['details'] as $l)<p>Detalle #{{ $l->id }} · cuenta #{{ $l->cuenta_id }} · moneda #{{ $l->moneda_id }} · DEBE {{ $l->debe }} / HABER {{ $l->haber }}</p>@endforeach
++<h3 class="font-bold">Correspondencias originales</h3>@foreach($d['resolutions'] as $r)<p>{{ $r->semantic_role }} · binding #{{ $r->binding_id }} · cuenta #{{ $r->account_id }} · detalle #{{ $r->detail_id }}</p>@endforeach
++@if($d['refund'])<h3 class="font-bold">Devolución acreditada sintética — solo consulta</h3><p>Documento #{{ $d['refund']->id }} · UUID {{ $d['refund']->operation_uuid }} · {{ $d['refund']->status }} · NIO {{ $d['refund']->amount }}</p><p>Movimiento inverso #{{ $d['refund']->result_movement_id }} · asiento inverso #{{ $d['refund']->result_asiento_id }} · fecha {{ $d['refund']->effective_date }}</p>@foreach($d['refundLines'] as $r)<p>Detalle original #{{ $r->original_detail_id }} → inverso #{{ $r->reversal_detail_id }} · cuenta #{{ $r->account_id }} · DEBE {{ $r->reversal_debe }} / HABER {{ $r->reversal_haber }}</p>@endforeach<p>El cargo original y su conciliación permanecen visibles. No hay botón de devolución.</p>@else<p>Sin devolución confirmada visible para esta sesión.</p>@endif
++@endif</section>
++@endif
++</main></body></html>
+--- /dev/null
++++ b/tests/Support/pilot-demo-readonly-router.php
+@@ -0,0 +1,26 @@
++<?php
++
++/** Servidor de consulta aislado. Nunca retornar false ni servir el workspace. */
++try {
++    if(PHP_SAPI!=='cli-server'||($_SERVER['REMOTE_ADDR']??'')!=='127.0.0.1'||($_SERVER['HTTP_HOST']??'')!=='127.0.0.1:8774'){http_response_code(404);exit;}
++    $path=parse_url($_SERVER['REQUEST_URI']??'/',PHP_URL_PATH);$method=$_SERVER['REQUEST_METHOD']??'';
++    if($path==='/__pilot-demo/assets/app.css'&&$method==='GET'){
++        $root=dirname(__DIR__,2);$manifest=json_decode(file_get_contents($root.'/public/build/manifest.json'),true,512,JSON_THROW_ON_ERROR);$file=realpath($root.'/public/build/'.$manifest['resources/css/app.css']['file']);$base=realpath($root.'/public/build');
++        if(!$file||!str_starts_with($file,$base.DIRECTORY_SEPARATOR)||pathinfo($file,PATHINFO_EXTENSION)!=='css')throw new RuntimeException('Asset inválido');header('Content-Type: text/css');readfile($file);exit;
++    }
++    $get=in_array($path,['/__pilot-demo','/__pilot-demo/','/__pilot-demo/login','/__pilot-demo/lookup'],true)||preg_match('~^/__pilot-demo/operations/[a-fA-F0-9-]{36}$~D',$path);
++    $post=in_array($path,['/__pilot-demo/login','/__pilot-demo/logout','/__pilot-demo/review'],true);
++    if(!(($method==='GET'&&$get)||($method==='POST'&&$post))){http_response_code(404);exit;}
++    require __DIR__.'/../bootstrap.php';define('SALON_PILOT_DEMO_READONLY','AC04B2B4A_READ_ONLY_DEMO_V1');
++    $app=require dirname(__DIR__,2).'/bootstrap/app.php';$app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
++    $app->bind(Illuminate\Foundation\Http\Middleware\PreventRequestForgery::class,Tests\Support\PilotDemoHttpCsrf::class);
++    $app['config']->set('database.connections',['mysql'=>config('database.connections.mysql')]);
++    $private=dirname(__DIR__,2).'/storage/app/private/pilot-demo-readonly';foreach(['sessions','cache','locks'] as $dir)if(!is_dir($private.'/'.$dir)&&!mkdir($private.'/'.$dir,0700,true))throw new RuntimeException('No se pudo preparar sesión aislada');
++    $app['config']->set(['session.driver'=>'file','session.files'=>$private.'/sessions','session.cookie'=>'pilot_demo_readonly_session','session.path'=>'/__pilot-demo','session.http_only'=>true,'session.same_site'=>'strict',
++        'cache.default'=>'file','cache.stores.file.path'=>$private.'/cache','cache.stores.file.lock_path'=>$private.'/locks','logging.default'=>'null']);
++    App\Services\PilotDemoReadOnly::installation();
++    $db=$app['db']->connection();$i=$db->selectOne('SELECT DATABASE() AS database_name,CURRENT_USER() AS account_name,@@port AS server_port');Tests\Support\TestDatabaseSafety::assertServerIdentity($i);
++    $db->getPdo()->exec('SET SESSION TRANSACTION READ ONLY');
++    $db->beforeExecuting(function($sql){if(!preg_match('/^\s*(select|show)\b/i',$sql))throw new LogicException('SQL de escritura no permitido en la demostración.');});
++    $app->handleRequest(Illuminate\Http\Request::capture());
++}catch(Throwable){http_response_code(503);echo 'Demostración temporalmente no disponible. No se confirmó ninguna operación por esta interfaz.';}
+--- /dev/null
++++ b/tests/Support/PilotDemoHttpCsrf.php
+@@ -0,0 +1,8 @@
++<?php
++namespace Tests\Support;
++
++/** El servidor HTTP de ensayo debe comprobar CSRF incluso con APP_ENV=testing. */
++final class PilotDemoHttpCsrf extends \Illuminate\Foundation\Http\Middleware\PreventRequestForgery
++{
++    protected function runningUnitTests() { return false; }
++}
+--- /dev/null
++++ b/tests/Feature/PilotDemoReadOnlyTest.php
+@@ -0,0 +1,59 @@
++<?php
++namespace Tests\Feature;
++use App\Models\Usuario;
++use App\Services\PilotDemoReadOnly;
++use Illuminate\Foundation\Testing\DatabaseTransactions;
++use Illuminate\Support\Facades\{DB,Hash};
++use PHPUnit\Framework\Attributes\DataProvider;
++use Tests\TestCase;
++class PilotDemoReadOnlyTest extends TestCase
++{
++    use DatabaseTransactions;
++    protected function setUp(): void {
++        parent::setUp();if(!defined('SALON_PILOT_DEMO_READONLY'))define('SALON_PILOT_DEMO_READONLY',PilotDemoReadOnly::CONTRACT);
++        $this->app->bind(\Illuminate\Foundation\Http\Middleware\PreventRequestForgery::class,EnforcedPilotDemoCsrf::class);$this->withSession(['_token'=>'pilot-demo-test-csrf']);
++    }
++    private function owner(): object {
++        $o=DB::table('accounting_event_operations')->where('id',131)->first();$this->assertNotNull($o);$this->actingAs(Usuario::findOrFail($o->created_by));return $o;
++    }
++    private function financial(): array {$a=[];foreach(['cuentas_bancarias','accounting_event_operations','accounting_policy_authorizations','movimientos_bancarios','asientos_contables','detalle_asientos','conciliaciones_bancarias','bank_charge_reversals','bank_charge_reversal_lines'] as $t)$a[$t]=DB::table($t)->orderBy('id')->get()->toJson();return $a;}
++    public function test_render_prepared_confirmed_original_and_refund_with_no_mutation(): void {
++        $prepared=$this->owner();$before=$this->financial();$this->get('/__pilot-demo')->assertOk()->assertSee('INFORMACIÓN SINTÉTICA')->assertSee('Revisar sin registrar');
++        $this->get('/__pilot-demo/operations/'.$prepared->operation_uuid)->assertOk()->assertSee('Prepared no equivale a éxito financiero')->assertDontSee('Asiento original #');
++        $refund=DB::table('bank_charge_reversals')->where('created_by',auth()->id())->where('status','confirmed')->first();$o=DB::table('accounting_event_operations')->find($refund->original_operation_id);
++        $this->get('/__pilot-demo/operations/'.$o->operation_uuid)->assertOk()->assertSee('Asiento original #')->assertSee('Correspondencias originales')->assertSee('Devolución acreditada sintética')->assertSee((string)$refund->result_asiento_id);
++        $revoked=DB::table('accounting_event_operations AS o')->join('accounting_policy_authorizations AS r',function($j){$j->on('r.parent_id','=','o.authorization_id')->where('r.action','revocation');})->where('o.created_by',auth()->id())->where('o.status','confirmed')->select('o.*')->first();$this->assertNotNull($revoked);
++        $this->get('/__pilot-demo/operations/'.$revoked->operation_uuid)->assertOk()->assertSee('retirada; historia conservada');
++        $this->assertSame($before,$this->financial());
++    }
++    public function test_review_preserves_uuid_hash_and_has_no_confirmation_route(): void {
++        $o=$this->owner();$content=json_decode($o->content,true);$p=['authorization_id'=>$o->authorization_id,'uuid'=>$o->operation_uuid,'classification'=>$o->classification,'amount'=>$o->amount,'recognition_date'=>$o->recognition_date,'reference'=>$content['reference'],'description'=>$content['description']];$before=$this->financial();
++        $this->post('/__pilot-demo/review',$p)->assertStatus(419);
++        $this->post('/__pilot-demo/review',$p+['_token'=>'pilot-demo-test-csrf'])->assertOk()->assertSee($o->content_hash)->assertSee('Confirmar cargo — bloqueado')->assertSee('prepared');
++        $p['amount']='51.00';$this->post('/__pilot-demo/review',$p+['_token'=>'pilot-demo-test-csrf'])->assertStatus(409);
++        $this->post('/__pilot-demo/confirm',$p+['_token'=>'pilot-demo-test-csrf'])->assertNotFound();$this->post('/__pilot-demo/refund',$p+['_token'=>'pilot-demo-test-csrf'])->assertNotFound();$this->assertSame($before,$this->financial());
++    }
++    public static function invalid(): array {return [['amount',''],['amount','-1'],['amount','0'],['amount','50.001'],['amount','NaN'],['classification',''],['classification','transfer'],['account_id',1],['policy_version_id',1],['actor_id',1]];}
++    #[DataProvider('invalid')]
++    public function test_invalid_review_never_writes(string $field,mixed $value): void {
++        $o=$this->owner();$p=['authorization_id'=>$o->authorization_id,'uuid'=>(string)\Illuminate\Support\Str::uuid(),'classification'=>'maintenance','amount'=>'50.00','recognition_date'=>$o->recognition_date,'reference'=>'SYNTHETIC-READ-ONLY','description'=>'Revisión sin persistencia'];$p[$field]=$value;$before=$this->financial();
++        $this->post('/__pilot-demo/review',$p+['_token'=>'pilot-demo-test-csrf'])->assertRedirect()->assertSessionHasErrors();$this->assertSame($before,$this->financial());
++    }
++    public function test_roles_active_identity_resource_owner_and_login_session(): void {
++        $o=$this->owner();$role=DB::table('roles')->value('id');$actors=[];
++        foreach(['alvaro','contador','admin','recepcion','estilista'] as $r)$actors[$r]=Usuario::create(['name'=>'SYNTHETIC demo '.$r,'email'=>uniqid('demo-').'@example.test','password'=>Hash::make('SYNTHETIC-demo-password'),'role'=>$r,'role_id'=>$role,'is_active'=>true]);
++        foreach($actors as $r=>$actor){$this->actingAs($actor);$this->get('/__pilot-demo')->assertStatus(in_array($r,['alvaro','contador'])?200:403);if(in_array($r,['alvaro','contador']))$this->get('/__pilot-demo/operations/'.$o->operation_uuid)->assertForbidden();}
++        $this->actingAs($actors['contador']);$actors['contador']->update(['is_active'=>false]);$this->get('/__pilot-demo')->assertForbidden();
++        auth()->logout();$this->get('/__pilot-demo')->assertRedirect('/__pilot-demo/login');$this->get('/__pilot-demo/login')->assertOk();
++        $this->post('/__pilot-demo/login',['email'=>$actors['alvaro']->email,'password'=>'SYNTHETIC-demo-password'])->assertStatus(419);
++        $this->post('/__pilot-demo/login',['_token'=>'pilot-demo-test-csrf','email'=>$actors['alvaro']->email,'password'=>'SYNTHETIC-demo-password'])->assertRedirect('/__pilot-demo');$this->get('/__pilot-demo')->assertOk();
++    }
++    public function test_installation_wrong_destination_and_database_read_only_are_enforced(): void {
++        $o=$this->owner();$this->app->instance('env','local');$this->get('/__pilot-demo')->assertNotFound();$this->app->instance('env','testing');
++        $old=config('database.connections.mysql.database');config(['database.connections.mysql.database'=>'salon_erp']);$this->get('/__pilot-demo')->assertNotFound();config(['database.connections.mysql.database'=>$old]);
++        $service=new PilotDemoReadOnly;$service->index();$property=new \ReflectionProperty($service,'pdo');$pdo=$property->getValue($service);
++        try{$pdo->exec('UPDATE cuentas_bancarias SET saldo_actual=saldo_actual WHERE id='.(int)$o->bank_account_id);$this->fail('El servidor debe rechazar DML');}catch(\PDOException $e){$this->assertSame(1792,$e->errorInfo[1]);}
++        $this->assertSame('salon_erp_test',$pdo->query('SELECT DATABASE()')->fetchColumn());
++    }
++}
++class EnforcedPilotDemoCsrf extends \Illuminate\Foundation\Http\Middleware\PreventRequestForgery {protected function runningUnitTests(){return false;}}
+--- /dev/null
++++ b/tests/Feature/PilotDemoHttpBoundaryTest.php
+@@ -0,0 +1,46 @@
++<?php
++namespace Tests\Feature;
++
++use Tests\TestCase;
++
++/** HTTP real por loopback, sin credenciales ni escrituras SQL. */
++final class PilotDemoHttpBoundaryTest extends TestCase
++{
++    public function test_testing_environment_alone_does_not_open_demo_routes(): void
++    {
++        $this->assertFalse(defined('SALON_PILOT_DEMO_READONLY'));
++        $this->get('/__pilot-demo/login')->assertNotFound();
++        $this->get('/__pilot-demo')->assertNotFound();
++    }
++
++    public function test_real_server_session_csrf_and_closed_financial_endpoints(): void
++    {
++        $socket=@stream_socket_client('tcp://127.0.0.1:8774',$errno,$error,0.2);
++        if($socket){fclose($socket);$this->fail('Puerto 8774 ocupado; no se toca el proceso existente.');}
++        $root=base_path();$log=storage_path('app/private/pilot-demo-http-test.log');
++        $process=proc_open([PHP_BINARY,'-d','display_errors=0','-d','zend.exception_ignore_args=1','-S','127.0.0.1:8774','-t',$root.'/public',$root.'/tests/Support/pilot-demo-readonly-router.php'],[0=>['pipe','r'],1=>['file',$log,'a'],2=>['file',$log,'a']],$pipes,$root);
++        $this->assertIsResource($process);fclose($pipes[0]);
++        try {
++            $ready=false;
++            for($i=0;$i<40;$i++){$s=@stream_socket_client('tcp://127.0.0.1:8774',$errno,$error,0.2);if($s){fclose($s);$ready=true;break;}usleep(100000);}
++            $this->assertTrue($ready,'Servidor no disponible');
++            $request=function(string $path,string $method='GET',string $body='',string $cookie=''): array {
++                $headers="Content-Type: application/x-www-form-urlencoded\r\n".($cookie!==''?"Cookie: $cookie\r\n":'');
++                $context=stream_context_create(['http'=>['method'=>$method,'header'=>$headers,'content'=>$body,'ignore_errors'=>true,'follow_location'=>0,'timeout'=>10]]);
++                $result=file_get_contents('http://127.0.0.1:8774'.$path,false,$context);$h=$http_response_header??[];
++                preg_match('/\s(\d{3})\s/',$h[0]??'',$m);return [(int)($m[1]??0),$result,$h];
++            };
++            [$code,$html,$headers]=$request('/__pilot-demo/login');$this->assertSame(200,$code);$this->assertStringContainsString('INFORMACIÓN SINTÉTICA',$html);
++            $cookie='';foreach($headers as $h)if(preg_match('/^Set-Cookie: (pilot_demo_readonly_session=[^;]+)/i',$h,$m))$cookie=$m[1];
++            $this->assertNotSame('',$cookie);preg_match('/name="_token" value="([^"]+)"/',$html,$m);$this->assertNotEmpty($m[1]??'');
++            $this->assertSame(419,$request('/__pilot-demo/login','POST','email=nobody%40example.test&password=synthetic-invalid',$cookie)[0]);
++            $this->assertSame(302,$request('/__pilot-demo/login','POST',http_build_query(['_token'=>$m[1],'email'=>'nobody@example.test','password'=>'synthetic-invalid']),$cookie)[0]);
++            $this->assertSame(302,$request('/__pilot-demo')[0]);
++            foreach(['/bancos','/.env','/__pilot-demo/confirm','/__pilot-demo/refund'] as $path)$this->assertSame(404,$request($path,str_contains($path,'confirm')||str_contains($path,'refund')?'POST':'GET')[0]);
++            $this->assertSame(200,$request('/__pilot-demo/assets/app.css')[0]);
++        } finally {
++            proc_terminate($process);$status=proc_get_status($process);proc_close($process);
++            $this->assertFalse($status['running'],'El servidor hijo debe finalizar limpiamente.');
++        }
++    }
++}

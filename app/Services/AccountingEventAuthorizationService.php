@@ -43,12 +43,12 @@ final class AccountingEventAuthorizationService
     private function scope(object $r): array {
         $keys=['policy_version_id','policy_hash','purpose','event_key','bank_account_id','currency','environment','valid_from','valid_until'];$a=[];foreach($keys as $k)$a[$k]=$r->$k;return $a;
     }
-    private function verifyPolicy(object $v,int $bankId,DateTimeImmutable $at,bool $pinned=false): void {
+    private function verifyPolicy(object $v,int $bankId,DateTimeImmutable $at,bool $pinned=false,string $contract=\App\Support\AccountingSimulationBoundary::CONTRACT): void {
         $requests=[
             ['role'=>'fondos.banco','scope_type'=>'bank_account','resource_id'=>$bankId],
             ['role'=>'gasto.cargo_bancario','scope_type'=>'bank_account','resource_id'=>$bankId]];
         $resolver=app(AccountingAccountResolver::class);
-        $r=$pinned?$resolver->inspectPinnedForInternalHarness($requests,$at,(int)$v->id,\App\Support\AccountingSimulationBoundary::CONTRACT):$resolver->inspect($requests,$at,(int)$v->id);
+        $r=$pinned?$resolver->inspectPinnedForSimulationContext($requests,$at,(int)$v->id,$contract):$resolver->inspect($requests,$at,(int)$v->id);
         $bank=DB::table('cuentas_bancarias')->where('id',$bankId)->sharedLock()->first();
         $currency=$bank?DB::table('monedas')->where('id',$bank->moneda_id)->value('codigo'):null;
         $base=DB::table('monedas')->where('es_base',true)->value('codigo');
@@ -94,6 +94,10 @@ final class AccountingEventAuthorizationService
     /** Solo fija versión/autorización: el arnés tomará banco X antes de verificar recursos. */
     public function pinForInternalHarness(int $id,DateTimeImmutable $at,string $contract): object {
         \App\Support\AccountingSimulationBoundary::assert($contract);
+        return $this->pinForSimulationContext($id,$at,$contract);
+    }
+    public function pinForSimulationContext(int $id,DateTimeImmutable $at,string $contract): object {
+        \App\Support\AccountingSimulationAccess::assert($contract);
         if(DB::transactionLevel()===0)throw new \LogicException('Fijación requiere transacción.');
         // Descubrir candidatos sin bloquear el recorrido completo (incluye borradores en un full scan).
         // La decisión usa después la versión/autoridad releídas por PK bajo S. AC-03A no permite
@@ -104,8 +108,12 @@ final class AccountingEventAuthorizationService
         return $this->eligibleSimulation($id,$at);
     }
     public function validatePinnedForInternalHarness(int $id,DateTimeImmutable $at,string $contract): object {
-        \App\Support\AccountingSimulationBoundary::assert($contract);$a=$this->eligibleSimulation($id,$at);
-        $this->verifyPolicy($this->policy($a->policy_version_id,false),(int)$a->bank_account_id,$at,true);return $a;
+        \App\Support\AccountingSimulationBoundary::assert($contract);
+        return $this->validatePinnedForSimulationContext($id,$at,$contract);
+    }
+    public function validatePinnedForSimulationContext(int $id,DateTimeImmutable $at,string $contract): object {
+        \App\Support\AccountingSimulationAccess::assert($contract);$a=$this->eligibleSimulation($id,$at);
+        $this->verifyPolicy($this->policy($a->policy_version_id,false),(int)$a->bank_account_id,$at,true,$contract);return $a;
     }
     private function eligibleSimulation(int $id,DateTimeImmutable $at): object {
         if(!app()->environment('testing'))abort(403);

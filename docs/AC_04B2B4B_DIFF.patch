@@ -1,0 +1,796 @@
+--- a/app/Services/AccountingBankChargeSimulation.php
++++ b/app/Services/AccountingBankChargeSimulation.php
+@@ -19,7 +19,19 @@
+         if($o->purpose!=='simulation'||$o->environment!=='testing'||$o->content_hash!==hash('sha256',AccountingPolicyService::canonical($this->expected($g,$n))))$this->reject('UUID existente con contenido, actor o autorización distintos.');
+     }
+     public function executeForInternalHarness(int $grantId,array $input,string $contract): object {
+-        Boundary::assert($contract);$identity=app(AccountingEventIdentityService::class);$n=$identity->normalize($input);
++        Boundary::assert($contract);
++        return $this->executeWithinBoundary($grantId,$input,$contract);
++    }
++    public function executeForSyntheticHttp(int $grantId,array $input): object {
++        $contract=\App\Support\AccountingHttpSimulationBoundary::CONTRACT;
++        \App\Support\AccountingHttpSimulationBoundary::assert($contract);
++        $g=DB::table('accounting_policy_authorizations')->find($grantId);
++        if(!$g||(int)$g->actor_id!==(int)auth()->id())abort(403);
++        try { return $this->executeWithinBoundary($grantId,$input,$contract); }
++        catch(ValidationException $e){if(str_contains($e->getMessage(),'UUID existente'))abort(409,'UUID original con contenido distinto.');throw $e;}
++    }
++    private function executeWithinBoundary(int $grantId,array $input,string $contract): object {
++        \App\Support\AccountingSimulationAccess::assert($contract);$identity=app(AccountingEventIdentityService::class);$n=$identity->normalize($input);
+         // Un resultado ya confirmado es historia: no volver a resolver cuentas o habilitación vigente.
+         $peek=DB::table('accounting_event_operations')->where('operation_uuid',$n['uuid'])->first();
+         if($peek&&$peek->status==='confirmed') {
+@@ -28,11 +40,11 @@
+         $entryLevel=DB::transactionLevel();$at=DateTimeImmutable::createFromInterface(now('UTC'));
+         try {
+             return DB::transaction(function()use($grantId,$n,$contract,$identity,$at,$entryLevel){
+-                $g=app(AccountingEventAuthorizationService::class)->pinForInternalHarness($grantId,$at,$contract);
++                $g=app(AccountingEventAuthorizationService::class)->pinForSimulationContext($grantId,$at,$contract);
+                 AccountingSimulationPosting::assertPolicyScope((int)$g->policy_version_id,(int)$g->bank_account_id);
+                 // Igual orden relativo que el preparador B1: recursos/cuentas antes de UUID.
+                 app(BankBalanceService::class)->lockAccounts([(int)$g->bank_account_id]);
+-                app(AccountingEventAuthorizationService::class)->validatePinnedForInternalHarness($g->id,$at,$contract);
++                app(AccountingEventAuthorizationService::class)->validatePinnedForSimulationContext($g->id,$at,$contract);
+                 $content=$this->expected($g,$n);$hash=hash('sha256',AccountingPolicyService::canonical($content));
+                 $attrs=['operation_uuid'=>$n['uuid'],'content_hash'=>$hash,'content'=>AccountingPolicyService::canonical($content),
+                     'policy_version_id'=>$g->policy_version_id,'policy_hash'=>$g->policy_hash,'purpose'=>'simulation','event_key'=>$g->event_key,
+@@ -45,7 +57,7 @@
+                     $this->sameContent($old,$g,$n);if($old->status==='confirmed')return $this->verifiedResult($old);
+                     if($old->status!=='prepared'||$old->result_movement_id!==null||$old->result_asiento_id!==null)$this->reject('Preparado incompleto o incompatible.');$opId=$old->id;
+                 }
+-                $permit=AccountingSimulationPosting::forPrepared($opId,$grantId,$at,$contract);
++                $permit=AccountingSimulationPosting::forContext($opId,$grantId,$at,$contract);
+                 $bank=app(BankBalanceService::class)->lockAccounts([$permit->bankId])->get($permit->bankId);$previous=(float)$bank->saldo_actual;
+                 $movement=MovimientoBancario::create(['cuenta_bancaria_id'=>$bank->id,'moneda_id'=>$bank->moneda_id,'tipo'=>'cargo','monto'=>$n['amount'],
+                     'fecha'=>$n['recognition_date'],'concepto'=>$n['description'],'modulo_origen'=>'cargos_bancarios','referencia_id'=>0,
+--- a/app/Support/AccountingSimulationPosting.php
++++ b/app/Support/AccountingSimulationPosting.php
+@@ -9,30 +9,34 @@
+ /** Evidencia tipada de ensayo; se revalida al entrar en el motor contable. */
+ final readonly class AccountingSimulationPosting
+ {
+-    private function __construct(public int $operationId,public int $authorizationId,public int $bankId,public int $expenseId,public int $fundsId,public array $resolutions,public DateTimeImmutable $at) {}
++    private function __construct(public int $operationId,public int $authorizationId,public int $bankId,public int $expenseId,public int $fundsId,public array $resolutions,public DateTimeImmutable $at,private string $contract) {}
+     public static function assertPolicyScope(int $versionId,int $bankId): void {
+         foreach(DB::table('accounting_account_bindings')->where('policy_version_id',$versionId)->orderBy('id')->sharedLock()->get() as $b) {
+             if($b->item_id!==null||($b->bank_account_id!==null&&(int)$b->bank_account_id!==$bankId))throw new \LogicException('El piloto no admite recursos ajenos al banco fijado.');
+         }
+     }
+     public static function forPrepared(int $id,int $authorizationId,DateTimeImmutable $at,string $contract): self {
+-        AccountingSimulationBoundary::assert($contract);if(DB::transactionLevel()===0)throw new \LogicException('Se requiere transacción exterior.');
++        AccountingSimulationBoundary::assert($contract);
++        return self::forContext($id,$authorizationId,$at,$contract);
++    }
++    public static function forContext(int $id,int $authorizationId,DateTimeImmutable $at,string $contract): self {
++        AccountingSimulationAccess::assert($contract);if(DB::transactionLevel()===0)throw new \LogicException('Se requiere transacción exterior.');
+         $auth=app(AccountingEventAuthorizationService::class);$g=DB::table('accounting_policy_authorizations')->find($authorizationId);
+         if(!$g)throw new \LogicException('Habilitación inexistente.');
+         DB::table('accounting_policy_versions')->where('id',$g->policy_version_id)->sharedLock()->first();
+         self::assertPolicyScope((int)$g->policy_version_id,(int)$g->bank_account_id);
+         $bank=app(BankBalanceService::class)->lockAccounts([(int)$g->bank_account_id])->get((int)$g->bank_account_id);
+-        $auth->validatePinnedForInternalHarness($g->id,$at,$contract);
++        $auth->validatePinnedForSimulationContext($g->id,$at,$contract);
+         $o=DB::table('accounting_event_operations')->where('id',$id)->lockForUpdate()->first();app(AccountingEventIdentityService::class)->verifyDocument($o);
+         if((int)$o->authorization_id!==$authorizationId||$o->status!=='prepared'||$o->purpose!=='simulation'||$o->environment!=='testing'||(int)$o->created_by!==(int)auth()->id()||$o->result_asiento_id!==null||$o->result_movement_id!==null)throw new \LogicException('Documento de ensayo incompatible.');
+-        $r=app(AccountingAccountResolver::class)->inspectPinnedForInternalHarness([
++        $r=app(AccountingAccountResolver::class)->inspectPinnedForSimulationContext([
+             ['role'=>'gasto.cargo_bancario','scope_type'=>'bank_account','resource_id'=>$bank->id],
+             ['role'=>'fondos.banco','scope_type'=>'bank_account','resource_id'=>$bank->id]],$at,(int)$g->policy_version_id,$contract);
+         if((int)$o->bank_account_id!==$bank->id||$r['resolved'][1]['account_id']!==(int)$bank->cuenta_contable_id||$r['policy_hash']!==$o->policy_hash)throw new \LogicException('No se permite cambiar la cuenta que conserva el saldo.');
+-        return new self($id,$authorizationId,$bank->id,$r['resolved'][0]['account_id'],$r['resolved'][1]['account_id'],$r['resolved'],$at);
++        return new self($id,$authorizationId,$bank->id,$r['resolved'][0]['account_id'],$r['resolved'][1]['account_id'],$r['resolved'],$at,$contract);
+     }
+     public function assertMovement(object $m,int $expense): object {
+-        $fresh=self::forPrepared($this->operationId,$this->authorizationId,$this->at,AccountingSimulationBoundary::CONTRACT);
++        $fresh=self::forContext($this->operationId,$this->authorizationId,$this->at,$this->contract);
+         if($fresh->resolutions!==$this->resolutions||$expense!==$this->expenseId||$fresh->fundsId!==$this->fundsId)throw new \LogicException('Evidencia de resolución cambió.');
+         $o=DB::table('accounting_event_operations')->where('id',$this->operationId)->lockForUpdate()->first();
+         $date=\Carbon\Carbon::parse($m->fecha)->toDateString();
+--- a/app/Services/AccountingEventAuthorizationService.php
++++ b/app/Services/AccountingEventAuthorizationService.php
+@@ -43,12 +43,12 @@
+     private function scope(object $r): array {
+         $keys=['policy_version_id','policy_hash','purpose','event_key','bank_account_id','currency','environment','valid_from','valid_until'];$a=[];foreach($keys as $k)$a[$k]=$r->$k;return $a;
+     }
+-    private function verifyPolicy(object $v,int $bankId,DateTimeImmutable $at,bool $pinned=false): void {
++    private function verifyPolicy(object $v,int $bankId,DateTimeImmutable $at,bool $pinned=false,string $contract=\App\Support\AccountingSimulationBoundary::CONTRACT): void {
+         $requests=[
+             ['role'=>'fondos.banco','scope_type'=>'bank_account','resource_id'=>$bankId],
+             ['role'=>'gasto.cargo_bancario','scope_type'=>'bank_account','resource_id'=>$bankId]];
+         $resolver=app(AccountingAccountResolver::class);
+-        $r=$pinned?$resolver->inspectPinnedForInternalHarness($requests,$at,(int)$v->id,\App\Support\AccountingSimulationBoundary::CONTRACT):$resolver->inspect($requests,$at,(int)$v->id);
++        $r=$pinned?$resolver->inspectPinnedForSimulationContext($requests,$at,(int)$v->id,$contract):$resolver->inspect($requests,$at,(int)$v->id);
+         $bank=DB::table('cuentas_bancarias')->where('id',$bankId)->sharedLock()->first();
+         $currency=$bank?DB::table('monedas')->where('id',$bank->moneda_id)->value('codigo'):null;
+         $base=DB::table('monedas')->where('es_base',true)->value('codigo');
+@@ -94,6 +94,10 @@
+     /** Solo fija versión/autorización: el arnés tomará banco X antes de verificar recursos. */
+     public function pinForInternalHarness(int $id,DateTimeImmutable $at,string $contract): object {
+         \App\Support\AccountingSimulationBoundary::assert($contract);
++        return $this->pinForSimulationContext($id,$at,$contract);
++    }
++    public function pinForSimulationContext(int $id,DateTimeImmutable $at,string $contract): object {
++        \App\Support\AccountingSimulationAccess::assert($contract);
+         if(DB::transactionLevel()===0)throw new \LogicException('Fijación requiere transacción.');
+         // Descubrir candidatos sin bloquear el recorrido completo (incluye borradores en un full scan).
+         // La decisión usa después la versión/autoridad releídas por PK bajo S. AC-03A no permite
+@@ -104,8 +108,12 @@
+         return $this->eligibleSimulation($id,$at);
+     }
+     public function validatePinnedForInternalHarness(int $id,DateTimeImmutable $at,string $contract): object {
+-        \App\Support\AccountingSimulationBoundary::assert($contract);$a=$this->eligibleSimulation($id,$at);
+-        $this->verifyPolicy($this->policy($a->policy_version_id,false),(int)$a->bank_account_id,$at,true);return $a;
++        \App\Support\AccountingSimulationBoundary::assert($contract);
++        return $this->validatePinnedForSimulationContext($id,$at,$contract);
++    }
++    public function validatePinnedForSimulationContext(int $id,DateTimeImmutable $at,string $contract): object {
++        \App\Support\AccountingSimulationAccess::assert($contract);$a=$this->eligibleSimulation($id,$at);
++        $this->verifyPolicy($this->policy($a->policy_version_id,false),(int)$a->bank_account_id,$at,true,$contract);return $a;
+     }
+     private function eligibleSimulation(int $id,DateTimeImmutable $at): object {
+         if(!app()->environment('testing'))abort(403);
+--- a/app/Services/AccountingAccountResolver.php
++++ b/app/Services/AccountingAccountResolver.php
+@@ -25,6 +25,10 @@
+     public function inspectPinnedForInternalHarness(array $requests,DateTimeImmutable $at,int $versionId,string $contract): array
+     {
+         \App\Support\AccountingSimulationBoundary::assert($contract);
++        return $this->inspectPinnedForSimulationContext($requests,$at,$versionId,$contract);
++    }
++    public function inspectPinnedForSimulationContext(array $requests,DateTimeImmutable $at,int $versionId,string $contract): array {
++        \App\Support\AccountingSimulationAccess::assert($contract);
+         if(DB::transactionLevel()===0)throw new \LogicException('Versión fijada requiere transacción exterior.');
+         return $this->inspectInternal($requests,$at,$versionId,true);
+     }
+--- a/app/Services/PilotDemoReadOnly.php
++++ b/app/Services/PilotDemoReadOnly.php
+@@ -47,10 +47,10 @@
+         foreach($e['authorization']??[] as $key=>$value)if(!property_exists($g,$key)||($value===null?$g->$key!==null:(string)$value!==(string)$g->$key))$this->invalid('Evidencia documental incompatible.');
+         return $g;
+     }
+-    private function context(object $g): array {
+-        $bank=$this->one('SELECT b.id,b.alias,b.activa,b.cuenta_contable_id,m.codigo AS currency FROM cuentas_bancarias b JOIN monedas m ON m.id=b.moneda_id WHERE b.id=?',[$g->bank_account_id]);
++    private function context(object $g,bool $historical=false): array {
++        $bank=$this->one('SELECT b.id,b.alias,b.activa,b.saldo_actual,b.cuenta_contable_id,m.codigo AS currency FROM cuentas_bancarias b JOIN monedas m ON m.id=b.moneda_id WHERE b.id=?',[$g->bank_account_id]);
+         $policy=$this->one('SELECT id,version_number,status,kind,content_hash,valid_from,valid_until FROM accounting_policy_versions WHERE id=?',[$g->policy_version_id]);
+-        if(!$bank||$bank->currency!=='NIO'||!$policy||$policy->content_hash!==$g->policy_hash||$policy->status!=='published'||$policy->kind!=='enterprise')$this->invalid('Banco o versión documental incompatibles.');
++        if(!$bank||(!$historical&&$bank->currency!=='NIO')||!$policy||$policy->content_hash!==$g->policy_hash||$policy->status!=='published'||$policy->kind!=='enterprise')$this->invalid('Banco o versión documental incompatibles.');
+         $bindings=$this->rows("SELECT id,semantic_role,account_id,account_snapshot FROM accounting_account_bindings WHERE policy_version_id=? AND bank_account_id=? AND semantic_role IN ('fondos.banco','gasto.cargo_bancario') ORDER BY semantic_role",[$policy->id,$bank->id]);
+         if(count($bindings)!==2)$this->invalid('Faltan las dos asociaciones documentadas.');
+         foreach($bindings as $b){$b->snapshot=json_decode($b->account_snapshot,true,512,JSON_THROW_ON_ERROR);}
+@@ -63,13 +63,18 @@
+         $operations=$this->rows("SELECT operation_uuid,status,classification,amount,recognition_date FROM accounting_event_operations WHERE created_by=? AND purpose='simulation' AND environment='testing' AND event_key='bancos.cargo_gasto.nio' ORDER BY id DESC LIMIT 100",[$actor]);
+         return compact('grants','operations');
+     }
+-    public function review(array $input): array {
++    public function executionInput(array $input): array {
+         $actor=$this->actor();$keys=['authorization_id','uuid','classification','amount','recognition_date','reference','description'];
+         if(array_diff(array_keys($input),$keys)||!isset($input['authorization_id'])||!ctype_digit((string)$input['authorization_id']))$this->invalid('Campos desconocidos o habilitación inválida.');
+-        $g=$this->grant((int)$input['authorization_id']);unset($input['authorization_id']);$n=app(AccountingEventIdentityService::class)->normalize($input);$ctx=$this->context($g);
++        $g=$this->grant((int)$input['authorization_id']);unset($input['authorization_id']);$n=app(AccountingEventIdentityService::class)->normalize($input);
+         $content=app(AccountingEventIdentityService::class)->simulationContent($g,$n,$actor);$hash=hash('sha256',AccountingPolicyService::canonical($content));
+         $existing=$this->one('SELECT * FROM accounting_event_operations WHERE operation_uuid=?',[$n['uuid']]);
+         if($existing){if((int)$existing->created_by!==$actor)abort(403);app(AccountingEventIdentityService::class)->verifyDocument($existing);if($existing->content_hash!==$hash)abort(409,'Conflicto de identidad: consulte el UUID original; no genere otro automáticamente.');}
++        return compact('n','g','hash','existing');
++    }
++    public function review(array $input): array {
++        $data=$this->executionInput($input);$n=$data['n'];$g=$data['g'];$hash=$data['hash'];$existing=$data['existing'];
++        $ctx=$this->context($g,$existing&&$existing->status==='confirmed');
+         $problems=[];$now=now('UTC')->format('Y-m-d H:i:s');
+         if($ctx['revoked'])$problems[]='Autorización retirada: solo historia consultable.';
+         if($g->valid_from>$now||$g->valid_until<=$now)$problems[]='Habilitación fuera de vigencia actual.';
+@@ -82,7 +87,7 @@
+         $actor=$this->actor();$uuid=strtolower(trim($uuid));if(!preg_match('/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/D',$uuid))abort(404);
+         $o=$this->one('SELECT * FROM accounting_event_operations WHERE operation_uuid=?',[$uuid]);if(!$o||(int)$o->created_by!==$actor)abort(403);
+         if($o->purpose!=='simulation'||$o->environment!=='testing'||$o->event_key!==AccountingEventAuthorizationService::EVENT)$this->invalid('Documento fuera del ensayo.');
+-        app(AccountingEventIdentityService::class)->verifyDocument($o);$g=$this->grant((int)$o->authorization_id,false);$ctx=$this->context($g);
++        app(AccountingEventIdentityService::class)->verifyDocument($o);$g=$this->grant((int)$o->authorization_id,false);$ctx=$this->context($g,true);
+         foreach(['policy_version_id','policy_hash','bank_account_id','currency'] as $key)if((string)$o->$key!==(string)$g->$key)$this->invalid('Referencias históricas cruzadas.');
+         $movement=null;$entry=null;$details=[];$resolutions=[];$refund=null;$refundLines=[];
+         if($o->status==='prepared'){if($o->result_movement_id!==null||$o->result_asiento_id!==null)$this->invalid('Prepared incompleto o contradictorio.');}
+--- a/app/Http/Controllers/PilotDemoController.php
++++ b/app/Http/Controllers/PilotDemoController.php
+@@ -21,5 +21,19 @@
+     public function index(PilotDemoReadOnly $demo){return $this->render(fn()=>view('accounting.pilot-demo',$demo->index()+['screen'=>'index']));}
+     public function review(Request $request,PilotDemoReadOnly $demo){return $this->render(fn()=>view('accounting.pilot-demo',['screen'=>'review','review'=>$demo->review($request->except('_token'))]));}
+     public function document(string $uuid,PilotDemoReadOnly $demo){return $this->render(fn()=>view('accounting.pilot-demo',['screen'=>'document','document'=>$demo->document($uuid)]));}
++    public function confirm(Request $request,PilotDemoReadOnly $demo){
++        \App\Support\AccountingHttpSimulationBoundary::assert(\App\Support\AccountingHttpSimulationBoundary::CONTRACT);
++        try {
++            $review=$demo->executionInput($request->except('_token'));
++            $operation=app(\App\Services\AccountingBankChargeSimulation::class)->executeForSyntheticHttp((int)$review['g']->id,$review['n']);
++            return redirect()->route('pilot.demo.document',['uuid'=>$operation->operation_uuid])->withHeaders([
++                'Cache-Control'=>'no-store',
++                'X-Synthetic-Connection'=>(string)\Illuminate\Support\Facades\DB::selectOne('SELECT CONNECTION_ID() AS id')->id,
++                'X-Synthetic-Process'=>(string)getmypid(),
++            ]);
++        }catch(\Illuminate\Validation\ValidationException|\App\Exceptions\ContabilidadException $e){return response('Operación rechazada: revise importe, período y habilitación. No se confirmó el cargo. Consulte el UUID original.',422);}
++        catch(\Symfony\Component\HttpKernel\Exception\HttpExceptionInterface $e){throw $e;}
++        catch(\Throwable $e){error_log('AC04B2B4B '.get_class($e).' '.basename($e->getFile()).':'.$e->getLine());abort(503,'Resultado temporalmente desconocido. Consulte el UUID original antes de repetir; no genere otro.');}
++    }
+     public function lookup(Request $request){$d=$request->validate(['uuid'=>'required|string|max:36']);return redirect()->route('pilot.demo.document',['uuid'=>strtolower(trim($d['uuid']))]);}
+ }
+--- a/resources/views/accounting/pilot-demo.blade.php
++++ b/resources/views/accounting/pilot-demo.blade.php
+@@ -1,8 +1,13 @@
+ <!doctype html>
+ <html lang="es">
+-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Demostración contable — solo consulta</title><link rel="stylesheet" href="/__pilot-demo/assets/app.css"></head>
++<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Demostración contable — {{ defined('SALON_HTTP_SYNTHETIC_CHARGE') ? 'ensayo HTTP' : 'solo consulta' }}</title><link rel="stylesheet" href="/__pilot-demo/assets/app.css"></head>
+ <body class="bg-gray-50 text-gray-900"><main class="max-w-5xl mx-auto p-6 space-y-6">
+-<header class="space-y-2"><p class="text-sm font-bold text-amber-800">SIMULACIÓN FINANCIERA · INFORMACIÓN SINTÉTICA · SIN APROBACIÓN EMPRESARIAL</p><h1 class="text-2xl font-bold">Cargo contable configurable</h1><p>Demostración de consulta y revisión. Esta interfaz no registra preparados, cargos ni devoluciones.</p>
++<header class="space-y-2"><p class="text-sm font-bold text-amber-800">SIMULACIÓN FINANCIERA · INFORMACIÓN SINTÉTICA · SIN APROBACIÓN EMPRESARIAL</p><h1 class="text-2xl font-bold">Cargo contable configurable</h1>
++@if(defined('SALON_HTTP_SYNTHETIC_CHARGE'))
++<p>SIMULACIÓN FINANCIERA — DATOS SINTÉTICOS — NO APROBADO PARA USO EMPRESARIAL. Confirmación sintética habilitada únicamente en este servidor de test.</p>
++@else
++<p>Demostración de consulta y revisión. Esta interfaz no registra preparados, cargos ni devoluciones.</p>
++@endif
+ @if($screen !== 'login')<a class="text-emerald-700 underline" href="{{ route('pilot.demo.index') }}">Inicio / nuevo borrador sin persistencia</a><form method="post" action="{{ route('pilot.demo.logout') }}">@csrf<button class="btn btn-secondary">Cerrar sesión de demostración</button></form>@endif</header>
+ @if($errors->any())<div role="alert" tabindex="-1" id="error-summary" class="border border-red-300 bg-red-50 p-4 rounded-lg"><h2 class="font-bold">Revise los datos</h2>@foreach($errors->messages() as $field=>$messages)@foreach($messages as $message)<p><a class="underline" href="#{{ $field }}">{{ $message }}</a></p>@endforeach
+ @endforeach</div><script>document.getElementById('error-summary').focus();</script>@endif
+@@ -35,7 +40,17 @@
+ @foreach($r['bindings'] as $b)<p>{{ $b->semantic_role }} → #{{ $b->account_id }} {{ $b->snapshot['code'] }} {{ $b->snapshot['name'] }}</p>@endforeach
+ @foreach($r['problems'] as $problem)<p role="status" class="text-amber-800">{{ $problem }}</p>@endforeach
+ @if($r['existing'])<p>Documento existente: {{ $r['existing']->status }}. No se modificó.</p><a class="underline" href="{{ route('pilot.demo.document',$r['n']['uuid']) }}">Consultar resultado original</a>@endif
+-<p id="confirm-help">Confirmación financiera no habilitada por HTTP. El ensayo financiero continúa exclusivamente mediante el arnés CLI ya autorizado, con sus preflight y guardias.</p><button disabled aria-describedby="confirm-help" class="btn btn-secondary">Confirmar cargo — bloqueado en esta interfaz</button></section>
++@if(defined('SALON_HTTP_SYNTHETIC_CHARGE'))
++<form method="post" action="{{ route('pilot.demo.confirm') }}">@csrf
++@foreach($r['n'] as $key=>$value)
++<input type="hidden" name="{{ $key }}" value="{{ $value }}">
++@endforeach
++<input type="hidden" name="authorization_id" value="{{ $r['g']->id }}"><p>SIMULACI?N FINANCIERA ? DATOS SINT?TICOS ? NO APROBADO PARA USO EMPRESARIAL.</p>
++<button class="btn btn-primary">Confirmar expresamente el cargo sintético</button></form>
++@else
++<p id="confirm-help">Confirmación financiera no habilitada por HTTP. El ensayo financiero continúa exclusivamente mediante el arnés CLI ya autorizado, con sus preflight y guardias.</p><button disabled aria-describedby="confirm-help" class="btn btn-secondary">Confirmar cargo — bloqueado en esta interfaz</button>
++@endif
++</section>
+ @elseif($screen === 'document')
+ @php
+     $d = $document;
+@@ -48,6 +63,7 @@
+ @endforeach
+ @if($d['o']->status === 'prepared')<p role="status" class="text-amber-800">Prepared no equivale a éxito financiero. No tiene movimiento ni asiento confirmado. Solo consulta, sin continuación por HTTP.</p>@else
+ <p>Movimiento #{{ $d['movement']->id }} · {{ $d['movement']->tipo }} · NIO {{ $d['movement']->monto }} · conciliación {{ $d['movement']->estado_conciliacion }}</p><p>Extracto asociado: {{ $d['movement']->conciliacion_id ?? 'ninguno' }} · fecha de conciliación {{ $d['movement']->fecha_conciliacion ?? 'ninguna' }}</p>
++<p>Saldo actual del banco de ensayo: {{ $d['bank']->currency }} {{ $d['bank']->saldo_actual }}. Puede incluir operaciones posteriores; no sustituye la evidencia del cargo.</p>
+ <h3 class="font-bold">Asiento original #{{ $d['entry']->id }} · {{ $d['entry']->numero_asiento }}</h3>@foreach($d['details'] as $l)<p>Detalle #{{ $l->id }} · cuenta #{{ $l->cuenta_id }} · moneda #{{ $l->moneda_id }} · DEBE {{ $l->debe }} / HABER {{ $l->haber }}</p>@endforeach
+ <h3 class="font-bold">Correspondencias originales</h3>@foreach($d['resolutions'] as $r)<p>{{ $r->semantic_role }} · binding #{{ $r->binding_id }} · cuenta #{{ $r->account_id }} · detalle #{{ $r->detail_id }}</p>@endforeach
+ @if($d['refund'])<h3 class="font-bold">Devolución acreditada sintética — solo consulta</h3><p>Documento #{{ $d['refund']->id }} · UUID {{ $d['refund']->operation_uuid }} · {{ $d['refund']->status }} · NIO {{ $d['refund']->amount }}</p><p>Movimiento inverso #{{ $d['refund']->result_movement_id }} · asiento inverso #{{ $d['refund']->result_asiento_id }} · fecha {{ $d['refund']->effective_date }}</p>@foreach($d['refundLines'] as $r)<p>Detalle original #{{ $r->original_detail_id }} → inverso #{{ $r->reversal_detail_id }} · cuenta #{{ $r->account_id }} · DEBE {{ $r->reversal_debe }} / HABER {{ $r->reversal_haber }}</p>@endforeach<p>El cargo original y su conciliación permanecen visibles. No hay botón de devolución.</p>@else<p>Sin devolución confirmada visible para esta sesión.</p>@endif
+--- a/routes/web.php
++++ b/routes/web.php
+@@ -50,6 +50,9 @@
+     Route::post('/logout',[\App\Http\Controllers\PilotDemoController::class,'logout'])->name('pilot.demo.logout');
+     Route::get('/',[\App\Http\Controllers\PilotDemoController::class,'index'])->name('pilot.demo.index');
+     Route::post('/review',[\App\Http\Controllers\PilotDemoController::class,'review'])->name('pilot.demo.review');
++    if(defined('SALON_HTTP_SYNTHETIC_CHARGE')&&SALON_HTTP_SYNTHETIC_CHARGE===\App\Support\AccountingHttpSimulationBoundary::CONTRACT){
++        Route::post('/confirm',[\App\Http\Controllers\PilotDemoController::class,'confirm'])->middleware('throttle:30,1')->name('pilot.demo.confirm');
++    }
+     Route::get('/lookup',[\App\Http\Controllers\PilotDemoController::class,'lookup'])->name('pilot.demo.lookup');
+     Route::get('/operations/{uuid}',[\App\Http\Controllers\PilotDemoController::class,'document'])->name('pilot.demo.document');
+ });
+--- a/tests/Support/ac04b1-backup.php
++++ b/tests/Support/ac04b1-backup.php
+@@ -3,8 +3,8 @@
+ ini_set('zend.exception_ignore_args','1');
+ $root=dirname(__DIR__,2);$exit=1;
+ try {
+-    $phase=$argv[1]??'AC04B1';if(!in_array($phase,['AC04B1','AC04B2A','AC04B2B2R','AC04B2B3A','AC04B2B4A'],true))throw new RuntimeException('Fase inválida');
+-    $expectedMigrations=$phase==='AC04B1'?80:($phase==='AC04B2B4A'?82:81);
++    $phase=$argv[1]??'AC04B1';if(!in_array($phase,['AC04B1','AC04B2A','AC04B2B2R','AC04B2B3A','AC04B2B4A','AC04B2B4B'],true))throw new RuntimeException('Fase inválida');
++    $expectedMigrations=$phase==='AC04B1'?80:(in_array($phase,['AC04B2B4A','AC04B2B4B'],true)?82:81);
+     if(PHP_VERSION!=='8.3.30'||realpath(getcwd())!==realpath($root))throw new RuntimeException('Raíz/PHP inválido');
+     require $root.'/tests/bootstrap.php';
+     if(SALON_TEST_DATABASE_RESET_ALLOWED)throw new RuntimeException('Reset debe estar deshabilitado');
+--- a/tests/Support/ac04b1-isolation.php
++++ b/tests/Support/ac04b1-isolation.php
+@@ -2,7 +2,7 @@
+ 
+ ini_set('zend.exception_ignore_args','1');$root=dirname(__DIR__,2);
+ try {
+-    $phase=$argv[2]??'AC04B1';if(!in_array($phase,['AC04B1','AC04B2A','AC04B2B1','AC04B2B2R','AC04B2B3A','AC04B2B4A'],true))throw new RuntimeException('Fase inválida');$pilot=$phase!=='AC04B1';$administration=$phase==='AC04B2B1';$refund=$phase==='AC04B2B3A';$demo=$phase==='AC04B2B4A';
++    $phase=$argv[2]??'AC04B1';if(!in_array($phase,['AC04B1','AC04B2A','AC04B2B1','AC04B2B2R','AC04B2B3A','AC04B2B4A','AC04B2B4B'],true))throw new RuntimeException('Fase inválida');$pilot=$phase!=='AC04B1';$administration=$phase==='AC04B2B1';$refund=$phase==='AC04B2B3A';$demo=$phase==='AC04B2B4A';$web=$phase==='AC04B2B4B';
+     $mode=$argv[1]??'';if(!in_array($mode,['before','after'],true))throw new RuntimeException('Modo inválido');
+     $pdo=new PDO('mysql:host=127.0.0.1;port=3306;charset=utf8mb4','root','',[PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION]);
+     $file=$root.'/storage/app/private/'.strtolower($phase).'-isolation-before.json';$base=$mode==='after'?json_decode(file_get_contents($file),true,512,JSON_THROW_ON_ERROR):[];$snap=[];
+@@ -27,7 +27,7 @@
+         if($administration)$append=['accounting_policy_versions','accounting_account_bindings','accounting_policy_audits','accounting_policy_authorizations','cuentas_contables'];
+         if($phase==='AC04B2B2R')$append=array_merge($append,['conciliaciones_bancarias','transferencias','sesiones_caja','cash_sessions','operaciones_cambio','saldos_moneda','diferenciales_cambiarios']);
+         if($refund)$append=array_merge($append,['migrations','conciliaciones_bancarias']);
+-        if($demo)$append=[];
++        if($demo)$append=[];if($web)$append=array_merge($append,['users','cuentas_contables','conciliaciones_bancarias']);
+         foreach($base['salon_erp_test'] as $table=>$b) {
+             $a=$snap['salon_erp_test'][$table]??throw new RuntimeException('Tabla previa ausente');
+             if(in_array($table,$append,true)?array_diff($b['rows'],$a['rows']):$b['rows']!==$a['rows'])throw new RuntimeException('Filas previas cambiaron: '.$table);
+@@ -36,7 +36,7 @@
+         }
+         $added=array_values(array_diff(array_keys($snap['salon_erp_test']),array_keys($base['salon_erp_test'])));sort($added);
+         if($added!==($refund?['bank_charge_reversal_lines','bank_charge_reversals']:($pilot?[]:['accounting_entry_line_resolutions','accounting_event_operations','accounting_policy_authorizations'])))throw new RuntimeException('Tablas nuevas inesperadas');
+-        if((int)$pdo->query('SELECT COUNT(*) FROM salon_erp_test.migrations')->fetchColumn()!==(($refund||$demo)?82:81))throw new RuntimeException('Migraciones distintas');
++        if((int)$pdo->query('SELECT COUNT(*) FROM salon_erp_test.migrations')->fetchColumn()!==(($refund||$demo||$web)?82:81))throw new RuntimeException('Migraciones distintas');
+         if(!$pilot&&(int)$pdo->query('SELECT COUNT(*) FROM salon_erp_test.asientos_contables WHERE accounting_policy_version_id IS NOT NULL OR accounting_policy_hash IS NOT NULL OR accounting_authorization_id IS NOT NULL')->fetchColumn()!==0)throw new RuntimeException('Se atribuyó política a asiento');
+         echo "OTHER_DATABASES_EXACT=True; OLD_ROWS_PRESERVED=True; LEGACY_ENTRIES_UNATTRIBUTED=True\n";
+         if($phase==='AC04B2B2R')foreach($snap['salon_erp_test'] as $table=>$data){$delta=count($data['rows'])-count($base['salon_erp_test'][$table]['rows']);if($delta)echo json_encode(['table'=>$table,'new_fixture_rows'=>$delta]),PHP_EOL;}
+--- a/tests/Support/run-ac04b1-tests.php
++++ b/tests/Support/run-ac04b1-tests.php
+@@ -13,7 +13,7 @@
+         'reconciliation-regressions'=>['AccountIntegrityTest','AccountHierarchyConcurrencyTest','AccountingPolicyTest','AccountingAccountResolverTest','BankBalanceIntegrityTest','AccountingEventDocumentationTest','AccountingEventRollbackGuardTest','AccountingBankChargeSimulationTest','AccountingAdministrationTest'],
+         'refund-preflight'=>[],'refund-install'=>['BankChargeRefundInstallationTest'],'refund-core'=>['BankChargeRefundTest'],'refund-race'=>['BankChargeRefundConcurrencyTest'],'refund-guard'=>['BankChargeRefundRollbackGuardTest'],
+         'refund-regressions'=>['AccountIntegrityTest','AccountHierarchyConcurrencyTest','AccountingPolicyTest','AccountingAccountResolverTest','BankBalanceIntegrityTest','AccountingEventDocumentationTest','AccountingEventRollbackGuardTest','AccountingBankChargeSimulationTest','AccountingAdministrationTest','BankReconciliationTest'],
+-        'demo-preflight'=>[],'demo-core'=>['PilotDemoReadOnlyTest'],'demo-http'=>['PilotDemoHttpBoundaryTest'],
++        'web-preflight'=>[],'web-core'=>['PilotDemoHttpExecutionTest'],'web-boundary'=>['PilotDemoBoundarySeparationTest'],'web-race'=>['PilotDemoHttpConcurrencyTest'],'web-race-resume'=>['PilotDemoHttpConcurrencyTest'],'web-history'=>['PilotDemoHistoricalTest'],'demo-preflight'=>[],'demo-core'=>['PilotDemoReadOnlyTest'],'demo-http'=>['PilotDemoHttpBoundaryTest'],
+         'demo-regressions'=>['AccountIntegrityTest','AccountHierarchyConcurrencyTest','AccountingPolicyTest','AccountingAccountResolverTest','BankBalanceIntegrityTest','AccountingEventDocumentationTest','AccountingEventRollbackGuardTest','AccountingBankChargeSimulationTest','AccountingAdministrationTest','BankReconciliationTest','BankChargeRefundTest','BankChargeRefundRollbackGuardTest']];
+     if(!isset($groups[$mode])||PHP_VERSION!=='8.3.30'||realpath(getcwd())!==realpath($root))throw new RuntimeException('Modo/raíz/PHP inválido');
+     require $root.'/tests/bootstrap.php';if(SALON_TEST_DATABASE_RESET_ALLOWED)throw new RuntimeException('Reset debe ser cero');
+@@ -25,7 +25,7 @@
+     foreach($grants as $g)if(!str_starts_with($g,'GRANT USAGE ')){[$p,$s]=explode(' ON ',$g,2);$ps=explode(', ',substr($p,6));sort($ps);if($ps!==$expected||$s!=='`'.str_replace('_',chr(92).'_','salon_erp_test').'`.* TO `salon_erp_tester`@`localhost`')throw new RuntimeException('Privilegios inesperados');}
+     foreach(['salon_erp','salon_erp_bootstrap_check'] as $s){try{$pdo->query("SELECT 1 FROM `$s`.users LIMIT 0");throw new RuntimeException('Base ajena accesible');}catch(PDOException $e){if(($e->errorInfo[1]??0)!==1142)throw $e;}}
+     $files=array_map(fn($f)=>basename($f,'.php'),glob($root.'/database/migrations/*.php'));sort($files);
+-    $refund=str_starts_with($mode,'refund-');$demo=str_starts_with($mode,'demo-');if(count($files)!==(($refund||$demo)?82:81))throw new RuntimeException('Archivos de migraciones');
++    $refund=str_starts_with($mode,'refund-');$web=str_starts_with($mode,'web-');$demo=str_starts_with($mode,'demo-')||$web;if(count($files)!==(($refund||$demo)?82:81))throw new RuntimeException('Archivos de migraciones');
+     if(in_array($mode,['refund-preflight','refund-install'],true))$files=array_values(array_diff($files,['2026_11_16_000003_create_bank_charge_refunds']));
+     if(in_array($mode,['preflight','install'],true))$files=array_values(array_diff($files,['2026_11_16_000002_add_accounting_event_documentation']));
+     if($files!==$pdo->query('SELECT migration FROM migrations ORDER BY migration')->fetchAll(PDO::FETCH_COLUMN))throw new RuntimeException('Migraciones aplicadas distintas');
+@@ -46,13 +46,14 @@
+     $backupPhase=(str_starts_with($mode,'pilot-')||str_starts_with($mode,'admin-'))?'AC04B2A':'AC04B1';
+     if(str_starts_with($mode,'reconciliation-'))$backupPhase='AC04B2B2R';
+     if($refund)$backupPhase='AC04B2B3A';
+-    if($demo)$backupPhase='AC04B2B4A';
++    if($demo)$backupPhase='AC04B2B4A';if($web)$backupPhase='AC04B2B4B';
+     $b=json_decode(file_get_contents($root.'/storage/app/private/'.strtolower($backupPhase).'-backup.json'),true,512,JSON_THROW_ON_ERROR);
+     if(!str_starts_with($b['file'],'E:/salon-erp-backups/salon_erp_test_'.$backupPhase.'_')||!$b['source_unchanged']||$b['migrations']!==($backupPhase==='AC04B1'?80:($demo?82:81))||filesize($b['file'])!==$b['bytes']||hash_file('sha256',$b['file'])!==$b['sha256'])throw new RuntimeException('Nuevo respaldo inválido');
+     if(!str_starts_with(file_get_contents($b['file'].'.sha256'),$b['sha256'].'  '))throw new RuntimeException('Sidecar inválido');
+     echo 'PREFLIGHT: PHP 8.3.30; MySQL 8.4.3; salon_erp_test / salon_erp_tester@localhost /3306; roles NONE; privilegios exactos; bases ajenas denegadas; '.count($files).' migraciones; NUEVO respaldo SHA256 válido'.PHP_EOL;$pdo=null;
+     if(!$groups[$mode])$exit=0;
+     else {
++        if($mode==='web-race-resume')putenv('AC04B2B4B_RESUME=after_fixture_rejection');
+         if($mode==='pilot-race-final')putenv('AC04B2A_RACE_YEAR=2036');
+         if($mode==='pilot-race-current')putenv('AC04B2A_RACE_YEAR=2037');
+         if($mode==='pilot-race-verified')putenv('AC04B2A_RACE_YEAR=2031');
+--- /dev/null
++++ b/app/Support/AccountingHttpSimulationBoundary.php
+@@ -0,0 +1,37 @@
++<?php
++namespace App\Support;
++
++use Illuminate\Support\Facades\DB;
++
++/** Solo el servidor HTTP de ensayo puede adquirir este contrato. Sin puentes CLI. */
++final class AccountingHttpSimulationBoundary
++{
++    public const CONTRACT = 'AC04B2B4B_HTTP_SYNTHETIC_CHARGE_V1';
++
++    public static function assert(string $contract): void
++    {
++        if ($contract !== self::CONTRACT || PHP_SAPI !== 'cli-server'
++            || !defined('SALON_HTTP_SYNTHETIC_CHARGE') || SALON_HTTP_SYNTHETIC_CHARGE !== self::CONTRACT
++            || ($_SERVER['REMOTE_ADDR'] ?? '') !== '127.0.0.1'
++            || !in_array($_SERVER['HTTP_HOST'] ?? '', ['127.0.0.1:8775', '127.0.0.1:8776'], true)
++            || !defined('SALON_TEST_DATABASE_BOOTSTRAPPED') || !SALON_TEST_DATABASE_BOOTSTRAPPED
++            || !defined('SALON_TEST_DATABASE_RESET_ALLOWED') || SALON_TEST_DATABASE_RESET_ALLOWED) {
++            abort(404);
++        }
++        \Tests\Support\TestDatabaseSafety::assertApplicationRoot(dirname(__DIR__, 2), app()->basePath());
++        \Tests\Support\TestDatabaseSafety::assertConfiguration(app()->environment(), config('database'));
++        foreach (DB::getConnections() as $name => $connection) {
++            if ($name !== 'mysql') throw new \LogicException('Conexión alternativa prohibida.');
++            \Tests\Support\TestDatabaseSafety::assertConnection($connection->getConfig());
++        }
++        $identity = DB::selectOne('SELECT DATABASE() AS database_name,CURRENT_USER() AS account_name,@@port AS server_port,CURRENT_ROLE() AS roles');
++        \Tests\Support\TestDatabaseSafety::assertServerIdentity($identity);
++        if ($identity->roles !== 'NONE') throw new \LogicException('Roles SQL incompatibles.');
++        $request = request();
++        if (!$request->isMethod('POST') || $request->path() !== '__pilot-demo/confirm'
++            || !$request->hasSession() || !is_string($request->input('_token'))
++            || !hash_equals($request->session()->token(), $request->input('_token'))) abort(419);
++        $actor = auth()->id() ? DB::table('users')->where('id', auth()->id())->first() : null;
++        if (!$actor || !$actor->is_active || !in_array($actor->role, ['alvaro', 'contador'], true)) abort(403);
++    }
++}
+--- /dev/null
++++ b/app/Support/AccountingSimulationAccess.php
+@@ -0,0 +1,17 @@
++<?php
++namespace App\Support;
++
++/** Despacho interno explícito. La guardia CLI original no admite HTTP. */
++final class AccountingSimulationAccess
++{
++    public static function assert(string $contract): void
++    {
++        if ($contract === AccountingSimulationBoundary::CONTRACT) {
++            AccountingSimulationBoundary::assert($contract);
++        } elseif ($contract === AccountingHttpSimulationBoundary::CONTRACT) {
++            AccountingHttpSimulationBoundary::assert($contract);
++        } else {
++            throw new \LogicException('Frontera de simulación desconocida.');
++        }
++    }
++}
+--- /dev/null
++++ b/tests/Support/PilotHttpClient.php
+@@ -0,0 +1,30 @@
++<?php
++namespace Tests\Support;
++
++/** Cliente del arnés. Nunca usado por la aplicación ni para puentear HTTP a CLI. */
++final class PilotHttpClient
++{
++    public string $cookie='';
++    public string $token='';
++    public function __construct(public int $port) {}
++    public function request(string $path,string $method='GET',array $data=[]): array {
++        $headers="Content-Type: application/x-www-form-urlencoded\r\n".($this->cookie!==''?"Cookie: {$this->cookie}\r\n":'');
++        $context=stream_context_create(['http'=>['method'=>$method,'header'=>$headers,'content'=>$method==='POST'?http_build_query($data):'','ignore_errors'=>true,'follow_location'=>0,'timeout'=>25]]);
++        $body=file_get_contents('http://127.0.0.1:'.$this->port.$path,false,$context);$h=$http_response_header??[];preg_match('/\s(\d{3})\s/',$h[0]??'',$m);$result=['status'=>(int)($m[1]??0),'body'=>$body,'headers'=>[]];
++        foreach($h as $header){if(preg_match('/^Set-Cookie: (pilot_demo_http_synthetic_session=[^;]+)/i',$header,$c))$this->cookie=$c[1];$parts=explode(': ',$header,2);if(count($parts)===2)$result['headers'][strtolower($parts[0])]=$parts[1];}
++        if(preg_match('/name="_token" value="([^"]+)"/',$body,$m))$this->token=html_entity_decode($m[1]);
++        return $result;
++    }
++    public function login(string $email,string $password): int {
++        $this->request('/__pilot-demo/login');$r=$this->request('/__pilot-demo/login','POST',['_token'=>$this->token,'email'=>$email,'password'=>$password]);$this->request('/__pilot-demo');return $r['status'];
++    }
++    public function confirm(array $payload): array {return $this->request('/__pilot-demo/confirm','POST',$payload+['_token'=>$this->token]);}
++    public function startServer(): mixed {
++        $s=@stream_socket_client('tcp://127.0.0.1:'.$this->port,$errno,$error,0.2);if($s){fclose($s);throw new \RuntimeException('Puerto de ensayo ocupado.');}
++        $log=dirname(__DIR__,2).'/storage/app/private/ac04b2b4b-http-'.$this->port.'.log';
++        $p=proc_open([PHP_BINARY,'-d','display_errors=0','-d','zend.exception_ignore_args=1','-S','127.0.0.1:'.$this->port,'-t',dirname(__DIR__,2).'/public',__DIR__.'/pilot-demo-http-router.php'],[0=>['pipe','r'],1=>['file',$log,'a'],2=>['file',$log,'a']],$pipes,dirname(__DIR__,2));
++        if(!is_resource($p))throw new \RuntimeException('No se inició el servidor.');fclose($pipes[0]);
++        for($i=0;$i<40;$i++){$s=@stream_socket_client('tcp://127.0.0.1:'.$this->port,$errno,$error,0.2);if($s){fclose($s);return $p;}usleep(100000);}
++        proc_terminate($p);proc_close($p);throw new \RuntimeException('Servidor no disponible.');
++    }
++}
+--- /dev/null
++++ b/tests/Support/pilot-demo-http-router.php
+@@ -0,0 +1,29 @@
++<?php
++
++/** Servidor HTTP sintético aislado, distinto del servidor de solo lectura. Nunca retornar false ni servir el workspace. */
++try {
++    if(PHP_SAPI!=='cli-server'||($_SERVER['REMOTE_ADDR']??'')!=='127.0.0.1'||!in_array($_SERVER['HTTP_HOST']??'',['127.0.0.1:8775','127.0.0.1:8776'],true)){http_response_code(404);exit;}
++    $path=parse_url($_SERVER['REQUEST_URI']??'/',PHP_URL_PATH);$method=$_SERVER['REQUEST_METHOD']??'';
++    if($path==='/__pilot-demo/assets/app.css'&&$method==='GET'){
++        $root=dirname(__DIR__,2);$manifest=json_decode(file_get_contents($root.'/public/build/manifest.json'),true,512,JSON_THROW_ON_ERROR);$file=realpath($root.'/public/build/'.$manifest['resources/css/app.css']['file']);$base=realpath($root.'/public/build');
++        if(!$file||!str_starts_with($file,$base.DIRECTORY_SEPARATOR)||pathinfo($file,PATHINFO_EXTENSION)!=='css')throw new RuntimeException('Asset inválido');header('Content-Type: text/css');readfile($file);exit;
++    }
++    $get=in_array($path,['/__pilot-demo','/__pilot-demo/','/__pilot-demo/login','/__pilot-demo/lookup'],true)||preg_match('~^/__pilot-demo/operations/[a-fA-F0-9-]{36}$~D',$path);
++    $post=in_array($path,['/__pilot-demo/login','/__pilot-demo/logout','/__pilot-demo/review','/__pilot-demo/confirm'],true);
++    if(!(($method==='GET'&&$get)||($method==='POST'&&$post))){http_response_code(404);exit;}
++    require __DIR__.'/../bootstrap.php';define('SALON_PILOT_DEMO_READONLY','AC04B2B4A_READ_ONLY_DEMO_V1');define('SALON_HTTP_SYNTHETIC_CHARGE','AC04B2B4B_HTTP_SYNTHETIC_CHARGE_V1');
++    $app=require dirname(__DIR__,2).'/bootstrap/app.php';$app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
++    $app->bind(Illuminate\Foundation\Http\Middleware\PreventRequestForgery::class,Tests\Support\PilotDemoHttpCsrf::class);
++    $app['config']->set('database.connections',['mysql'=>config('database.connections.mysql')]);
++    $private=dirname(__DIR__,2).'/storage/app/private/pilot-demo-http-synthetic';foreach(['sessions','cache','locks'] as $dir)if(!is_dir($private.'/'.$dir)&&!mkdir($private.'/'.$dir,0700,true))throw new RuntimeException('No se pudo preparar sesión aislada');
++    $app['config']->set(['session.driver'=>'file','session.files'=>$private.'/sessions','session.cookie'=>'pilot_demo_http_synthetic_session','session.path'=>'/__pilot-demo','session.http_only'=>true,'session.same_site'=>'strict',
++        'cache.default'=>'file','cache.stores.file.path'=>$private.'/cache','cache.stores.file.lock_path'=>$private.'/locks','logging.default'=>'null']);
++    App\Services\PilotDemoReadOnly::installation();
++    $db=$app['db']->connection();$i=$db->selectOne('SELECT DATABASE() AS database_name,CURRENT_USER() AS account_name,@@port AS server_port');Tests\Support\TestDatabaseSafety::assertServerIdentity($i);
++    if($path!=='/__pilot-demo/confirm')$db->getPdo()->exec('SET SESSION TRANSACTION READ ONLY');
++    $db->beforeExecuting(function($sql)use($path){
++        if(preg_match('/^\s*(select|show)\b/i',$sql))return;
++        if($path!=='/__pilot-demo/confirm'||!preg_match('/^(?:insert into|update) `(accounting_event_operations|accounting_entry_line_resolutions|movimientos_bancarios|asientos_contables|detalle_asientos|cuentas_bancarias|periodos_contables)`/i',$sql))throw new LogicException('SQL fuera del evento sintético.');
++    });
++    $app->handleRequest(Illuminate\Http\Request::capture());
++}catch(Throwable){http_response_code(503);echo 'Demostración temporalmente no disponible. No se confirmó ninguna operación por esta interfaz.';}
+--- /dev/null
++++ b/tests/Support/pilot-demo-http-client.php
+@@ -0,0 +1,6 @@
++<?php
++/** Subproceso de transporte HTTP. Recibe cookies por pipe, nunca por argv o archivos. */
++require dirname(__DIR__,2).'/vendor/autoload.php';
++$p=json_decode(fgets(STDIN),true,512,JSON_THROW_ON_ERROR);$client=new Tests\Support\PilotHttpClient($p['port']);$client->cookie=$p['cookie'];$client->token=$p['token'];
++echo "READY\n";flush();if(trim(fgets(STDIN))!=='go')exit(1);echo "ATTEMPT\n";flush();
++$r=$client->confirm($p['payload']);unset($r['body']);$r['headers']=array_intersect_key($r['headers'],array_flip(['location','x-synthetic-connection','x-synthetic-process']));echo json_encode($r,JSON_THROW_ON_ERROR).PHP_EOL;
+--- /dev/null
++++ b/tests/Support/ac04b2b4b-domain-worker.php
+@@ -0,0 +1,39 @@
++<?php
++
++ini_set('zend.exception_ignore_args','1');
++if(PHP_SAPI!=='cli'){http_response_code(404);exit(1);}
++require dirname(__DIR__).'/bootstrap.php';
++$app=require dirname(__DIR__,2).'/bootstrap/app.php';$app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();$app['config']->set('database.connections',['mysql'=>config('database.connections.mysql')]);
++$app['config']->set('session.driver','array');$app['config']->set('logging.default','null');
++Tests\Support\TestDatabaseSafety::assertConfiguration($app->environment(),config('database'));
++$db=$app['db']->connection();$exit=1;$path=null;$id=null;$result=null;
++try {
++    if(PHP_VERSION!=='8.3.30'||SALON_TEST_DATABASE_RESET_ALLOWED)throw new RuntimeException('Entorno inválido');
++    $id=$db->selectOne('SELECT DATABASE() AS database_name,CURRENT_USER() AS account_name,@@port AS server_port,CONNECTION_ID() AS connection_id');Tests\Support\TestDatabaseSafety::assertServerIdentity($id);
++    if($db->table('migrations')->count()!==82)throw new RuntimeException('Esquema inválido');$p=json_decode($argv[1],true,512,JSON_THROW_ON_ERROR);
++    if(realpath(dirname($p['result']))!==realpath(dirname(__DIR__,2).'/storage/app/private')||!preg_match('/^ac04b2b4b-worker-[a-f0-9]+\.result$/D',basename($p['result'])))throw new RuntimeException('Ruta inválida');$path=$p['result'];
++    Carbon\Carbon::setTestNow();auth()->setUser(App\Models\Usuario::findOrFail((int)$p['actor']));
++    $session=$app['session']->driver();$session->start();$request=Illuminate\Http\Request::create('/internal-harness','POST',$p['legacy_payload']??[]);$request->setLaravelSession($session);$app->instance('request',$request);$app['url']->setRequest($request);$app['redirect']->setSession($session);
++    $paused=false;$db->beforeExecuting(function($sql)use($p,&$paused) {
++        if(preg_match('/^\s*(create|alter|drop|truncate|delete)\b/i',$sql))throw new LogicException('DDL/borrado prohibido');
++        if(preg_match('/^\s*(insert|update|replace)\b/i',$sql)&&!preg_match('/^(?:insert into|update) `(accounting_event_operations|accounting_entry_line_resolutions|movimientos_bancarios|asientos_contables|detalle_asientos|cuentas_bancarias|accounting_policy_authorizations|accounting_policy_versions|accounting_policy_audits|conciliaciones_bancarias)`/i',$sql))throw new LogicException('Escritor fuera de alcance');
++        $barrier=$p['action']==='prepare'
++            ? preg_match('/^select .* from `accounting_event_operations` where `id` = /i',$sql)
++            : str_starts_with($sql,'insert into `movimientos_bancarios`');
++        if($p['hold']&&!$paused&&$barrier){$paused=true;echo "LOCKED\n";flush();if(trim(fgets(STDIN)?:'')!=='release')throw new RuntimeException('Barrera no liberada');}
++    });
++    echo "READY\n";flush();stream_set_timeout(STDIN,20);if(trim(fgets(STDIN)?:'')!=='go')throw new RuntimeException('No iniciado');if(!$p['hold']){echo "ATTEMPT\n";flush();}
++    switch($p['action']) {
++        case 'charge':$o=app(App\Services\AccountingBankChargeSimulation::class)->executeForInternalHarness((int)$p['grant'],$p['input'],App\Support\AccountingSimulationBoundary::CONTRACT);$result=['operation_id'=>$o->id,'movement_id'=>$o->result_movement_id,'entry_id'=>$o->result_asiento_id];break;
++        case 'prepare':$o=app(App\Services\AccountingEventIdentityService::class)->prepareSimulation((int)$p['grant'],$p['input'],DateTimeImmutable::createFromInterface(now('UTC')));$result=['operation_id'=>$o->id,'status'=>$o->status];break;
++        case 'revoke':$a=app(App\Services\AccountingEventAuthorizationService::class)->revokeForSimulation((int)$p['grant'],'SYNTHETIC-PILOT-RACE','Retirada concurrente');$result=['revocation'=>$a->id];break;
++        case 'publish':$a=app(App\Services\AccountingPolicyService::class)->publish((int)$p['version'],$p['hash'],'SYNTHETIC-PUBLICATION','Solapamiento de ensayo');$result=['published'=>$a->id];break;
++        case 'reconcile':app(App\Http\Controllers\BancoController::class)->guardarConciliacion($request,App\Models\CuentaBancaria::findOrFail((int)$p['bank']));if(!$session->has('success')||$session->has('errors'))throw new RuntimeException('Conciliacion rechazada');break;
++        case 'legacy':app(App\Http\Controllers\BancoController::class)->registrarCargo($request);if(!$session->has('success')||$session->has('errors'))throw new RuntimeException('Cargo heredado rechazado');break;
++        default:throw new RuntimeException('Acción inválida');
++    }
++    if($db->transactionLevel()!==0)throw new RuntimeException('Transacción no finalizada');echo "RESULT:accepted\n";$exit=0;
++}catch(Illuminate\Validation\ValidationException $e){echo "RESULT:rejected\n";$exit=2;}
++catch(Throwable $e){echo 'RESULT:error '.get_class($e).' '.basename($e->getFile()).':'.$e->getLine().PHP_EOL;}
++finally{while($db->transactionLevel()>0)$db->rollBack();if($path&&$id)file_put_contents($path,json_encode(['exit'=>$exit,'connection_id'=>$id->connection_id,'pid'=>getmypid(),'result'=>$result]),LOCK_EX);$db->disconnect();Carbon\Carbon::setTestNow();putenv('SALON_TEST_DB_RESET_ALLOWED=0');}
++exit($exit);
+--- /dev/null
++++ b/tests/Support/ac04b2b4b-inspect.php
+@@ -0,0 +1,10 @@
++<?php
++require dirname(__DIR__).'/bootstrap.php';
++$app=require dirname(__DIR__,2).'/bootstrap/app.php';$app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();$app['config']->set('database.connections',['mysql'=>config('database.connections.mysql')]);
++$db=$app['db']->connection();Tests\Support\TestDatabaseSafety::assertServerIdentity($db->selectOne('SELECT DATABASE() AS database_name,CURRENT_USER() AS account_name,@@port AS server_port'));
++$db->getPdo()->exec('SET SESSION TRANSACTION READ ONLY');$f=json_decode(file_get_contents(__DIR__.'/../../storage/app/private/ac04b2b4b-http-fixture.json'),true,512,JSON_THROW_ON_ERROR);
++echo json_encode(['bank'=>$db->table('cuentas_bancarias')->where('id',$f['bank'])->first(['id','saldo_actual']),'operations'=>$db->table('accounting_event_operations')->where('bank_account_id',$f['bank'])->get(['id','status','result_movement_id','result_asiento_id']),'movements'=>$db->table('movimientos_bancarios')->where('cuenta_bancaria_id',$f['bank'])->count()]),PHP_EOL;
++foreach([$f['funds'],$f['expense'],(int)$db->table('cuentas_contables')->where('codigo','6.9')->value('id')] as $account){
++    $r=$db->selectOne('SELECT CAST(COALESCE(SUM(d.debe-d.haber),0) AS CHAR) AS final_balance, CAST(COALESCE(SUM(CASE WHEN m.cuenta_bancaria_id=? THEN d.debe-d.haber ELSE 0 END),0) AS CHAR) AS phase_delta, CAST(COALESCE(SUM(d.debe-d.haber),0)-COALESCE(SUM(CASE WHEN m.cuenta_bancaria_id=? THEN d.debe-d.haber ELSE 0 END),0) AS CHAR) AS baseline_balance FROM detalle_asientos d LEFT JOIN movimientos_bancarios m ON m.asiento_contable_id=d.asiento_id WHERE d.cuenta_id=?',[$f['bank'],$f['bank'],$account]);
++    echo json_encode(['account'=>$account,'balances'=>$r]),PHP_EOL;
++}
+--- /dev/null
++++ b/tests/Feature/PilotDemoHttpExecutionTest.php
+@@ -0,0 +1,71 @@
++<?php
++namespace Tests\Feature;
++
++use App\Models\Usuario;
++use App\Services\{AccountingPolicyService,AccountingEventAuthorizationService,AccountIntegrityService};
++use Carbon\Carbon;
++use Illuminate\Support\Facades\{DB,Hash};
++use Illuminate\Support\Str;
++use Tests\Support\{AccountingPilotFixtures,PilotHttpClient};
++use Tests\TestCase;
++
++/** Ensayo HTTP persistente identificado; nunca reset ni reutilización de ventanas previas. */
++final class PilotDemoHttpExecutionTest extends TestCase
++{
++    use AccountingPilotFixtures;
++    private const PASSWORD='SYNTHETIC-AC04B2B4B-LOCAL-TEST-ONLY';
++    public function test_live_http_contract_and_documented_results(): void {
++        $file=storage_path('app/private/ac04b2b4b-http-fixture.json');
++        if(is_file($file)) {
++            // Reanudación explícita tras inspeccionar rollback: conserva el UUID original.
++            $fixture=json_decode(file_get_contents($file),true,512,JSON_THROW_ON_ERROR);$day=$fixture['day'];$p=$fixture['input'];
++            $actor=Usuario::findOrFail($fixture['actor']);$this->actingAs($actor);$bank=\App\Models\CuentaBancaria::findOrFail($fixture['bank']);
++            $expense=\App\Models\CuentaContable::findOrFail($fixture['expense']);$funds=\App\Models\CuentaContable::findOrFail($fixture['funds']);
++            $v=DB::table('accounting_policy_versions')->find($fixture['policy']);$g=DB::table('accounting_policy_authorizations')->find($fixture['grant']);
++            $this->assertContains($bank->saldo_actual,['1000.00','950.00'],'Revisar efectos posteriores antes de reanudar.');
++        } else {
++        Carbon::setTestNow();$day=now('UTC')->toDateString();$until=now('UTC')->addDay()->toDateString();$from=now('UTC')->addSeconds(15)->format('Y-m-d\TH:i:s\Z');
++        $this->assertFalse(DB::table('accounting_policy_versions')->where('status','published')->where('valid_from','<',$until.' 00:00:00')->where('valid_until','>',$day.' 00:00:00')->exists(),'Ventana actual ya ocupada.');
++        $this->policyActor();$actor=Usuario::create(['name'=>'AC04B2B4B SYNTHETIC HTTP','email'=>'ac04b2b4b-'.bin2hex(random_bytes(5)).'@example.test','password'=>Hash::make(self::PASSWORD),'role'=>'contador','role_id'=>auth()->user()->role_id,'is_active'=>true]);$this->actingAs($actor);
++        $accounts=app(AccountIntegrityService::class);$suffix=bin2hex(random_bytes(4));$expense=$accounts->save(['codigo'=>'6.HTTP'.$suffix,'nombre'=>'SYNTHETIC HTTP expense','tipo'=>'gasto','naturaleza'=>'deudora','permite_movimiento'=>true,'cuenta_padre_id'=>DB::table('cuentas_contables')->where('codigo','6')->value('id')]);
++        $funds=$accounts->save(['codigo'=>'1.1.2.HTTP'.$suffix,'nombre'=>'SYNTHETIC HTTP funds','tipo'=>'activo','naturaleza'=>'deudora','permite_movimiento'=>true,'cuenta_padre_id'=>DB::table('cuentas_contables')->where('codigo','1.1.2')->value('id')]);
++        $bank=$this->bankFixture();$bank->update(['alias'=>'AC04B2B4B SYNTHETIC HTTP','cuenta_contable_id'=>$funds->id]);
++        $slots=$this->policySlots();$bindings=$this->policyBindings();
++        foreach(['fondos.banco'=>$funds->id,'gasto.cargo_bancario'=>$expense->id] as $role=>$account){$slot=['role'=>$role,'scope_type'=>'bank_account','resource_id'=>$bank->id];$slots[]=$slot;$bindings[]=$slot+['account_id'=>$account];}
++        $policy=app(AccountingPolicyService::class);$v=$this->policyDraft(['label'=>'AC04B2B4B SYNTHETIC HTTP ONLY','valid_from'=>$from,'valid_until'=>$until.'T00:00:00Z','coverage'=>$slots]);$v=$policy->replaceBindings($v->id,$v->content_hash,$bindings,'Synthetic HTTP fixture');$v=$policy->publish($v->id,$v->content_hash,'SYNTHETIC-HTTP-ONLY','No economic approval');$g=$this->simulationGrant($v,$bank);
++        $this->bankDate($day);Carbon::setTestNow();
++        $p=['uuid'=>(string)Str::uuid(),'classification'=>'maintenance','amount'=>'50.00','recognition_date'=>$day,'reference'=>'AC04B2B4B-SYNTHETIC','description'=>'Synthetic HTTP charge, no business authority'];
++        $fixture=['actor'=>$actor->id,'bank'=>$bank->id,'grant'=>$g->id,'policy'=>$v->id,'expense'=>$expense->id,'funds'=>$funds->id,'day'=>$day,'input'=>$p];$h=fopen($file,'xb');fwrite($h,json_encode($fixture,JSON_THROW_ON_ERROR));fclose($h);
++        }
++        while(now('UTC')->format('Y-m-d H:i:s')<$v->valid_from)usleep(100000);
++        $clients=[new PilotHttpClient(8775),new PilotHttpClient(8776)];$servers=[];
++        try {
++            foreach($clients as $c){$servers[]=$c->startServer();$this->assertSame(302,$c->login($actor->email,self::PASSWORD));}
++            $c=$clients[0];$payload=$p+['authorization_id'=>$g->id];
++            $this->assertSame(419,$c->request('/__pilot-demo/confirm','POST',$payload)['status']);$this->assertSame(419,$c->request('/__pilot-demo/confirm','POST',$payload+['_token'=>'invalid'])['status']);
++            $this->assertSame(200,$c->request('/__pilot-demo/review','POST',$payload+['_token'=>$c->token])['status']);
++            $result=$c->confirm($payload);$this->assertSame(302,$result['status']);$op=DB::table('accounting_event_operations')->where('operation_uuid',$p['uuid'])->first();$this->assertNotNull($op);$this->assertSame('confirmed',$op->status);$this->assertSame('950.00',$bank->refresh()->saldo_actual);
++            $page=$c->request('/__pilot-demo/operations/'.$p['uuid']);$this->assertSame(200,$page['status']);$this->assertStringContainsString('950.00',$page['body']);$this->assertStringContainsString('Correspondencias originales',$page['body']);
++            $lines=DB::table('detalle_asientos')->where('asiento_id',$op->result_asiento_id)->get();$this->assertCount(2,$lines);$this->assertSame('50.00',$lines->firstWhere('cuenta_id',$expense->id)->debe);$this->assertSame('50.00',$lines->firstWhere('cuenta_id',$funds->id)->haber);$this->assertSame(2,DB::table('accounting_entry_line_resolutions')->where('operation_id',$op->id)->count());
++            // Simula respuesta perdida: consulta primero y reenvío explícito del mismo UUID.
++            $this->assertSame(302,$c->confirm($payload)['status']);$this->assertSame('950.00',$bank->refresh()->saldo_actual);$this->assertSame(1,DB::table('accounting_event_operations')->where('operation_uuid',$p['uuid'])->count());
++            $this->assertSame(409,$c->confirm(array_replace($payload,['amount'=>'51.00']))['status']);
++            foreach(['account_id','policy_version_id','actor_id'] as $key)$this->assertSame(422,$c->confirm($payload+[$key=>1])['status']);
++            foreach([['amount'=>'0'],['amount'=>'50.001'],['classification'=>'transfer']] as $change)$this->assertSame(422,$c->confirm(array_replace($payload,$change))['status']);
++            $new=array_replace($payload,['uuid'=>(string)Str::uuid()]);
++            DB::table('cuentas_bancarias')->where('id',$bank->id)->update(['activa'=>false]);$this->assertSame(503,$c->confirm($new)['status']);$this->assertSame(200,$c->request('/__pilot-demo/operations/'.$p['uuid'])['status']);DB::table('cuentas_bancarias')->where('id',$bank->id)->update(['activa'=>true]);
++            DB::table('cuentas_contables')->where('id',$expense->id)->update(['activa'=>false]);$this->assertSame(422,$c->confirm($new)['status']);$this->assertSame(200,$c->request('/__pilot-demo/operations/'.$p['uuid'])['status']);DB::table('cuentas_contables')->where('id',$expense->id)->update(['activa'=>true]);
++            $period=DB::table('periodos_contables')->where('fecha_inicio','<=',$day)->where('fecha_fin','>=',$day)->first();$this->assertSame('abierto',$period->estado);
++            // No cambia el período existente: prueba una fecha cerrada mediante fixture futuro aislado.
++            $closed='2087-11';$this->assertFalse(DB::table('periodos_contables')->where('fecha_inicio',$closed.'-01')->exists());$closedId=DB::table('periodos_contables')->insertGetId(['nombre'=>'AC04B2B4B SYNTHETIC CLOSED','fecha_inicio'=>$closed.'-01','fecha_fin'=>$closed.'-30','estado'=>'cerrado','created_at'=>now(),'updated_at'=>now()]);
++            $this->assertSame(422,$c->confirm(array_replace($new,['recognition_date'=>$closed.'-15']))['status']);$this->assertSame('950.00',$bank->refresh()->saldo_actual);
++            foreach(['/bancos','/.env','/tests/bootstrap.php','/__pilot-demo/refund'] as $path)$this->assertSame(404,$c->request($path)['status']);
++            $anonymous=new PilotHttpClient(8775);$this->assertSame(419,$anonymous->confirm($payload)['status']);
++            DB::table('users')->where('id',$actor->id)->update(['is_active'=>false]);$this->assertSame(403,$c->confirm($new)['status']);DB::table('users')->where('id',$actor->id)->update(['is_active'=>true]);
++            $this->assertBankReconciled($bank,1000);$this->assertSame(1,DB::table('movimientos_bancarios')->where('cuenta_bancaria_id',$bank->id)->count());
++            file_put_contents(storage_path('app/private/ac04b2b4b-functional-result.json'),json_encode(['fixture'=>$fixture,'operation'=>$op->id,'movement'=>$op->result_movement_id,'entry'=>$op->result_asiento_id,'balance'=>$bank->saldo_actual,'connections'=>[$result['headers']['x-synthetic-connection']],'status'=>'passed'],JSON_THROW_ON_ERROR));
++        } finally {
++            foreach($servers as $server){proc_terminate($server);$status=proc_get_status($server);proc_close($server);$this->assertFalse($status['running']);}Carbon::setTestNow();
++        }
++    }
++}
+--- /dev/null
++++ b/tests/Feature/PilotDemoHttpConcurrencyTest.php
+@@ -0,0 +1,86 @@
++<?php
++namespace Tests\Feature;
++
++use App\Services\AccountingPolicyService;
++use Illuminate\Support\Facades\DB;
++use Illuminate\Support\Str;
++use Tests\Support\{AccountingPilotFixtures,PilotHttpClient};
++use Tests\TestCase;
++
++/** Dos servidores/procesos HTTP y conexiones SQL reales; evidencia append-only de ensayo. */
++final class PilotDemoHttpConcurrencyTest extends TestCase
++{
++    use AccountingPilotFixtures;
++    private array $workers=[];
++    private function http(PilotHttpClient $c,array $payload): int {
++        $p=proc_open([PHP_BINARY,__DIR__.'/../Support/pilot-demo-http-client.php'],[0=>['pipe','r'],1=>['pipe','w'],2=>['pipe','w']],$pipes,base_path());$this->assertIsResource($p);stream_set_timeout($pipes[1],30);
++        fwrite($pipes[0],json_encode(['port'=>$c->port,'cookie'=>$c->cookie,'token'=>$c->token,'payload'=>$payload],JSON_THROW_ON_ERROR)."\n");fflush($pipes[0]);$index=count($this->workers);$this->workers[]=[$p,$pipes,'http',null];$this->assertSame("READY\n",fgets($pipes[1]));return $index;
++    }
++    private function domain(array $data): int {
++        $path=storage_path('app/private/ac04b2b4b-worker-'.bin2hex(random_bytes(8)).'.result');$data['result']=$path;
++        $p=proc_open([PHP_BINARY,'-d','zend.exception_ignore_args=1',__DIR__.'/../Support/ac04b2b4b-domain-worker.php',json_encode($data,JSON_THROW_ON_ERROR)],[0=>['pipe','r'],1=>['pipe','w'],2=>['pipe','w']],$pipes,base_path());$this->assertIsResource($p);stream_set_timeout($pipes[1],30);$index=count($this->workers);$this->workers[]=[$p,$pipes,'domain',$path];$this->assertSame("READY\n",str_replace("\r",'',fgets($pipes[1])));return $index;
++    }
++    private function signal(int $i,string $s): void {fwrite($this->workers[$i][1][0],$s."\n");fflush($this->workers[$i][1][0]);}
++    private function line(int $i,string $expected): void {$this->assertSame($expected."\n",str_replace("\r",'',fgets($this->workers[$i][1][1])));}
++    private function finish(int $i,int $code=0): array {
++        [$p,$pipes,$kind,$path]=$this->workers[$i];fclose($pipes[0]);$out=trim(stream_get_contents($pipes[1]));fclose($pipes[1]);$err=stream_get_contents($pipes[2]);fclose($pipes[2]);$exit=proc_close($p);$this->workers[$i]=null;$this->assertSame('',$err);$this->assertSame($code,$exit,$out);
++        if($kind==='http'){$r=json_decode($out,true,512,JSON_THROW_ON_ERROR);$this->assertSame(302,$r['status']);return ['connection_id'=>(int)$r['headers']['x-synthetic-connection'],'pid'=>(int)$r['headers']['x-synthetic-process'],'status'=>$r['status']];}
++        $r=json_decode(file_get_contents($path),true,512,JSON_THROW_ON_ERROR);$this->assertSame($code===0?'RESULT:accepted':'RESULT:rejected',$out);return $r;
++    }
++    private function waitBankLock(): void {
++        for($i=0;$i<80;$i++){foreach(DB::select('SHOW PROCESSLIST') as $p)if(str_contains($p->Info??'','`cuentas_bancarias`')&&str_contains(strtolower($p->Info??''),'for update')){$this->assertTrue(true);return;}usleep(50000);}
++        $this->fail('No se observó la lectura SQL bancaria bloqueada del cliente HTTP.');
++    }
++    public function test_seven_real_races_preserve_persisted_documents(): void {
++        $journal=storage_path('app/private/ac04b2b4b-http-races.json');$resume=getenv('AC04B2B4B_RESUME')==='after_fixture_rejection';
++        if(!$resume)$this->assertFileDoesNotExist($journal,'No repetir carreras sobre evidencia previa.');
++        $f=json_decode(file_get_contents(storage_path('app/private/ac04b2b4b-http-fixture.json')),true,512,JSON_THROW_ON_ERROR);$this->assertFileExists(storage_path('app/private/ac04b2b4b-functional-result.json'));
++        $this->actingAs(\App\Models\Usuario::findOrFail($f['actor']));$bank=\App\Models\CuentaBancaria::findOrFail($f['bank']);$this->assertSame($resume?'550.00':'950.00',$bank->saldo_actual);
++        $clients=[new PilotHttpClient(8775),new PilotHttpClient(8776)];$servers=[];$records=$resume?json_decode(file_get_contents($journal),true,512,JSON_THROW_ON_ERROR):[];
++        if($resume){$this->assertSame(['same_uuid','distinct_uuid','publication','legacy','preparation'],array_column($records,'case'));$this->assertSame(0,DB::table('conciliaciones_bancarias')->where('cuenta_bancaria_id',$bank->id)->count());
++            $prior=DB::table('accounting_event_operations')->where('bank_account_id',$bank->id)->where('content','like','%SYNTHETIC-HTTP-RACE-reconciliation%')->first();$this->assertSame('confirmed',$prior->status);file_put_contents(storage_path('app/private/ac04b2b4b-rejected-reconciliation-attempt.json'),json_encode(['operation_id'=>$prior->id,'movement_id'=>$prior->result_movement_id,'entry_id'=>$prior->result_asiento_id,'reconciliation'=>'rejected before lock: invalid negative statement fixture','balance'=>$bank->saldo_actual]));
++        } else {$h=fopen($journal,'xb');fwrite($h,'[]');fclose($h);}
++        try {
++            foreach($clients as $c){$servers[]=$c->startServer();$this->assertSame(302,$c->login(auth()->user()->email,'SYNTHETIC-AC04B2B4B-LOCAL-TEST-ONLY'));}
++            foreach(['same_uuid','distinct_uuid','publication','legacy','preparation','reconciliation','withdrawal'] as $case){
++                if($resume&&in_array($case,array_column($records,'case'),true))continue;
++                $p=array_replace($f['input'],['uuid'=>(string)Str::uuid(),'reference'=>'SYNTHETIC-HTTP-RACE-'.$case]);$payload=$p+['authorization_id'=>$f['grant']];$before=(float)$bank->refresh()->saldo_actual;$entries=1;
++                if($case==='publication'){
++                    $service=app(AccountingPolicyService::class);$source=DB::table('accounting_policy_versions')->find($f['policy']);$content=$service->contentForInspection($source);
++                    $draft=$this->policyDraft(['valid_from'=>now('UTC')->addMinutes(2)->format('Y-m-d\TH:i:s\Z'),'valid_until'=>now('UTC')->addMinutes(3)->format('Y-m-d\TH:i:s\Z'),'coverage'=>$content['coverage']]);
++                    $bindings=array_map(fn($r)=>array_intersect_key($r,array_flip(['role','scope_type','resource_id','account_id'])),$content['bindings']);$draft=$service->replaceBindings($draft->id,$draft->content_hash,$bindings,'SYNTHETIC overlapping publication race');
++                }
++                $a=$this->http($clients[0],$payload);$b=null;$meta=['actor'=>$f['actor'],'day'=>$f['day'],'hold'=>false];
++                if($case==='preparation'){
++                    $b=$this->domain(array_replace($meta,['hold'=>true,'action'=>'prepare','grant'=>$f['grant'],'input'=>$p]));
++                    $this->signal($b,'go');$this->line($b,'LOCKED');$this->signal($a,'go');$this->line($a,'ATTEMPT');$this->waitBankLock();
++                    $this->signal($b,'release');$rb=$this->finish($b);$ra=$this->finish($a);$this->assertSame('prepared',$rb['result']['status']);
++                } else {
++                DB::beginTransaction();DB::table('cuentas_bancarias')->where('id',$bank->id)->lockForUpdate()->first();
++                $this->signal($a,'go');$this->line($a,'ATTEMPT');$this->waitBankLock();
++                if(in_array($case,['same_uuid','distinct_uuid'],true)){
++                    $q=$payload;if($case==='distinct_uuid'){$q['uuid']=(string)Str::uuid();$entries=2;}$b=$this->http($clients[1],$q);$this->signal($b,'go');$this->line($b,'ATTEMPT');
++                } elseif($case==='publication'){
++                    $b=$this->domain($meta+['action'=>'publish','version'=>$draft->id,'hash'=>$draft->content_hash]);$this->signal($b,'go');$this->line($b,'ATTEMPT');
++                } elseif($case==='legacy'){
++                    $b=$this->domain($meta+['action'=>'legacy','legacy_payload'=>$this->charge($bank)]);$entries=2;$this->signal($b,'go');$this->line($b,'ATTEMPT');
++                } elseif($case==='withdrawal'){
++                    $b=$this->domain($meta+['action'=>'revoke','grant'=>$f['grant']]);$this->signal($b,'go');$this->line($b,'ATTEMPT');
++                } elseif($case==='reconciliation'){
++                    // Base cero provisional: ningún movimiento presentado; los cargos quedan en tránsito.
++                    $b=$this->domain($meta+['action'=>'reconcile','bank'=>$bank->id,'legacy_payload'=>['fecha'=>$f['day'],'saldo_extracto'=>0,'movimientos'=>[],'base_conciliacion_id'=>null,'observaciones'=>'SYNTHETIC HTTP RACE CUT']]);$this->signal($b,'go');$this->line($b,'ATTEMPT');
++                }
++                usleep(200000);DB::commit();$ra=$this->finish($a);$rb=$b!==null?$this->finish($b,$case==='publication'?2:0):null;
++                }
++                if($rb){$this->assertNotSame($ra['connection_id'],$rb['connection_id']);$this->assertNotSame($ra['pid'],$rb['pid']);}
++                $this->assertSame($before-$entries*50,(float)$bank->refresh()->saldo_actual,$case);$this->assertBankReconciled($bank,1000);
++                $op=DB::table('accounting_event_operations')->where('operation_uuid',$p['uuid'])->first();$this->assertSame('confirmed',$op->status);$this->assertSame(2,DB::table('accounting_entry_line_resolutions')->where('operation_id',$op->id)->count());
++                $records[]=['case'=>$case,'operation_id'=>$op->id,'bank'=>$bank->id,'balance'=>$bank->saldo_actual,'workers'=>[$ra,$rb],'verified'=>true];file_put_contents($journal,json_encode($records,JSON_THROW_ON_ERROR));
++            }
++            $this->assertCount(7,$records);
++        } finally {
++            while(DB::transactionLevel()>0)DB::rollBack();foreach($this->workers as $w)if($w!==null){foreach($w[1] as $pipe)if(is_resource($pipe))fclose($pipe);proc_terminate($w[0]);proc_close($w[0]);}
++            foreach($servers as $server){proc_terminate($server);$status=proc_get_status($server);proc_close($server);$this->assertFalse($status['running']);}
++        }
++    }
++}
+--- /dev/null
++++ b/tests/Feature/PilotDemoHistoricalTest.php
+@@ -0,0 +1,52 @@
++<?php
++namespace Tests\Feature;
++
++use App\Services\{AccountingPolicyService,PilotDemoReadOnly};
++use App\Models\Usuario;
++use Carbon\Carbon;
++use Illuminate\Support\Facades\{DB,Hash};
++use Illuminate\Support\Str;
++use Tests\Support\{AccountingPilotFixtures,PilotHttpClient};
++use Tests\TestCase;
++
++final class PilotDemoHistoricalTest extends TestCase
++{
++    use AccountingPilotFixtures;
++    public function test_final_persisted_history_permissions_and_revoked_replay(): void {
++        $f=json_decode(file_get_contents(storage_path('app/private/ac04b2b4b-http-fixture.json')),true,512,JSON_THROW_ON_ERROR);$this->actingAs(Usuario::findOrFail($f['actor']));$bank=\App\Models\CuentaBancaria::findOrFail($f['bank']);
++        $this->assertSame('450.00',$bank->saldo_actual);$this->assertBankReconciled($bank,1000);
++        $this->assertSame(11,DB::table('movimientos_bancarios')->where('cuenta_bancaria_id',$bank->id)->count());
++        $ops=DB::table('accounting_event_operations')->where('bank_account_id',$bank->id)->get();$this->assertCount(10,$ops);
++        foreach($ops as $op){$this->assertSame('confirmed',$op->status);$this->assertSame(2,DB::table('accounting_entry_line_resolutions')->where('operation_id',$op->id)->count());$this->assertSame($f['policy'],(int)$op->policy_version_id);}
++        $race=json_decode(file_get_contents(storage_path('app/private/ac04b2b4b-http-races.json')),true,512,JSON_THROW_ON_ERROR);$this->assertCount(7,$race);
++        foreach($race as $record){$this->assertTrue($record['verified']);$this->assertNotSame($record['workers'][0]['connection_id'],$record['workers'][1]['connection_id']);$this->assertNotSame($record['workers'][0]['pid'],$record['workers'][1]['pid']);}
++        $recon=DB::table('conciliaciones_bancarias')->where('cuenta_bancaria_id',$bank->id)->first();$this->assertNotNull($recon);$snapshot=json_encode($recon);$this->assertSame('cerrada',$recon->estado);$this->assertSame('-500.00',$recon->saldo_libros);$this->assertSame('0.00',$recon->diferencia);
++        $this->assertSame(10,DB::table('movimientos_bancarios')->where('cuenta_bancaria_id',$bank->id)->where('estado_conciliacion','en_transito')->count());$this->assertSame(1,DB::table('movimientos_bancarios')->where('cuenta_bancaria_id',$bank->id)->where('estado_conciliacion','pendiente')->count());
++        $c=new PilotHttpClient(8775);$server=$c->startServer();
++        try {
++            $this->assertSame(302,$c->login(auth()->user()->email,'SYNTHETIC-AC04B2B4B-LOCAL-TEST-ONLY'));$payload=$f['input']+['authorization_id'=>$f['grant']];
++            $this->assertSame(302,$c->confirm($payload)['status']);$this->assertSame('450.00',$bank->refresh()->saldo_actual);
++            $this->assertSame(422,$c->confirm(array_replace($payload,['uuid'=>(string)Str::uuid()]))['status']);
++            $this->assertSame(403,$c->request('/__pilot-demo/operations/'.DB::table('accounting_event_operations')->where('id',131)->value('operation_uuid'))['status']);
++            $this->assertSame(403,$c->confirm(array_replace($payload,['authorization_id'=>DB::table('accounting_event_operations')->where('id',131)->value('authorization_id')]))['status']);
++            $this->assertSame(404,$c->request('/__pilot-demo/refund','POST',['_token'=>$c->token])['status']);
++            DB::table('cuentas_bancarias')->where('id',$bank->id)->update(['activa'=>false]);DB::table('cuentas_contables')->where('id',$f['expense'])->update(['activa'=>false]);
++            $this->assertSame(200,$c->request('/__pilot-demo/operations/'.$f['input']['uuid'])['status']);
++            DB::table('cuentas_bancarias')->where('id',$bank->id)->update(['activa'=>true,'cuenta_contable_id'=>DB::table('cuentas_contables')->where('codigo','1.1.2.2')->value('id')]);
++            $this->assertSame(200,$c->request('/__pilot-demo/operations/'.$f['input']['uuid'])['status']);
++            DB::table('cuentas_bancarias')->where('id',$bank->id)->update(['cuenta_contable_id'=>$f['funds']]);DB::table('cuentas_contables')->where('id',$f['expense'])->update(['activa'=>true]);
++            $other=Usuario::create(['name'=>'AC04B2B4B SYNTHETIC NON OPERATOR','email'=>'ac04b2b4b-denied-'.bin2hex(random_bytes(5)).'@example.test','password'=>Hash::make('SYNTHETIC-NON-OPERATOR-ONLY'),'role'=>'recepcion','role_id'=>auth()->user()->role_id,'is_active'=>true]);
++            $foreign=new PilotHttpClient(8775);$foreign->login($other->email,'SYNTHETIC-NON-OPERATOR-ONLY');$this->assertSame(302,$foreign->request('/__pilot-demo')['status']);
++            $c->request('/__pilot-demo/logout','POST',['_token'=>$c->token]);$this->assertContains($c->confirm($payload)['status'],[302,419]);
++        } finally {DB::table('cuentas_bancarias')->where('id',$bank->id)->update(['activa'=>true,'cuenta_contable_id'=>$f['funds']]);DB::table('cuentas_contables')->where('id',$f['expense'])->update(['activa'=>true]);proc_terminate($server);$status=proc_get_status($server);proc_close($server);$this->assertFalse($status['running']);}
++        // Publicación técnica posterior, con asociación de gasto distinta; no nueva autoridad económica.
++        $policy=app(AccountingPolicyService::class);$source=DB::table('accounting_policy_versions')->find($f['policy']);$content=$policy->contentForInspection($source);$start=Carbon::parse($source->valid_until,'UTC');
++        $v=$this->policyDraft(['label'=>'AC04B2B4B SYNTHETIC FUTURE HISTORY TEST','valid_from'=>$start->format('Y-m-d\TH:i:s\Z'),'valid_until'=>$start->copy()->addDay()->format('Y-m-d\TH:i:s\Z'),'coverage'=>$content['coverage']]);
++        $bindings=array_map(function($r){$b=array_intersect_key($r,array_flip(['role','scope_type','resource_id','account_id']));if($r['role']==='gasto.cargo_bancario')$b['account_id']=(int)DB::table('cuentas_contables')->where('codigo','6.9')->value('id');return $b;},$content['bindings']);
++        $v=$policy->replaceBindings($v->id,$v->content_hash,$bindings,'SYNTHETIC prospective association');$policy->publish($v->id,$v->content_hash,'SYNTHETIC-ONLY','No business approval or enablement');
++        if(!defined('SALON_PILOT_DEMO_READONLY'))define('SALON_PILOT_DEMO_READONLY',PilotDemoReadOnly::CONTRACT);
++        try{Carbon::setTestNow($start->copy()->addHours(1));$d=(new PilotDemoReadOnly)->document($f['input']['uuid']);$this->assertSame($f['policy'],(int)$d['policy']->id);$this->assertTrue($d['revoked']);$this->assertSame($f['expense'],(int)array_values(array_filter($d['resolutions'],fn($r)=>$r->semantic_role==='gasto.cargo_bancario'))[0]->account_id);}finally{Carbon::setTestNow();}
++        $this->assertSame($snapshot,json_encode(DB::table('conciliaciones_bancarias')->find($recon->id)));$this->assertSame('450.00',$bank->refresh()->saldo_actual);
++        $this->assertSame('prepared',DB::table('accounting_event_operations')->where('id',131)->value('status'));
++    }
++}
+--- /dev/null
++++ b/tests/Feature/PilotDemoBoundarySeparationTest.php
+@@ -0,0 +1,38 @@
++<?php
++namespace Tests\Feature;
++
++use App\Support\{AccountingHttpSimulationBoundary,AccountingSimulationBoundary,AccountingSimulationPosting};
++use Tests\TestCase;
++
++final class PilotDemoBoundarySeparationTest extends TestCase
++{
++    public function test_final_http_route_replays_original_without_financial_mutation(): void {
++        $f=json_decode(file_get_contents(storage_path('app/private/ac04b2b4b-http-fixture.json')),true,512,JSON_THROW_ON_ERROR);
++        $before=[];foreach(['accounting_event_operations','accounting_entry_line_resolutions','movimientos_bancarios','asientos_contables','detalle_asientos','cuentas_bancarias'] as $table)$before[$table]=\Illuminate\Support\Facades\DB::table($table)->orderBy('id')->get()->toJson();
++        $user=\App\Models\Usuario::findOrFail($f['actor']);$client=new \Tests\Support\PilotHttpClient(8775);$server=$client->startServer();
++        try{
++            $this->assertSame(302,$client->login($user->email,'SYNTHETIC-AC04B2B4B-LOCAL-TEST-ONLY'));$r=$client->confirm($f['input']+['authorization_id'=>$f['grant']]);$this->assertSame(302,$r['status']);
++            $this->assertSame(200,$client->request('/__pilot-demo/operations/'.$f['input']['uuid'])['status']);
++            $originalCurrency=\Illuminate\Support\Facades\DB::table('cuentas_bancarias')->where('id',$f['bank'])->value('moneda_id');
++            try{
++                \Illuminate\Support\Facades\DB::table('cuentas_bancarias')->where('id',$f['bank'])->update(['moneda_id'=>\Illuminate\Support\Facades\DB::table('monedas')->where('codigo','USD')->value('id')]);
++                $this->assertSame(200,$client->request('/__pilot-demo/operations/'.$f['input']['uuid'])['status']);
++                $this->assertSame(302,$client->confirm($f['input']+['authorization_id'=>$f['grant']])['status']);
++            }finally{\Illuminate\Support\Facades\DB::table('cuentas_bancarias')->where('id',$f['bank'])->update(['moneda_id'=>$originalCurrency]);}
++            foreach($before as $table=>$rows)$this->assertSame($rows,\Illuminate\Support\Facades\DB::table($table)->orderBy('id')->get()->toJson());
++        }finally{proc_terminate($server);$status=proc_get_status($server);proc_close($server);$this->assertFalse($status['running']);}
++    }
++
++    public function test_original_cli_entries_do_not_accept_the_http_contract(): void {
++        $user=\App\Models\Usuario::where('is_active',true)->whereIn('role',['alvaro','contador'])->firstOrFail();$this->actingAs($user);
++        AccountingSimulationBoundary::assert(AccountingSimulationBoundary::CONTRACT);
++        foreach([
++            fn()=>AccountingSimulationBoundary::assert(AccountingHttpSimulationBoundary::CONTRACT),
++            fn()=>app(\App\Services\AccountingBankChargeSimulation::class)->executeForInternalHarness(1,[],AccountingHttpSimulationBoundary::CONTRACT),
++            fn()=>app(\App\Services\AccountingAccountResolver::class)->inspectPinnedForInternalHarness([],new \DateTimeImmutable,1,AccountingHttpSimulationBoundary::CONTRACT),
++            fn()=>AccountingSimulationPosting::forPrepared(1,1,new \DateTimeImmutable,AccountingHttpSimulationBoundary::CONTRACT),
++        ] as $call){try{$call();$this->fail('La entrada CLI no debe admitir HTTP.');}catch(\LogicException $e){$this->assertNotSame('',$e->getMessage());}}
++        try{AccountingHttpSimulationBoundary::assert(AccountingHttpSimulationBoundary::CONTRACT);$this->fail('CLI no es el servidor HTTP.');}catch(\Symfony\Component\HttpKernel\Exception\HttpExceptionInterface $e){$this->assertSame(404,$e->getStatusCode());}
++        $this->get('/__pilot-demo/login')->assertNotFound();$this->post('/__pilot-demo/confirm',[])->assertNotFound();
++    }
++}
