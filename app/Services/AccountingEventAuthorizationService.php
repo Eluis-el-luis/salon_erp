@@ -43,10 +43,12 @@ final class AccountingEventAuthorizationService
     private function scope(object $r): array {
         $keys=['policy_version_id','policy_hash','purpose','event_key','bank_account_id','currency','environment','valid_from','valid_until'];$a=[];foreach($keys as $k)$a[$k]=$r->$k;return $a;
     }
-    private function verifyPolicy(object $v,int $bankId,DateTimeImmutable $at): void {
-        $r=app(AccountingAccountResolver::class)->inspect([
+    private function verifyPolicy(object $v,int $bankId,DateTimeImmutable $at,bool $pinned=false): void {
+        $requests=[
             ['role'=>'fondos.banco','scope_type'=>'bank_account','resource_id'=>$bankId],
-            ['role'=>'gasto.cargo_bancario','scope_type'=>'bank_account','resource_id'=>$bankId]],$at,(int)$v->id);
+            ['role'=>'gasto.cargo_bancario','scope_type'=>'bank_account','resource_id'=>$bankId]];
+        $resolver=app(AccountingAccountResolver::class);
+        $r=$pinned?$resolver->inspectPinnedForInternalHarness($requests,$at,(int)$v->id,\App\Support\AccountingSimulationBoundary::CONTRACT):$resolver->inspect($requests,$at,(int)$v->id);
         $bank=DB::table('cuentas_bancarias')->where('id',$bankId)->sharedLock()->first();
         $currency=$bank?DB::table('monedas')->where('id',$bank->moneda_id)->value('codigo'):null;
         $base=DB::table('monedas')->where('es_base',true)->value('codigo');
@@ -86,6 +88,26 @@ final class AccountingEventAuthorizationService
     }
     /** Requiere transacción exterior para mantener versión S hasta que concluya la consulta documental. */
     public function inspectSimulation(int $id,DateTimeImmutable $at): object {
+        $a=$this->eligibleSimulation($id,$at);
+        $v=$this->policy($a->policy_version_id,false);$this->verifyPolicy($v,(int)$a->bank_account_id,$at);return $a;
+    }
+    /** Solo fija versión/autorización: el arnés tomará banco X antes de verificar recursos. */
+    public function pinForInternalHarness(int $id,DateTimeImmutable $at,string $contract): object {
+        \App\Support\AccountingSimulationBoundary::assert($contract);
+        if(DB::transactionLevel()===0)throw new \LogicException('Fijación requiere transacción.');
+        // Descubrir candidatos sin bloquear el recorrido completo (incluye borradores en un full scan).
+        // La decisión usa después la versión/autoridad releídas por PK bajo S. AC-03A no permite
+        // publicar un solapamiento y toma las versiones publicadas X antes de confirmar.
+        $seed=DB::table('accounting_policy_authorizations')->find($id);if(!$seed)$this->reject('Referencia inexistente.');$stamp=$this->stamp($at);
+        $eligible=DB::table('accounting_policy_versions')->where('status','published')->where('kind','enterprise')->where('valid_from','<=',$stamp)->where('valid_until','>',$stamp)->orderBy('id')->get();
+        if($eligible->count()!==1||(int)$eligible[0]->id!==(int)$seed->policy_version_id)$this->reject('Versión elegible inexistente o ambigua.');
+        return $this->eligibleSimulation($id,$at);
+    }
+    public function validatePinnedForInternalHarness(int $id,DateTimeImmutable $at,string $contract): object {
+        \App\Support\AccountingSimulationBoundary::assert($contract);$a=$this->eligibleSimulation($id,$at);
+        $this->verifyPolicy($this->policy($a->policy_version_id,false),(int)$a->bank_account_id,$at,true);return $a;
+    }
+    private function eligibleSimulation(int $id,DateTimeImmutable $at): object {
         if(!app()->environment('testing'))abort(403);
         if(DB::transactionLevel()===0)throw new \LogicException('La inspección de habilitación requiere transacción.');
         $seed=DB::table('accounting_policy_authorizations')->find($id);if(!$seed)$this->reject('Referencia inexistente.');
@@ -93,7 +115,6 @@ final class AccountingEventAuthorizationService
         if($a->action!=='enablement'||$a->purpose!=='simulation'||$a->environment!=='testing'||$a->currency!=='NIO'||$a->event_key!==self::EVENT
             ||$a->policy_hash!==$v->content_hash||$a->valid_from>$stamp||$a->valid_until<=$stamp||$this->revoked($id))$this->reject('Habilitación de ensayo no elegible.');
         $parent=$this->row($a->parent_id);if($parent->action!=='approval'||$this->revoked($parent->id))$this->reject('Aprobación retirada.');
-        $this->verifyPolicy($v,(int)$a->bank_account_id,$at);
         return $a;
     }
     public function assertBusinessAuthority(int $id): never {

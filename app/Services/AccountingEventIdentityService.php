@@ -10,13 +10,19 @@ use Illuminate\Validation\ValidationException;
 final class AccountingEventIdentityService
 {
     private function reject(string $m): never {throw ValidationException::withMessages(['operation'=>$m]);}
-    private function verifyDocument(object $r): void {
+    public function verifyDocument(object $r): void {
         $c=json_decode($r->content,true,512,JSON_THROW_ON_ERROR);
         if(!is_array($c)||($c['version']??null)!==1||($c['event_contract']??null)!==1||!hash_equals($r->content_hash,hash('sha256',AccountingPolicyService::canonical($c))))$this->reject('Hash o contrato documental incompatible.');
         $columns=['event_key','bank_account_id','currency','purpose','environment','authorization_id','policy_version_id','policy_hash','created_by','classification','amount','recognition_date'];
         $keys=array_keys($c);$expected=array_merge($columns,['version','event_contract','reference','description']);sort($keys);sort($expected);if($keys!==$expected)$this->reject('Contenido incompleto.');
         foreach($columns as $key)if(!array_key_exists($key,$c)||(string)$c[$key]!==(string)$r->$key)$this->reject('Columnas y contenido incompatibles.');
         $this->normalize(['uuid'=>$r->operation_uuid,'classification'=>$c['classification'],'amount'=>$c['amount'],'recognition_date'=>$c['recognition_date'],'reference'=>$c['reference'],'description'=>$c['description']]);
+    }
+    /** Constructor canónico compartido; el permiso se comprueba por separado bajo locks. */
+    public function simulationContent(object $a,array $n,int $actor): array {
+        return ['version'=>1,'event_contract'=>1,'event_key'=>$a->event_key,'bank_account_id'=>(int)$a->bank_account_id,'currency'=>$a->currency,
+            'purpose'=>'simulation','environment'=>'testing','authorization_id'=>(int)$a->id,'policy_version_id'=>(int)$a->policy_version_id,
+            'policy_hash'=>$a->policy_hash,'created_by'=>$actor]+array_diff_key($n,['uuid'=>true]);
     }
     public function normalize(array $input): array {
         if(array_diff(array_keys($input),['uuid','classification','amount','recognition_date','reference','description']))$this->reject('Campos autoritativos no admitidos.');
@@ -36,9 +42,7 @@ final class AccountingEventIdentityService
         $n=$this->normalize($input);
         try {return DB::transaction(function()use($authorizationId,$n,$at){
             $a=app(AccountingEventAuthorizationService::class)->inspectSimulation($authorizationId,$at);$actor=(int)auth()->id();
-            $content=['version'=>1,'event_contract'=>1,'event_key'=>$a->event_key,'bank_account_id'=>(int)$a->bank_account_id,'currency'=>$a->currency,
-                'purpose'=>'simulation','environment'=>'testing','authorization_id'=>$authorizationId,'policy_version_id'=>(int)$a->policy_version_id,
-                'policy_hash'=>$a->policy_hash,'created_by'=>$actor]+array_diff_key($n,['uuid'=>true]);
+            $content=$this->simulationContent($a,$n,$actor);
             $hash=hash('sha256',AccountingPolicyService::canonical($content));
             $old=DB::table('accounting_event_operations')->where('operation_uuid',$n['uuid'])->lockForUpdate()->first();
             if($old){if((int)$old->created_by!==$actor)abort(403);$this->verifyDocument($old);if($old->content_hash!==$hash||AccountingPolicyService::canonical(json_decode($old->content,true))!==AccountingPolicyService::canonical($content))$this->reject('Mismo UUID con contenido distinto o documento manipulado.');
@@ -53,10 +57,10 @@ final class AccountingEventIdentityService
         }
     }
     public function confirmedResult(string $uuid): object {
-        $r=DB::table('accounting_event_operations')->where('operation_uuid',strtolower($uuid))->first();
+        $q=DB::table('accounting_event_operations')->where('operation_uuid',strtolower($uuid));$r=(DB::transactionLevel()>0?$q->sharedLock():$q)->first();
         $u=auth()->id()?DB::table('users')->where('id',auth()->id())->first():null;if(!$u||!$u->is_active||!$r||((int)$r->created_by!==(int)$u->id&&!in_array($u->role,['alvaro','contador'],true)))abort(403);
         if($r->status!=='confirmed'||!$r->result_asiento_id||!$r->result_movement_id)$this->reject('Documento incompleto: no existe resultado financiero confirmado.');
-        $rows=DB::table('accounting_entry_line_resolutions')->where('operation_id',$r->id)->get();
+        $q=DB::table('accounting_entry_line_resolutions')->where('operation_id',$r->id);$rows=(DB::transactionLevel()>0?$q->sharedLock():$q)->get();
         if($rows->count()!==2||$rows->pluck('semantic_role')->sort()->values()->all()!==['fondos.banco','gasto.cargo_bancario'])$this->reject('Correspondencias incompletas.');
         $this->verifyDocument($r);
         return $r;

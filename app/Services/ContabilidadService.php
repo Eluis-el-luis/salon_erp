@@ -1337,8 +1337,9 @@ class ContabilidadService
      *
      * @return int ID del asiento generado.
      */
-    public function contabilizarMovimientoBancario($movimiento, int $cuentaContrapartidaId): int
+    public function contabilizarMovimientoBancario($movimiento, int $cuentaContrapartidaId, ?\App\Support\AccountingSimulationPosting $simulation = null): int
     {
+        $simulationOperation=$simulation?->assertMovement($movimiento,$cuentaContrapartidaId);
         $periodo = $this->resolverPeriodo($movimiento->fecha ?? now());
         $monedaBase = $this->getMonedaBaseId();
 
@@ -1348,7 +1349,7 @@ class ContabilidadService
         }
 
         $fondos = app(FondosService::class);
-        $cuentaBanco = $fondos->cuentaContableDeBanco($cuentaBancaria);
+        $cuentaBanco = $simulation!==null?$simulation->fundsId:$fondos->cuentaContableDeBanco($cuentaBancaria);
         $monto = round((float) $movimiento->monto, 2);
 
         DB::beginTransaction();
@@ -1364,6 +1365,14 @@ class ContabilidadService
                 'periodo_id' => $periodo->id,
                 'usuario_id' => auth()->id() ?? 1,
             ]);
+
+            if($simulationOperation!==null) {
+                DB::table('asientos_contables')->where('id',$asiento->id)->update([
+                    'accounting_policy_version_id'=>$simulationOperation->policy_version_id,
+                    'accounting_policy_hash'=>$simulationOperation->policy_hash,
+                    'accounting_authorization_id'=>$simulationOperation->authorization_id,
+                ]);
+            }
 
             if ($movimiento->tipo === 'cargo') {
                 DetalleAsiento::create([

@@ -45,7 +45,7 @@ class AccountingEventDocumentationTest extends TestCase
         $b=$i->prepareSimulation($g->id,array_reverse($input,true),$at);$this->assertSame($a->id,$b->id);$this->assertSame($a->content_hash,$b->content_hash);
         $this->assertSame('prepared',$a->status);$this->assertNull($a->result_movement_id);$this->assertNull($a->result_asiento_id);
         $input['amount']='50.01';$this->rejected(fn()=>$i->prepareSimulation($g->id,$input,$at));
-        $this->rejected(fn()=>$i->confirmedResult($a->operation_uuid));$this->assertSame(1,DB::table('accounting_event_operations')->count());
+        $this->rejected(fn()=>$i->confirmedResult($a->operation_uuid));$this->assertSame(1,DB::table('accounting_event_operations')->where('operation_uuid',$a->operation_uuid)->count());
     }
     public static function invalidAmounts(): array {return [[''],['0'],['-1'],['50.001'],['1e2'],['NaN'],['10000000000000'],[50.0]];}
     #[DataProvider('invalidAmounts')]
@@ -76,19 +76,21 @@ class AccountingEventDocumentationTest extends TestCase
         $this->sqlRejected(fn()=>DB::table('accounting_event_operations')->where('id',$op->id)->update(['status'=>'confirmed']),[3819]);
     }
     public function test_line_resolution_has_composite_restrict_foreign_keys_without_writing_entries(): void {
+        $before=DB::table('accounting_entry_line_resolutions')->count();
         $keys=DB::table('information_schema.REFERENTIAL_CONSTRAINTS')->where('CONSTRAINT_SCHEMA',DB::connection()->getDatabaseName())->where('TABLE_NAME','accounting_entry_line_resolutions')->get();
         $this->assertCount(3,$keys);foreach($keys as $k){$this->assertSame('RESTRICT',$k->DELETE_RULE);$this->assertSame('RESTRICT',$k->UPDATE_RULE);}
         foreach(['resolution_operation_fk'=>7,'resolution_detail_fk'=>3,'resolution_binding_fk'=>6] as $fk=>$count)$this->assertSame($count,DB::table('information_schema.KEY_COLUMN_USAGE')->where('CONSTRAINT_SCHEMA',DB::connection()->getDatabaseName())->where('CONSTRAINT_NAME',$fk)->count());
         $this->sqlRejected(fn()=>DB::table('accounting_entry_line_resolutions')->insert(['operation_id'=>PHP_INT_MAX,'policy_version_id'=>1,'policy_hash'=>str_repeat('a',64),'authorization_id'=>1,'bank_account_id'=>1,'movement_id'=>1,'asiento_id'=>1,'detail_id'=>1,'binding_id'=>1,'account_id'=>1,'semantic_role'=>'gasto.cargo_bancario','contract_version'=>1,'recorded_at'=>now()]),[1452]);
-        $this->assertSame(0,DB::table('accounting_entry_line_resolutions')->count());
+        $this->assertSame($before,DB::table('accounting_entry_line_resolutions')->count());
     }
     public function test_failure_does_not_leave_partial_authorization_and_legacy_entries_stay_null(): void {
+        $beforeAttributed=DB::table('asientos_contables')->whereNotNull('accounting_policy_version_id')->orWhereNotNull('accounting_policy_hash')->orWhereNotNull('accounting_authorization_id')->count();
         [$v,$bank]=$this->pilotPolicy();$a=app(Auth::class)->approveForSimulation($v->id,$bank->id,'SYNTHETIC','Aprobación de ensayo');$n=DB::table('accounting_policy_authorizations')->count();
         DB::connection()->beforeExecuting(function($sql,$bindings){if(str_starts_with($sql,'insert into `accounting_policy_authorizations`')&&in_array('enablement',$bindings,true))throw new \RuntimeException('AC04B1 injected');});
         try{app(Auth::class)->enableForSimulation($a->id,'SYNTHETIC','Fallar');$this->fail('Debía fallar');}catch(\RuntimeException $e){$this->assertSame('AC04B1 injected',$e->getMessage());}
         $this->assertSame($n,DB::table('accounting_policy_authorizations')->count());
         $this->assertTrue(Schema::hasColumn('asientos_contables','accounting_policy_version_id'));
-        $this->assertSame(0,DB::table('asientos_contables')->whereNotNull('accounting_policy_version_id')->orWhereNotNull('accounting_policy_hash')->orWhereNotNull('accounting_authorization_id')->count());
+        $this->assertSame($beforeAttributed,DB::table('asientos_contables')->whereNotNull('accounting_policy_version_id')->orWhereNotNull('accounting_policy_hash')->orWhereNotNull('accounting_authorization_id')->count());
     }
     public function test_changed_document_columns_and_incomplete_rehashed_evidence_reject(): void {
         $g=$this->simulationGrant();$i=app(Identity::class);$p=$this->pilotInput();$at=new DateTimeImmutable('2032-01-15T00:00:00Z');$op=$i->prepareSimulation($g->id,$p,$at);

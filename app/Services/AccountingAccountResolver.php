@@ -19,16 +19,29 @@ final class AccountingAccountResolver
     /** Nunca llamar con IDs de política/recursos tomados como autoridad de un request HTTP. */
     public function inspect(array $requests,DateTimeImmutable $at,?int $technicalVersionId=null): array
     {
+        return $this->inspectInternal($requests,$at,$technicalVersionId,false);
+    }
+    /** Revalidación interna de la versión seleccionada ANTES del banco; no selecciona otra versión. */
+    public function inspectPinnedForInternalHarness(array $requests,DateTimeImmutable $at,int $versionId,string $contract): array
+    {
+        \App\Support\AccountingSimulationBoundary::assert($contract);
+        if(DB::transactionLevel()===0)throw new \LogicException('Versión fijada requiere transacción exterior.');
+        return $this->inspectInternal($requests,$at,$versionId,true);
+    }
+    private function inspectInternal(array $requests,DateTimeImmutable $at,?int $technicalVersionId,bool $pinned): array
+    {
         if (!array_is_list($requests) || !$requests || count($requests)>100) $this->reject('Lista de resolución inválida.');
         foreach($requests as $r) $this->validateSlot($r);
         if ($technicalVersionId!==null && $technicalVersionId<=0) $this->reject('Referencia de versión inválida.');
         $instant=$at->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s');
-        return DB::transaction(function() use($requests,$instant,$technicalVersionId) {
+        return DB::transaction(function() use($requests,$instant,$technicalVersionId,$pinned) {
             $actor=auth()->id();$user=$actor?DB::table('users')->where('id',$actor)->sharedLock()->first():null;
             if (!$user || !$user->is_active || !in_array($user->role,['alvaro','contador'],true)) abort(403);
             // Una selección por lote, mediante lectura actual; nunca una selección por línea.
-            $eligible=DB::table('accounting_policy_versions')->where('status','published')->where('kind','enterprise')
-                ->where('valid_from','<=',$instant)->where('valid_until','>',$instant)->orderBy('id')->sharedLock()->get();
+            $q=DB::table('accounting_policy_versions')->where('status','published')->where('kind','enterprise')
+                ->where('valid_from','<=',$instant)->where('valid_until','>',$instant)->orderBy('id');
+            if($pinned)$q->where('id',$technicalVersionId);
+            $eligible=$q->sharedLock()->get();
             if ($eligible->count()!==1) $this->reject('Se requiere exactamente una versión publicada y vigente.');
             $v=$eligible->first();
             if ($technicalVersionId!==null && (int)$v->id!==$technicalVersionId) $this->reject('La versión explícita no es la única publicada y vigente.');

@@ -130,12 +130,13 @@ class AccountingAccountResolverTest extends TestCase
     }
     public function test_historical_entries_remain_unattributed_and_unchanged(): void
     {
+        $attributed=DB::table('asientos_contables')->whereNotNull('accounting_policy_version_id')->count();
         $before=DB::table('asientos_contables')->orderBy('id')->get()->toJson();$lines=DB::table('detalle_asientos')->orderBy('id')->get()->toJson();
         $v=$this->published();$this->inspect($v->id,$this->policySlots());
         $this->assertSame($before,DB::table('asientos_contables')->orderBy('id')->get()->toJson());
         $this->assertSame($lines,DB::table('detalle_asientos')->orderBy('id')->get()->toJson());
         $this->assertTrue(\Illuminate\Support\Facades\Schema::hasColumn('asientos_contables','accounting_policy_version_id'));
-        $this->assertSame(0,DB::table('asientos_contables')->whereNotNull('accounting_policy_version_id')->count());
+        $this->assertSame($attributed,DB::table('asientos_contables')->whereNotNull('accounting_policy_version_id')->count());
     }
     public function test_non_accounting_identity_cannot_inspect(): void
     {

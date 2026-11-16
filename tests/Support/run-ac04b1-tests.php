@@ -4,7 +4,9 @@ ini_set('zend.exception_ignore_args','1');$root=dirname(__DIR__,2);$exit=1;
 try {
     $mode=$argv[1]??'preflight';$groups=['preflight'=>[],'install'=>['AccountingEventInstallationTest'],'core'=>['AccountingEventDocumentationTest'],
         'concurrency'=>['AccountingAuthorizationConcurrencyTest'],'guard'=>['AccountingEventRollbackGuardTest'],
-        'regressions'=>['AccountIntegrityTest','AccountHierarchyConcurrencyTest','AccountingPolicyTest','AccountingAccountResolverTest','BankBalanceIntegrityTest']];
+        'regressions'=>['AccountIntegrityTest','AccountHierarchyConcurrencyTest','AccountingPolicyTest','AccountingAccountResolverTest','BankBalanceIntegrityTest'],
+        'pilot-core'=>['AccountingBankChargeSimulationTest'],'pilot-race'=>['AccountingPilotConcurrencyTest'],'pilot-race-final'=>['AccountingPilotConcurrencyTest'],'pilot-race-current'=>['AccountingPilotConcurrencyTest'],'pilot-race-verified'=>['AccountingPilotConcurrencyTest'],
+        'pilot-regressions'=>['AccountIntegrityTest','AccountHierarchyConcurrencyTest','AccountingPolicyTest','AccountingAccountResolverTest','BankBalanceIntegrityTest','AccountingEventDocumentationTest','AccountingEventRollbackGuardTest']];
     if(!isset($groups[$mode])||PHP_VERSION!=='8.3.30'||realpath(getcwd())!==realpath($root))throw new RuntimeException('Modo/raíz/PHP inválido');
     require $root.'/tests/bootstrap.php';if(SALON_TEST_DATABASE_RESET_ALLOWED)throw new RuntimeException('Reset debe ser cero');
     $pdo=new PDO('mysql:host=127.0.0.1;port=3306;dbname=salon_erp_test;charset=utf8mb4','salon_erp_tester',$_ENV['DB_PASSWORD'],[PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION]);
@@ -18,12 +20,16 @@ try {
     if(count($files)!==81)throw new RuntimeException('Archivos de migraciones');
     if(in_array($mode,['preflight','install'],true))$files=array_values(array_diff($files,['2026_11_16_000002_add_accounting_event_documentation']));
     if($files!==$pdo->query('SELECT migration FROM migrations ORDER BY migration')->fetchAll(PDO::FETCH_COLUMN))throw new RuntimeException('Migraciones aplicadas distintas');
-    $b=json_decode(file_get_contents($root.'/storage/app/private/ac04b1-backup.json'),true,512,JSON_THROW_ON_ERROR);
-    if(!str_starts_with($b['file'],'E:/salon-erp-backups/salon_erp_test_AC04B1_')||!$b['source_unchanged']||$b['migrations']!==80||filesize($b['file'])!==$b['bytes']||hash_file('sha256',$b['file'])!==$b['sha256'])throw new RuntimeException('Nuevo respaldo inválido');
+    $backupPhase=str_starts_with($mode,'pilot-')?'AC04B2A':'AC04B1';
+    $b=json_decode(file_get_contents($root.'/storage/app/private/'.strtolower($backupPhase).'-backup.json'),true,512,JSON_THROW_ON_ERROR);
+    if(!str_starts_with($b['file'],'E:/salon-erp-backups/salon_erp_test_'.$backupPhase.'_')||!$b['source_unchanged']||$b['migrations']!==($backupPhase==='AC04B1'?80:81)||filesize($b['file'])!==$b['bytes']||hash_file('sha256',$b['file'])!==$b['sha256'])throw new RuntimeException('Nuevo respaldo inválido');
     if(!str_starts_with(file_get_contents($b['file'].'.sha256'),$b['sha256'].'  '))throw new RuntimeException('Sidecar inválido');
     echo 'PREFLIGHT: PHP 8.3.30; MySQL 8.4.3; salon_erp_test / salon_erp_tester@localhost /3306; roles NONE; privilegios exactos; bases ajenas denegadas; '.count($files).' migraciones; NUEVO respaldo SHA256 válido'.PHP_EOL;$pdo=null;
     if(!$groups[$mode])$exit=0;
     else {
+        if($mode==='pilot-race-final')putenv('AC04B2A_RACE_YEAR=2036');
+        if($mode==='pilot-race-current')putenv('AC04B2A_RACE_YEAR=2037');
+        if($mode==='pilot-race-verified')putenv('AC04B2A_RACE_YEAR=2031');
         $args=[PHP_BINARY,'-d','zend.exception_ignore_args=1',$root.'/vendor/phpunit/phpunit/phpunit','--configuration',$root.'/phpunit.xml','--do-not-cache-result','--no-progress','--stop-on-error','--stop-on-failure'];
         foreach($groups[$mode] as $t)$args[]=$root.'/tests/Feature/'.$t.'.php';$p=proc_open($args,[0=>['pipe','r'],1=>STDOUT,2=>STDERR],$pipes,$root);if(!is_resource($p))throw new RuntimeException('PHPUnit no iniciado');fclose($pipes[0]);$exit=proc_close($p);
     }

@@ -8,8 +8,8 @@ use App\Services\{AccountingPolicyService,AccountingEventAuthorizationService};
 trait AccountingEventFixtures
 {
     use AccountingPolicyFixtures;
-    protected function pilotPolicy(string $from='2032-01-01T00:00:00Z',string $until='2032-02-01T00:00:00Z'): array {
-        $bank=CuentaBancaria::where('activa',true)->where('alias','like','AC04B0%')->whereHas('moneda',fn($q)=>$q->where('codigo','NIO'))->orderBy('id')->firstOrFail();
+    protected function pilotPolicy(string $from='2032-01-01T00:00:00Z',string $until='2032-02-01T00:00:00Z',?CuentaBancaria $bank=null): array {
+        $bank??=CuentaBancaria::where('activa',true)->where('alias','like','AC04B0%')->whereHas('moneda',fn($q)=>$q->where('codigo','NIO'))->orderBy('id')->firstOrFail();
         $slots=$this->policySlots();$bindings=$this->policyBindings();
         foreach(['fondos.banco','gasto.cargo_bancario'] as $role) {
             $s=['role'=>$role,'scope_type'=>'bank_account','resource_id'=>$bank->id];$slots[]=$s;
