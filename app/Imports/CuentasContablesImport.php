@@ -21,7 +21,7 @@ class CuentasContablesImport implements \Maatwebsite\Excel\Concerns\ToModel,
         $permiteMovimiento = filter_var($row['permite_movimiento'] ?? '1', FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
         $activa = filter_var($row['activa'] ?? '1', FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
 
-        return new CuentaContable([
+        return app(\App\Services\AccountIntegrityService::class)->save([
             'codigo' => (string) $row['codigo'],
             'nombre' => $row['nombre'],
             'tipo' => $row['tipo'],

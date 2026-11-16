@@ -195,6 +195,10 @@ class PeriodoContableController extends Controller
                 throw new \Exception('No se ha definido una moneda base contable.');
             }
 
+            $periodo = PeriodoContable::whereKey($periodo->id)->lockForUpdate()->firstOrFail();
+            if ($periodo->estado === 'cerrado' || $periodo->fecha_fin > now()) {
+                throw new \App\Exceptions\ContabilidadException('El período ya está cerrado o es futuro.');
+            }
             $asientoCierre = \App\Models\AsientoContable::create([
                 'numero_asiento' => 'CIE-' . $periodo->id . '-' . time(),
                 'fecha' => $periodo->fecha_fin,
@@ -299,6 +303,7 @@ class PeriodoContableController extends Controller
      */
     protected function validarCuadre($asientoId)
     {
+        app(\App\Services\AccountIntegrityService::class)->posting((int)$asientoId);
         $totales = DB::table('detalle_asientos')
             ->where('asiento_id', $asientoId)
             ->selectRaw('SUM(debe) as total_debe, SUM(haber) as total_haber')

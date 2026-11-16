@@ -75,133 +75,41 @@ class CuentaContableController extends Controller
             'permite_movimiento' => 'boolean',
         ]);
 
-        // Si tiene cuenta padre, heredar naturaleza si es subcuenta de detalle
-        $cuentaPadre = $request->cuenta_padre_id ? CuentaContable::find($request->cuenta_padre_id) : null;
-        
-        try {
-            $cuenta = CuentaContable::create([
-                'codigo' => $request->codigo,
-                'nombre' => $request->nombre,
-                'tipo' => $request->tipo,
-                'naturaleza' => $request->naturaleza,
-                'cuenta_padre_id' => $request->cuenta_padre_id,
-                'nivel' => $cuentaPadre ? $cuentaPadre->nivel + 1 : 1,
-                'permite_movimiento' => $request->boolean('permite_movimiento', true),
-                'activa' => true,
-                'is_system_account' => false,
-            ]);
-        } catch (\Throwable $e) {
-            Log::error('Error al crear cuenta contable', [
-                'exception' => $e->getMessage(),
-                'request' => $request->except(['_token']),
-            ]);
-            return response()->json([
-                'error' => 'No se pudo crear la cuenta contable.',
-                'detalle' => $e->getMessage(),
-                'tipo' => class_basename($e),
-            ], 500);
-        }
-
-        return response()->json(['message' => 'Cuenta creada exitosamente', 'cuenta' => $cuenta], 201);
+        $data=$request->only(['codigo','nombre','tipo','naturaleza','cuenta_padre_id']);
+        $data['permite_movimiento']=$request->boolean('permite_movimiento',true);
+        try {$cuenta=app(\App\Services\AccountIntegrityService::class)->save($data);}
+        catch (\Illuminate\Validation\ValidationException $e) {return response()->json(['errors'=>$e->errors()],422);}
+        return response()->json(['message'=>'Cuenta creada exitosamente','cuenta'=>$cuenta],201);
     }
-
     /**
      * Actualizar cuenta (solo nombre si es system account)
      */
     public function update(Request $request, $id)
     {
-        $cuenta = CuentaContable::findOrFail($id);
-
+        $cuenta=CuentaContable::findOrFail($id);
         if ($cuenta->is_system_account) {
-            // Solo permitir cambiar nombre si es cuenta del sistema
-            $request->validate([
-                'nombre' => 'required|string|max:100',
-            ]);
-            $cuenta->update(['nombre' => $request->nombre]);
+            $data=$request->validate(['nombre'=>'required|string|max:100']);
         } else {
-            $request->validate([
-                'codigo' => 'required|string|max:20|unique:cuentas_contables,codigo,' . $id,
-                'nombre' => 'required|string|max:100',
-                'tipo' => 'required|in:activo,pasivo,patrimonio,ingreso,gasto,costo',
-                'naturaleza' => 'required|in:deudora,acreedora',
-                'cuenta_padre_id' => 'nullable|exists:cuentas_contables,id',
-                'permite_movimiento' => 'boolean',
-                'activa' => 'boolean',
+            $data=$request->validate([
+                'codigo'=>'required|string|max:20|unique:cuentas_contables,codigo,'.$id,
+                'nombre'=>'required|string|max:100', 'tipo'=>'required|in:activo,pasivo,patrimonio,ingreso,gasto,costo',
+                'naturaleza'=>'required|in:deudora,acreedora','cuenta_padre_id'=>'nullable|exists:cuentas_contables,id',
+                'permite_movimiento'=>'boolean','activa'=>'boolean',
             ]);
-
-            // Evitar ciclos en el árbol: una cuenta no puede depender de sí misma
-            // ni de una de sus propias subcuentas.
-            if ($request->filled('cuenta_padre_id')) {
-                if ((int) $request->cuenta_padre_id === (int) $cuenta->id) {
-                    return response()->json(['errors' => [
-                        'cuenta_padre_id' => ['Una cuenta no puede ser su propia cuenta padre.'],
-                    ]], 422);
-                }
-
-                if (in_array((int) $request->cuenta_padre_id, $this->descendientesIds($cuenta->id), true)) {
-                    return response()->json(['errors' => [
-                        'cuenta_padre_id' => ['No se puede usar una subcuenta como cuenta padre (se crearía un ciclo).'],
-                    ]], 422);
-                }
-            }
-
-            // Calcular nuevo nivel si cambió de padre
-            $nivel = 1;
-            if ($request->cuenta_padre_id) {
-                $padre = CuentaContable::find($request->cuenta_padre_id);
-                $nivel = $padre->nivel + 1;
-            }
-
-            try {
-                $cuenta->update([
-                    'codigo' => $request->codigo,
-                    'nombre' => $request->nombre,
-                    'tipo' => $request->tipo,
-                    'naturaleza' => $request->naturaleza,
-                    'cuenta_padre_id' => $request->cuenta_padre_id,
-                    'nivel' => $nivel,
-                    'permite_movimiento' => $request->boolean('permite_movimiento'),
-                    'activa' => $request->boolean('activa', true),
-                ]);
-            } catch (\Throwable $e) {
-                Log::error('Error al actualizar cuenta contable', [
-                    'exception' => $e->getMessage(),
-                    'cuenta_id' => $cuenta->id,
-                ]);
-                return response()->json([
-                    'error' => 'No se pudo actualizar la cuenta contable.',
-                    'detalle' => $e->getMessage(),
-                    'tipo' => class_basename($e),
-                ], 500);
-            }
+            foreach (['permite_movimiento','activa'] as $field) if ($request->has($field)) $data[$field]=$request->boolean($field);
         }
-
-        return response()->json(['message' => 'Cuenta actualizada', 'cuenta' => $cuenta->fresh()]);
+        try {$cuenta=app(\App\Services\AccountIntegrityService::class)->save($data,(int)$id);}
+        catch (\Illuminate\Validation\ValidationException $e) {return response()->json(['errors'=>$e->errors()],422);}
+        return response()->json(['message'=>'Cuenta actualizada','cuenta'=>$cuenta]);
     }
-
     /**
      * Eliminar cuenta (prohibido si es system account o tiene movimientos)
      */
     public function destroy($id)
     {
-        $cuenta = CuentaContable::findOrFail($id);
-
-        if ($cuenta->is_system_account) {
-            return response()->json(['error' => 'No se puede eliminar una cuenta del sistema.'], 403);
-        }
-
-        if ($cuenta->detalles()->exists()) {
-            return response()->json(['error' => 'No se puede eliminar una cuenta con movimientos contables.'], 403);
-        }
-
-        if ($cuenta->subcuentas()->exists()) {
-            return response()->json(['error' => 'No se puede eliminar una cuenta que tiene subcuentas. Elimine primero las subcuentas.'], 403);
-        }
-
-        $cuenta->delete();
-        return response()->json(['message' => 'Cuenta eliminada']);
+        app(\App\Services\AccountIntegrityService::class)->remove((int)$id);
+        return response()->json(['message'=>'Cuenta eliminada']);
     }
-
     /**
      * Descargar plantilla Excel para importación.
      * Hoja "Plantilla" vacía (solo encabezados) + hoja "Ejemplo" de referencia.
@@ -239,7 +147,9 @@ class CuentaContableController extends Controller
         DB::beginTransaction();
 
         try {
-            ExcelFacade::import(new CuentasContablesImport, $request->file('archivo'));
+            app(\App\Services\AccountIntegrityService::class)->catalogue(
+                fn () => ExcelFacade::import(new CuentasContablesImport, $request->file('archivo'))
+            );
             DB::commit();
             return back()->with('success', 'Catálogo importado exitosamente.');
         } catch (\Maatwebsite\Excel\Validators\ValidationException $e) {

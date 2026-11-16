@@ -77,7 +77,7 @@ class AsientoManualController extends Controller
                 'concepto' => $request->concepto,
                 'modulo_origen' => 'manual',
                 'usuario_id' => auth()->id() ?? 1,
-                'periodo_id' => $this->getPeriodoAbierto()->id,
+                'periodo_id' => $this->getPeriodoAbierto($request->fecha)->id,
             ]);
 
             foreach ($request->lineas as $linea) {
@@ -119,15 +119,17 @@ class AsientoManualController extends Controller
 
     public function reversar(Request $request, $id)
     {
-        $asientoOriginal = \App\Models\AsientoContable::with('detalles')->findOrFail($id);
-
-        if ($asientoOriginal->modulo_origen === 'reversion') {
-            return back()->withErrors(['error' => 'No se puede revertir un asiento que ya es una reversión.']);
-        }
-
         DB::beginTransaction();
 
         try {
+            $asientoOriginal = AsientoContable::whereKey($id)->lockForUpdate()->firstOrFail();
+            if ($asientoOriginal->modulo_origen !== 'manual' || $asientoOriginal->estado !== 'contabilizado') {
+                throw new \App\Exceptions\ContabilidadException('Un asiento automático o no contabilizado solo se revierte mediante su documento de origen.');
+            }
+            if (AsientoContable::where('modulo_origen','reversion')->where('referencia_id',$asientoOriginal->id)->lockForUpdate()->first()) {
+                throw new \App\Exceptions\ContabilidadException('Este asiento ya fue revertido.');
+            }
+            $asientoOriginal->setRelation('detalles', $asientoOriginal->detalles()->orderBy('id')->lockForUpdate()->get());
             $monedaBase = $this->getMonedaBaseId();
 
             $asientoReversion = \App\Models\AsientoContable::create([
@@ -136,7 +138,7 @@ class AsientoManualController extends Controller
                 'concepto' => 'Reversión de asiento #' . $asientoOriginal->numero_asiento . ': ' . $asientoOriginal->concepto,
                 'modulo_origen' => 'reversion',
                 'referencia_id' => $asientoOriginal->id,
-                'periodo_id' => $this->getPeriodoAbierto()->id,
+                'periodo_id' => $this->getPeriodoAbierto(now()->toDateString())->id,
                 'usuario_id' => auth()->id() ?? 1,
             ]);
 
@@ -152,7 +154,7 @@ class AsientoManualController extends Controller
                 ]);
             }
 
-            $this->validarCuadre($asientoReversion->id);
+            app(ContabilidadService::class)->validarCuadre($asientoReversion->id, $asientoOriginal->id);
             DB::commit();
 
             return back()->with('success', 'Asiento revertido exitosamente. Se creó el asiento de reversión.');
@@ -166,9 +168,9 @@ class AsientoManualController extends Controller
         }
     }
 
-    protected function getPeriodoAbierto()
+    protected function getPeriodoAbierto($fecha)
     {
-        return DB::table('periodos_contables')->where('estado', 'abierto')->first();
+        return app(ContabilidadService::class)->periodoParaFecha($fecha);
     }
 
     protected function getMonedaBaseId()
@@ -182,16 +184,6 @@ class AsientoManualController extends Controller
 
     protected function validarCuadre($asientoId)
     {
-        $totales = DB::table('detalle_asientos')
-            ->where('asiento_id', $asientoId)
-            ->selectRaw('SUM(debe) as total_debe, SUM(haber) as total_haber')
-            ->first();
-
-        $debe = round($totales->total_debe ?? 0, 2);
-        $haber = round($totales->total_haber ?? 0, 2);
-
-        if ($debe !== $haber) {
-            throw new \Exception("Error Crítico de Partida Doble: Asiento descuadrado por C$ " . number_format(abs($debe - $haber), 2));
-        }
+        app(ContabilidadService::class)->validarCuadre($asientoId);
     }
 }

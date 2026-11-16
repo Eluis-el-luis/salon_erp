@@ -55,6 +55,11 @@ class ContabilidadService
      * - Si no existe ninguno, genera automáticamente el periodo mensual,
      *   lo registra (generado_automaticamente) y notifica al usuario.
      */
+    public function periodoParaFecha($fecha): object
+    {
+        return $this->resolverPeriodo($fecha);
+    }
+
     protected function resolverPeriodo($fecha): object
     {
         $fecha = Carbon::parse($fecha)->startOfDay();
@@ -797,7 +802,7 @@ class ContabilidadService
                     ]);
                 }
 
-                $this->validarCuadre($reversa->id);
+                $this->validarCuadre($reversa->id, $original->id);
             }
 
             DB::commit();
@@ -824,6 +829,7 @@ class ContabilidadService
         DB::beginTransaction();
         try {
             // 3. Crear Asiento
+            app(AccountIntegrityService::class)->account((int)$cuentaGastoId,false,['gasto','costo']);
             $asiento = AsientoContable::create([
                 'numero_asiento' => 'GST-'.time(),
                 'fecha' => Carbon::now(),
@@ -1084,7 +1090,10 @@ class ContabilidadService
                 'descripcion' => $descripcionDebe,
             ]);
 
-            $this->validarCuadre($asiento->id);
+            $original = AsientoContable::where('modulo_origen','compras')->where('referencia_id',$factura->id)
+                ->where('numero_asiento','COM-'.str_pad($factura->id,5,'0',STR_PAD_LEFT))->lockForUpdate()->first();
+            if (!$original) throw new ContabilidadException('La compra no tiene un asiento original verificable.');
+            $this->validarCuadre($asiento->id, $original->id);
             DB::commit();
 
             return $asiento;
@@ -1164,6 +1173,7 @@ class ContabilidadService
 
         DB::beginTransaction();
         try {
+            app(AccountIntegrityService::class)->account((int)$movimiento->tipoGasto->cuenta_contable_id,false,['gasto','costo']);
             $asiento = AsientoContable::create([
                 'numero_asiento' => 'CCH-'.time(),
                 'fecha' => Carbon::now(),
@@ -1343,6 +1353,7 @@ class ContabilidadService
 
         DB::beginTransaction();
         try {
+            app(AccountIntegrityService::class)->account($cuentaContrapartidaId,false,$movimiento->tipo==='cargo'?['gasto','costo']:['ingreso']);
             $asiento = AsientoContable::create([
                 'numero_asiento' => 'CBA-'.str_pad($movimiento->id, 5, '0', STR_PAD_LEFT),
                 'fecha' => $movimiento->fecha ?? Carbon::now(),
@@ -1673,7 +1684,7 @@ class ContabilidadService
                 ]);
             }
 
-            $this->validarCuadre($reversa->id);
+            $this->validarCuadre($reversa->id, $original->id);
             DB::commit();
         } catch (Exception $e) {
             DB::rollBack();
@@ -1797,8 +1808,9 @@ class ContabilidadService
      * Candado de seguridad: Verifica el principio de partida doble.
      * Debe ser llamado al final de cualquier método que genere un asiento.
      */
-    public function validarCuadre($asientoId)
+    public function validarCuadre($asientoId, ?int $originalId = null)
     {
+        app(AccountIntegrityService::class)->posting((int)$asientoId, $originalId);
         $totales = DB::table('detalle_asientos')
             ->where('asiento_id', $asientoId)
             ->selectRaw('SUM(debe) as total_debe, SUM(haber) as total_haber')
