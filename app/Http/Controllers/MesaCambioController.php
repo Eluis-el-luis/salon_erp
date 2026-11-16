@@ -11,6 +11,7 @@ use App\Models\SaldoMoneda;
 use App\Models\SesionCaja;
 use App\Models\TipoCambio;
 use App\Services\ContabilidadService;
+use App\Services\BankBalanceService;
 use App\Services\DivisaService;
 use App\Services\FondosService;
 use Carbon\Carbon;
@@ -102,13 +103,18 @@ class MesaCambioController extends Controller
             $idNio = Moneda::idPorCodigo('NIO');
             $idUsd = Moneda::idPorCodigo('USD');
 
+            // Bancos primero, por ID, antes de saldo/divisas/cuentas contables.
+            $bankIds=[];
+            if($request->origen_tipo==='banco')$bankIds[]=(int)$request->origen_id;
+            if($request->destino_tipo==='banco')$bankIds[]=(int)$request->destino_id;
+            $banks=app(BankBalanceService::class)->lockAccounts($bankIds);
             // Bóveda que ENTREGA la moneda que sale (compra: NIO | venta: USD)
-            $entrega = $this->fondos->resolver(
+            $entrega = $request->origen_tipo==='banco'?$banks->get((int)$request->origen_id):$this->fondos->resolver(
                 $request->origen_tipo === 'sesion' ? FondosService::SESION : FondosService::BANCO,
                 (int) $request->origen_id
             );
             // Bóveda que RECIBE la moneda que entra (compra: USD | venta: NIO)
-            $recepcion = $this->fondos->resolver(
+            $recepcion = $request->destino_tipo==='banco'?$banks->get((int)$request->destino_id):$this->fondos->resolver(
                 $request->destino_tipo === 'sesion' ? FondosService::SESION : FondosService::BANCO,
                 (int) $request->destino_id
             );

@@ -7,7 +7,8 @@ try {
     $groups=['preflight'=>[],'install'=>['AccountingPolicyInstallationTest'],'core'=>['AccountingPolicyTest'],
         'concurrency'=>['AccountingPolicyConcurrencyTest'],'guard'=>['AccountingPolicyRollbackGuardTest'],
         'ac02'=>['AccountIntegrityTest','AccountHierarchyConcurrencyTest'],
-        'preflight-current'=>[],'resolver'=>['AccountingAccountResolverTest'],'resolver-race'=>['AccountingResolverConcurrencyTest']];
+        'preflight-current'=>[],'resolver'=>['AccountingAccountResolverTest'],'resolver-race'=>['AccountingResolverConcurrencyTest'],
+        'bank-core'=>['BankBalanceIntegrityTest'],'bank-race'=>['BankBalanceConcurrencyTest']];
     if(!isset($groups[$mode]) || PHP_VERSION!=='8.3.30')throw new RuntimeException('Modo/PHP no autorizado');
     require $root.'/tests/bootstrap.php';
     if(SALON_TEST_DATABASE_RESET_ALLOWED)throw new RuntimeException('El indicador inicial debe ser cero');

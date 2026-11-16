@@ -11,6 +11,7 @@ use App\Models\MovimientoBancario;
 use App\Models\SesionCaja;
 use App\Models\Transferencia;
 use App\Services\ContabilidadService;
+use App\Services\BankBalanceService;
 use App\Services\DivisaService;
 use App\Services\FondosService;
 use Carbon\Carbon;
@@ -133,8 +134,9 @@ class BancoController extends Controller
         DB::beginTransaction();
 
         try {
+            $banks=app(BankBalanceService::class)->lockAccounts([(int)$request->cuenta_destino_id]);
             $caja = $this->fondos->resolver(FondosService::SESION, (int) $request->caja_origen_id);
-            $cuenta = CuentaBancaria::with('moneda')->findOrFail($request->cuenta_destino_id);
+            $cuenta = $banks->get((int)$request->cuenta_destino_id);
             $monto = round((float) $request->monto, 2);
 
             $esUsd = $request->moneda === 'usd';
@@ -242,8 +244,12 @@ class BancoController extends Controller
         DB::beginTransaction();
 
         try {
-            $origen = $this->fondos->resolver($request->origen_tipo === 'sesion' ? FondosService::SESION : FondosService::BANCO, (int) $request->origen_id);
-            $destino = $this->fondos->resolver($request->destino_tipo === 'sesion' ? FondosService::SESION : FondosService::BANCO, (int) $request->destino_id);
+            $bankIds=[];
+            if($request->origen_tipo==='banco')$bankIds[]=(int)$request->origen_id;
+            if($request->destino_tipo==='banco')$bankIds[]=(int)$request->destino_id;
+            $banks=app(BankBalanceService::class)->lockAccounts($bankIds);
+            $origen = $request->origen_tipo==='banco'?$banks->get((int)$request->origen_id):$this->fondos->resolver(FondosService::SESION,(int)$request->origen_id);
+            $destino = $request->destino_tipo==='banco'?$banks->get((int)$request->destino_id):$this->fondos->resolver(FondosService::SESION,(int)$request->destino_id);
 
             $monto = round((float) $request->monto, 2);
             $comision = round((float) ($request->comision ?? 0), 2);
@@ -427,7 +433,7 @@ class BancoController extends Controller
         DB::beginTransaction();
 
         try {
-            $cuenta = CuentaBancaria::with('banco')->findOrFail($request->cuenta_bancaria_id);
+            $cuenta = app(BankBalanceService::class)->lockAccounts([(int)$request->cuenta_bancaria_id])->get((int)$request->cuenta_bancaria_id);
             $monto = round((float) $request->monto, 2);
 
             // 1. El movimiento se crea primero para numerar el asiento CBA-#####

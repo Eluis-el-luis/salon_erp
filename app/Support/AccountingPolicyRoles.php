@@ -17,6 +17,7 @@ final class AccountingPolicyRoles
             'ingreso.producto'=>['ingreso','acreedora',['global','item']],
             'ingreso.servicio'=>['ingreso','acreedora',['global']],
             'fondos.banco'=>['activo','deudora',['bank_account']],
+            'gasto.cargo_bancario'=>['gasto','deudora',['bank_account']],
             // Reservado: AC-03A no decide una política patrimonial de apertura.
             'apertura.inventario.contrapartida'=>[null,null,['global']],
         ];
