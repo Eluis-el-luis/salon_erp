@@ -221,6 +221,11 @@ Route::middleware(['auth'])->group(function () {
     // financiero porque lee exclusivamente del Libro Mayor (§5.10 AGENTS.md).
     Route::middleware(['role:alvaro,contador'])->group(function () {
 
+        // AC-04B2B1: el controlador exige además bootstrap/identidad SQL de ensayo.
+        Route::get('/contabilidad/politicas/ensayo', [\App\Http\Controllers\AccountingAdministrationController::class,'index'])->name('accounting.administration.index');
+        Route::get('/contabilidad/politicas/ensayo/{version}', [\App\Http\Controllers\AccountingAdministrationController::class,'review'])->name('accounting.administration.review');
+        Route::post('/contabilidad/politicas/ensayo/{target}/{action}', [\App\Http\Controllers\AccountingAdministrationController::class,'record'])->whereIn('action',['approve','enable','revoke'])->name('accounting.administration.record');
+
         // Dashboard Gerencial BI (Centro de Mando)
         Route::get('/', [PanelController::class, 'index']);
 

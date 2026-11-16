@@ -3,7 +3,7 @@
 ini_set('zend.exception_ignore_args','1');
 $root=dirname(__DIR__,2);$exit=1;
 try {
-    $phase=$argv[1]??'AC04B1';if(!in_array($phase,['AC04B1','AC04B2A'],true))throw new RuntimeException('Fase inválida');
+    $phase=$argv[1]??'AC04B1';if(!in_array($phase,['AC04B1','AC04B2A','AC04B2B2R','AC04B2B3A'],true))throw new RuntimeException('Fase inválida');
     $expectedMigrations=$phase==='AC04B1'?80:81;
     if(PHP_VERSION!=='8.3.30'||realpath(getcwd())!==realpath($root))throw new RuntimeException('Raíz/PHP inválido');
     require $root.'/tests/bootstrap.php';

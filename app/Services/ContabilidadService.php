@@ -1817,6 +1817,20 @@ class ContabilidadService
      * Candado de seguridad: Verifica el principio de partida doble.
      * Debe ser llamado al final de cualquier método que genere un asiento.
      */
+    /** Solo reversa histórica completa del arnés AC-04B2B3A, sin resolución vigente. */
+    public function reversarCargoBancarioSimulado(int $documentId,object $movement,string $contract): int
+    {
+        $source=app(BankChargeRefundSimulation::class)->validateForPosting($documentId,$movement,$contract);
+        $period=$this->resolverPeriodo($source['document']->recognition_date);
+        $entry=AsientoContable::create(['numero_asiento'=>'RBC-SIM-'.$documentId,'fecha'=>$source['document']->recognition_date,
+            'concepto'=>'SYNTHETIC devolución acreditada de cargo #'.$source['e']->id,'modulo_origen'=>'bank_charge_refunds','referencia_id'=>$documentId,
+            'periodo_id'=>$period->id,'usuario_id'=>auth()->id()]);
+        foreach($source['lines'] as $line)DetalleAsiento::create(['asiento_id'=>$entry->id,'cuenta_id'=>$line->cuenta_id,'moneda_id'=>$line->moneda_id,
+            'centro_costo_id'=>$line->centro_costo_id,'tasa_cambio_id'=>$line->tasa_cambio_id,'debe'=>$line->haber,'haber'=>$line->debe,'descripcion'=>'Reversa histórica de detalle #'.$line->id]);
+        $this->validarCuadre($entry->id,$source['e']->id);
+        return $entry->id;
+    }
+
     public function validarCuadre($asientoId, ?int $originalId = null)
     {
         app(AccountIntegrityService::class)->posting((int)$asientoId, $originalId);

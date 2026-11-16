@@ -2,7 +2,7 @@
 
 ini_set('zend.exception_ignore_args','1');$root=dirname(__DIR__,2);
 try {
-    $phase=$argv[2]??'AC04B1';if(!in_array($phase,['AC04B1','AC04B2A'],true))throw new RuntimeException('Fase inválida');$pilot=$phase==='AC04B2A';
+    $phase=$argv[2]??'AC04B1';if(!in_array($phase,['AC04B1','AC04B2A','AC04B2B1','AC04B2B2R','AC04B2B3A'],true))throw new RuntimeException('Fase inválida');$pilot=$phase!=='AC04B1';$administration=$phase==='AC04B2B1';$refund=$phase==='AC04B2B3A';
     $mode=$argv[1]??'';if(!in_array($mode,['before','after'],true))throw new RuntimeException('Modo inválido');
     $pdo=new PDO('mysql:host=127.0.0.1;port=3306;charset=utf8mb4','root','',[PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION]);
     $file=$root.'/storage/app/private/'.strtolower($phase).'-isolation-before.json';$base=$mode==='after'?json_decode(file_get_contents($file),true,512,JSON_THROW_ON_ERROR):[];$snap=[];
@@ -24,6 +24,9 @@ try {
         $indexed=$pilot?[]:['accounting_policy_versions','accounting_account_bindings','asientos_contables','detalle_asientos','movimientos_bancarios'];
         $append=['accounting_policy_versions','accounting_account_bindings','accounting_policy_audits'];
         if($pilot)$append=array_merge($append,['accounting_policy_authorizations','accounting_event_operations','accounting_entry_line_resolutions','bancos','cuentas_bancarias','periodos_contables','movimientos_bancarios','asientos_contables','detalle_asientos']);
+        if($administration)$append=['accounting_policy_versions','accounting_account_bindings','accounting_policy_audits','accounting_policy_authorizations','cuentas_contables'];
+        if($phase==='AC04B2B2R')$append=array_merge($append,['conciliaciones_bancarias','transferencias','sesiones_caja','cash_sessions','operaciones_cambio','saldos_moneda','diferenciales_cambiarios']);
+        if($refund)$append=array_merge($append,['migrations','conciliaciones_bancarias']);
         foreach($base['salon_erp_test'] as $table=>$b) {
             $a=$snap['salon_erp_test'][$table]??throw new RuntimeException('Tabla previa ausente');
             if(in_array($table,$append,true)?array_diff($b['rows'],$a['rows']):$b['rows']!==$a['rows'])throw new RuntimeException('Filas previas cambiaron: '.$table);
@@ -31,10 +34,11 @@ try {
             $old=array_column($b['columns'],null,'Field');$current=array_column($a['columns'],null,'Field');foreach($old as $key=>$col)if($current[$key]!==$col)throw new RuntimeException('Columna previa alterada');
         }
         $added=array_values(array_diff(array_keys($snap['salon_erp_test']),array_keys($base['salon_erp_test'])));sort($added);
-        if($added!==($pilot?[]:['accounting_entry_line_resolutions','accounting_event_operations','accounting_policy_authorizations']))throw new RuntimeException('Tablas nuevas inesperadas');
-        if((int)$pdo->query('SELECT COUNT(*) FROM salon_erp_test.migrations')->fetchColumn()!==81)throw new RuntimeException('Migraciones distintas');
+        if($added!==($refund?['bank_charge_reversal_lines','bank_charge_reversals']:($pilot?[]:['accounting_entry_line_resolutions','accounting_event_operations','accounting_policy_authorizations'])))throw new RuntimeException('Tablas nuevas inesperadas');
+        if((int)$pdo->query('SELECT COUNT(*) FROM salon_erp_test.migrations')->fetchColumn()!==($refund?82:81))throw new RuntimeException('Migraciones distintas');
         if(!$pilot&&(int)$pdo->query('SELECT COUNT(*) FROM salon_erp_test.asientos_contables WHERE accounting_policy_version_id IS NOT NULL OR accounting_policy_hash IS NOT NULL OR accounting_authorization_id IS NOT NULL')->fetchColumn()!==0)throw new RuntimeException('Se atribuyó política a asiento');
         echo "OTHER_DATABASES_EXACT=True; OLD_ROWS_PRESERVED=True; LEGACY_ENTRIES_UNATTRIBUTED=True\n";
+        if($phase==='AC04B2B2R')foreach($snap['salon_erp_test'] as $table=>$data){$delta=count($data['rows'])-count($base['salon_erp_test'][$table]['rows']);if($delta)echo json_encode(['table'=>$table,'new_fixture_rows'=>$delta]),PHP_EOL;}
     }
     foreach($snap as $schema=>$tables)echo json_encode(['schema'=>$schema,'tables'=>count($tables),'rows'=>array_sum(array_map(fn($t)=>count($t['rows']),$tables))+(!$pilot&&$mode==='after'&&$schema==='salon_erp_test'?1:0),'migrations'=>(int)$pdo->query("SELECT COUNT(*) FROM `$schema`.migrations")->fetchColumn()]),PHP_EOL;
 } catch(Throwable $e){fwrite(STDERR,'Aislamiento detenido: '.get_class($e).' '.basename($e->getFile()).':'.$e->getLine().PHP_EOL);exit(1);}

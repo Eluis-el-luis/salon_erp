@@ -567,6 +567,7 @@ class BancosMesaCambioTest extends TestCase
         $this->from('/bancos/' . $cuenta->id . '/conciliacion')
             ->post('/bancos/' . $cuenta->id . '/conciliacion', [
                 'fecha' => now()->toDateString(),
+                'base_conciliacion_id' => null,
                 'saldo_extracto' => 999,
                 'movimientos' => [$movimiento->id],
             ])
@@ -595,6 +596,7 @@ class BancosMesaCambioTest extends TestCase
         // Extracto real: C$ 300. El depósito ya pasó por el banco.
         $respuesta = $this->post('/bancos/' . $cuenta->id . '/conciliacion', [
             'fecha' => now()->toDateString(),
+            'base_conciliacion_id' => null,
             'saldo_extracto' => 300,
             'movimientos' => [$movimiento->id],
             'observaciones' => 'Extracto revisado',
@@ -646,6 +648,7 @@ class BancosMesaCambioTest extends TestCase
         // Extracto C$ 300: sólo el depósito ya aclarado; el cheque queda en tránsito.
         $this->post('/bancos/' . $cuenta->id . '/conciliacion', [
             'fecha' => now()->toDateString(),
+            'base_conciliacion_id' => null,
             'saldo_extracto' => 300,
             'movimientos' => [$deposito->id],
         ])->assertSessionHas('success');

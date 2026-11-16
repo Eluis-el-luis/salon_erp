@@ -71,6 +71,7 @@
 
                 <form action="{{ route('bancos.conciliar', $cuenta->id) }}" method="POST" class="mt-4" x-show="cuadra">
                     @csrf
+                    <input type="hidden" name="base_conciliacion_id" value="{{ $extractoBase?->id }}">
                     <input type="hidden" name="fecha" :value="fecha">
                     <input type="hidden" name="saldo_extracto" :value="saldoExtracto">
                     <template x-for="id in idsMarcados" :key="id">

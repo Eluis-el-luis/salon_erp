@@ -219,8 +219,16 @@ class FondosService
      */
     public function saldoInicialConciliado(CuentaBancaria $cuenta): float
     {
-        $ultima = $cuenta->conciliaciones()->where('estado', 'cerrada')->orderByDesc('fecha')->orderByDesc('id')->first();
+        $ultima = $this->ultimaConciliacionCerrada($cuenta);
 
         return $ultima ? (float) $ultima->saldo_extracto : 0.0;
+    }
+
+    /** El llamador transaccional debe fijar primero el banco; no usar un snapshot previo. */
+    public function ultimaConciliacionCerrada(CuentaBancaria $cuenta,bool $current=false): ?\App\Models\ConciliacionBancaria
+    {
+        if($current && DB::transactionLevel()===0)throw new \LogicException('La lectura actual del extracto requiere transacción.');
+        $q=$cuenta->conciliaciones()->where('estado','cerrada')->orderByDesc('fecha')->orderByDesc('id');
+        return ($current?$q->sharedLock():$q)->first();
     }
 }

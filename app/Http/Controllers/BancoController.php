@@ -485,7 +485,8 @@ class BancoController extends Controller
     // =====================================================================
     public function conciliacion(CuentaBancaria $cuenta_bancaria)
     {
-        $cuenta = $cuenta_bancaria;
+        return DB::transaction(function()use($cuenta_bancaria){
+        $cuenta = CuentaBancaria::whereKey($cuenta_bancaria->id)->sharedLock()->firstOrFail();
         $cuenta->load(['banco', 'moneda']);
 
         $pendientes = $cuenta->movimientos()
@@ -493,9 +494,11 @@ class BancoController extends Controller
             ->with('asientoContable')
             ->orderBy('fecha')
             ->orderBy('id')
+            ->sharedLock()
             ->get();
 
-        $saldoInicialConciliado = $this->fondos->saldoInicialConciliado($cuenta);
+        $extractoBase = $this->fondos->ultimaConciliacionCerrada($cuenta,true);
+        $saldoInicialConciliado = $extractoBase ? (float)$extractoBase->saldo_extracto : 0.0;
 
         $historial = $cuenta->conciliaciones()->orderByDesc('fecha')->orderByDesc('id')->take(10)->get();
 
@@ -510,15 +513,17 @@ class BancoController extends Controller
             ->orderBy('codigo')->get();
 
         return view('banks.conciliacion', compact(
-            'cuenta', 'pendientes', 'saldoInicialConciliado', 'historial', 'cuentasGasto', 'cuentasIngreso'
+            'cuenta', 'pendientes', 'saldoInicialConciliado', 'historial', 'cuentasGasto', 'cuentasIngreso','extractoBase'
         ));
+        });
     }
 
     public function guardarConciliacion(Request $request, CuentaBancaria $cuenta_bancaria)
     {
         $cuenta = $cuenta_bancaria;
         $request->validate([
-            'fecha' => 'required|date|before_or_equal:today',
+            'fecha' => 'required|date_format:Y-m-d|before_or_equal:today',
+            'base_conciliacion_id' => 'present|nullable|integer|min:1',
             'saldo_extracto' => 'required|numeric|min:0',
             'movimientos' => 'nullable|array',
             'movimientos.*' => 'integer|exists:movimientos_bancarios,id',
@@ -528,23 +533,34 @@ class BancoController extends Controller
         DB::beginTransaction();
 
         try {
-            $fecha = Carbon::parse($request->fecha);
+            $cuenta = app(BankBalanceService::class)->lockAccounts([(int)$cuenta_bancaria->id])->get((int)$cuenta_bancaria->id);
+            $fecha = Carbon::parse($request->fecha)->startOfDay();
+            $base = $this->fondos->ultimaConciliacionCerrada($cuenta,true);
+            $baseId = $request->input('base_conciliacion_id')===null ? null : (int)$request->input('base_conciliacion_id');
+            if($baseId!==($base?->id))throw new \RuntimeException('El extracto base cambió. Prepare nuevamente la conciliación.');
+            if($base && $fecha->toDateString()<=$base->fecha->toDateString())throw new \RuntimeException('El nuevo corte debe ser posterior al último extracto cerrado.');
             $saldoExtracto = round((float) $request->saldo_extracto, 2);
 
             $ids = collect($request->movimientos ?? []);
-            $marcados = $cuenta->movimientos()
-                ->whereIn('id', $ids)
+            $pendientes = $cuenta->movimientos()
                 ->whereIn('estado_conciliacion', ['pendiente', 'en_transito'])
                 ->whereDate('fecha', '<=', $fecha->toDateString())
+                ->orderBy('id')
                 ->lockForUpdate()
                 ->get();
+            foreach($pendientes as $movimiento) {
+                if((int)$movimiento->moneda_id!==(int)$cuenta->moneda_id || $movimiento->conciliado || $movimiento->conciliacion_id!==null || $movimiento->fecha_conciliacion!==null)
+                    throw new \RuntimeException('Movimiento pendiente con moneda o referencias incompatibles. Requiere revisión documental.');
+            }
+            $marcados = $pendientes->whereIn('id',$ids);
 
             // Auditoría: ningún movimiento de otra cuenta puede colarse.
             if ($marcados->count() !== $ids->unique()->count()) {
                 throw new \Exception('Hay movimientos seleccionados que no pertenecen a esta cuenta o ya están conciliados.');
             }
 
-            $saldoInicial = $this->fondos->saldoInicialConciliado($cuenta);
+            $saldoInicial = $base ? (float)$base->saldo_extracto : 0.0;
+            $saldoLibros = round($saldoInicial+$pendientes->sum(fn($m)=>$m->signo()*(float)$m->monto),2);
             $conciliado = round($marcados->sum(fn ($m) => $m->signo() * (float) $m->monto), 2);
             $teoricoExtracto = round($saldoInicial + $conciliado, 2);
             $diferencia = round($saldoExtracto - $teoricoExtracto, 2);
@@ -561,10 +577,7 @@ class BancoController extends Controller
                 'fecha' => $fecha->toDateString(),
                 'saldo_inicial_conciliado' => $saldoInicial,
                 'saldo_extracto' => $saldoExtracto,
-                'saldo_libros' => round($saldoInicial + $cuenta->movimientos()
-                    ->whereDate('fecha', '<=', $fecha->toDateString())
-                    ->get()
-                    ->sum(fn ($m) => $m->signo() * (float) $m->monto), 2),
+                'saldo_libros' => $saldoLibros,
                 'diferencia' => 0,
                 'estado' => 'cerrada',
                 'observaciones' => $request->observaciones,
@@ -583,16 +596,19 @@ class BancoController extends Controller
             // Lo que quedó sin marcar y ya venció a la fecha del extracto pasa a
             // "en tránsito": existe en libros pero aún no pasa por el banco.
             $cuenta->movimientos()
-                ->where('estado_conciliacion', 'pendiente')
-                ->whereDate('fecha', '<=', $fecha->toDateString())
+                ->whereIn('id',$pendientes->where('estado_conciliacion','pendiente')->pluck('id'))
+                ->where('estado_conciliacion','pendiente')
                 ->update(['estado_conciliacion' => 'en_transito']);
 
+            $confirmados=$cuenta->movimientos()->where('conciliacion_id',$conciliacion->id)->orderBy('id')->lockForUpdate()->get();
+            if($confirmados->count()!==$marcados->count() || $confirmados->contains(fn($m)=>!$m->conciliado||$m->estado_conciliacion!=='conciliado'||$m->fecha_conciliacion?->toDateString()!==$fecha->toDateString()))
+                throw new \RuntimeException('Referencias de conciliación incompletas.');
             DB::commit();
 
             return redirect()
                 ->route('bancos.conciliacion', $cuenta->id)
                 ->with('success', 'Conciliación cerrada: el saldo del sistema coincide con el extracto del banco (C$ '.number_format($saldoExtracto, 2).').');
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             DB::rollBack();
             Log::error('Error al conciliar cuenta bancaria', [
                 'exception' => $e->getMessage(),

@@ -105,20 +105,30 @@ class AccountingPolicyService
                 'account_id'=>(int)$b->account_id,'rules'=>json_decode($b->rules_snapshot,true,512,JSON_THROW_ON_ERROR),
                 'account'=>json_decode($b->account_snapshot,true,512,JSON_THROW_ON_ERROR)])->all()];
     }
-    private function audit(int $id,int $actor,string $event,string $reason,?array $before,array $after,?string $reference=null): void
+    private function audit(int $id,int $actor,string $event,string $reason,?array $before,array $after,?string $reference=null,?array $origin=null): void
     {
         $seq=(int)DB::table('accounting_policy_audits')->where('policy_version_id',$id)->lockForUpdate()->max('event_sequence')+1;
         DB::table('accounting_policy_audits')->insert(['policy_version_id'=>$id,'event_sequence'=>$seq,'actor_id'=>$actor,'event'=>$event,
             'reason'=>$reason,'before_hash'=>$before===null?null:hash('sha256',self::canonical($before)),
             'after_hash'=>hash('sha256',self::canonical($after)),
-            'evidence'=>self::canonical(['version'=>1,'before'=>$before,'after'=>$after,'approval_reference'=>$reference]),
-            'recorded_at'=>now('UTC')->format('Y-m-d H:i:s')]);
+            'evidence'=>self::canonical(['version'=>1,'before'=>$before,'after'=>$after,'approval_reference'=>$reference]+($origin===null?[]:['origin'=>$origin,'origin_hash'=>hash('sha256',self::canonical($origin))])),
+            'recorded_at'=>$origin['recorded_at']??now('UTC')->format('Y-m-d H:i:s')]);
     }
     public function createDraft(array $data): object
     {
+        return $this->createDraftWithOrigin($data,false);
+    }
+    /** Contrato administrativo de ensayo; nunca acepta procedencia desde HTTP. */
+    public function createAdministrativeDraft(array $data): object
+    {
+        \App\Support\AccountingSimulationBoundary::assert(\App\Support\AccountingSimulationBoundary::CONTRACT);
+        return $this->createDraftWithOrigin($data,true);
+    }
+    private function createDraftWithOrigin(array $data,bool $administrative): object
+    {
         $this->keys($data,['kind','label','reason','valid_from','valid_until','coverage']);
         if (!in_array($data['kind']??null,['demo','enterprise'],true)) $this->fail('Indique explícitamente demostración o empresa.');
-        return $this->administrative(function ($actor) use ($data) {
+        return $this->administrative(function ($actor) use ($data,$administrative) {
             if(!is_array($data['coverage']??null))$this->fail('Manifiesto explícito requerido.');
             $coverage=$this->slots($data['coverage']??[],false);
             $from=$this->date($data['valid_from']??null);$until=$this->date($data['valid_until']??null);
@@ -130,7 +140,10 @@ class AccountingPolicyService
                 'content_hash'=>str_repeat('0',64),'created_at'=>now('UTC'),'updated_at'=>now('UTC')]);
             $v=$this->version($id);$after=$this->content($v);
             DB::table('accounting_policy_versions')->where('id',$id)->update(['content_hash'=>hash('sha256',self::canonical($after))]);
-            $this->audit($id,$actor,'created',$v->reason,null,$after);
+            $origin=$administrative?['version'=>1,'workflow'=>'accounting_administration','execution'=>'synthetic_test','economic_approval'=>false,
+                'schema'=>'salon_erp_test','policy_id'=>$id,'created_by'=>$actor,'initial_hash'=>hash('sha256',self::canonical($after)),
+                'recorded_at'=>now('UTC')->format('Y-m-d H:i:s')]:null;
+            $this->audit($id,$actor,'created',$v->reason,null,$after,null,$origin);
             return $this->version($id);
         });
     }

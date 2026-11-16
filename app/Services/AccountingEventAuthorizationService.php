@@ -35,9 +35,9 @@ final class AccountingEventAuthorizationService
         return $r;
     }
     private function revoked(int $id): bool {return DB::table('accounting_policy_authorizations')->where('parent_id',$id)->where('action','revocation')->sharedLock()->exists();}
-    private function append(array $data,int $actor,string $reference,string $reason): object {
+    private function append(array $data,int $actor,string $reference,string $reason,?array $administration=null): object {
         $data+=['actor_id'=>$actor,'document_reference'=>$this->text($reference,160),'reason'=>$this->text($reason,2000),'recorded_at'=>now('UTC')->format('Y-m-d H:i:s')];
-        $e=['version'=>1,'authorization'=>$data];$data['evidence']=AccountingPolicyService::canonical($e);$data['evidence_hash']=hash('sha256',$data['evidence']);
+        $e=['version'=>1,'authorization'=>$data]+($administration===null?[]:['administration'=>$administration]);$data['evidence']=AccountingPolicyService::canonical($e);$data['evidence_hash']=hash('sha256',$data['evidence']);
         return $this->row(DB::table('accounting_policy_authorizations')->insertGetId($data));
     }
     private function scope(object $r): array {
@@ -119,5 +119,78 @@ final class AccountingEventAuthorizationService
     }
     public function assertBusinessAuthority(int $id): never {
         throw new \LogicException('AC-04B1 no emite autoridad empresarial ni habilita consumidores financieros.');
+    }
+
+    /** Origen exclusivamente de creación; nunca adjuntar o reconstruir para una versión anterior. */
+    private function administrativeOrigin(object $v): array {
+        $a=DB::table('accounting_policy_audits')->where('policy_version_id',$v->id)->where('event_sequence',1)->sharedLock()->first();
+        $e=$a?json_decode($a->evidence,true,512,JSON_THROW_ON_ERROR):[];$o=$e['origin']??null;
+        if(!$a||$a->event!=='created'||$a->before_hash!==null||!is_array($o)||($o['version']??null)!==1
+            ||($o['workflow']??null)!=='accounting_administration'||($o['execution']??null)!=='synthetic_test'||($o['economic_approval']??null)!==false
+            ||($o['schema']??null)!=='salon_erp_test'||($o['policy_id']??null)!==(int)$v->id||($o['created_by']??null)!==(int)$v->created_by
+            ||(int)$a->actor_id!==(int)$v->created_by||($o['initial_hash']??null)!==$a->after_hash
+            ||($o['recorded_at']??null)!==$a->recorded_at||($e['origin_hash']??null)!==hash('sha256',AccountingPolicyService::canonical($o))
+            ||hash('sha256',AccountingPolicyService::canonical($e['after']??[]))!==$a->after_hash)$this->reject('Procedencia administrativa de creación ausente o incompatible. No promover registros anteriores.');
+        return ['contract_version'=>1,'synthetic'=>true,'economic_approval'=>false,'financial_authority'=>false,
+            'installation'=>'salon_erp_test','origin_audit_id'=>(int)$a->id,'origin_hash'=>$e['origin_hash']];
+    }
+    private function administrationBoundary(): void {
+        \App\Support\AccountingSimulationBoundary::assert(\App\Support\AccountingSimulationBoundary::CONTRACT);
+    }
+    public function reviewForAdministration(int $id,int $bankId): array {
+        $this->administrationBoundary();
+        return DB::transaction(function()use($id,$bankId){
+            $v=$this->policy($id,false);$this->actor();$origin=$this->administrativeOrigin($v);
+            if($v->valid_until<=now('UTC')->format('Y-m-d H:i:s'))$this->reject('Política expirada.');
+            $at=new DateTimeImmutable($v->valid_from,new DateTimeZone('UTC'));$this->verifyPolicy($v,$bankId,$at);
+            return ['policy'=>$v,'origin'=>$origin,'content'=>app(AccountingPolicyService::class)->contentForInspection($v),
+                'bank'=>DB::table('cuentas_bancarias')->where('id',$bankId)->sharedLock()->first(),
+                'history'=>DB::table('accounting_policy_authorizations')->where('policy_version_id',$id)->where('bank_account_id',$bankId)->where('purpose','business')->orderBy('id')->sharedLock()->get()];
+        });
+    }
+    private function administrationWindow(string $from,string $until,object $parent): array {
+        $convert=function($s){$d=DateTimeImmutable::createFromFormat('!Y-m-d\TH:i:sP',str_replace('Z','+00:00',$s));
+            if(!$d||$d->format('Y-m-d\TH:i:sP')!==str_replace('Z','+00:00',$s))$this->reject('Instante UTC con zona explícita requerido.');return $this->stamp($d);};
+        $f=$convert($from);$u=$convert($until);
+        if($f>=$u||$f<$parent->valid_from||$u>$parent->valid_until||$u<=now('UTC')->format('Y-m-d H:i:s'))$this->reject('Vigencia incompatible.');return [$f,$u];
+    }
+    public function approveForAdministration(int $id,int $bankId,string $hash,string $from,string $until,string $reference,string $reason): object {
+        $this->administrationBoundary();
+        return app(AccountIntegrityService::class)->withAdministrationLock(function()use($id,$bankId,$hash,$from,$until,$reference,$reason){
+            $v=$this->policy($id,true);$actor=$this->actor();$review=$this->reviewForAdministration($id,$bankId);
+            if(!hash_equals($v->content_hash,$hash))$this->reject('La revisión cambió; revisar nuevamente.');[$f,$u]=$this->administrationWindow($from,$until,$v);
+            foreach(DB::table('accounting_policy_authorizations')->where('policy_version_id',$id)->where('bank_account_id',$bankId)->where('purpose','business')->where('action','approval')->lockForUpdate()->get() as $old)
+                if(!$this->revoked($old->id))$this->reject('Existe una aprobación documental no retirada.');
+            $meta=$review['origin']+['event_contract'=>1,'reviewed_bindings'=>$review['content']['bindings']];
+            return $this->append(['policy_version_id'=>$id,'policy_hash'=>$v->content_hash,'purpose'=>'business','event_key'=>self::EVENT,'bank_account_id'=>$bankId,
+                'currency'=>'NIO','environment'=>'testing','action'=>'approval','parent_id'=>null,'parent_action'=>null,'valid_from'=>$f,'valid_until'=>$u],$actor,$reference,$reason,$meta);
+        });
+    }
+    private function administrativeRow(int $id): object {
+        $a=$this->row($id);$m=json_decode($a->evidence,true)['administration']??[];
+        $origin=$this->administrativeOrigin($this->policy($a->policy_version_id,false));
+        foreach($origin as $key=>$value)if(($m[$key]??null)!==$value)$this->reject('Evidencia administrativa incompatible.');
+        if($a->purpose!=='business'||$a->environment!=='testing'||($m['event_contract']??null)!==1||!is_array($m['reviewed_bindings']??null))$this->reject('Acto ajeno al contrato documental de ensayo.');return $a;
+    }
+    public function enableForAdministration(int $id,string $from,string $until,string $reference,string $reason): object {
+        $this->administrationBoundary();$seed=DB::table('accounting_policy_authorizations')->find($id);if(!$seed)$this->reject('Acto inexistente.');
+        return app(AccountIntegrityService::class)->withAdministrationLock(function()use($seed,$id,$from,$until,$reference,$reason){
+            $this->policy($seed->policy_version_id,true);$actor=$this->actor();$a=$this->administrativeRow($id);
+            if($a->action!=='approval'||$this->revoked($id))$this->reject('Aprobación no elegible.');
+            $review=$this->reviewForAdministration($a->policy_version_id,$a->bank_account_id);
+            if(AccountingPolicyService::canonical($review['content']['bindings'])!==AccountingPolicyService::canonical(json_decode($a->evidence,true)['administration']['reviewed_bindings']))$this->reject('Asociaciones revisadas incompatibles.');
+            [$f,$u]=$this->administrationWindow($from,$until,$a);
+            if(DB::table('accounting_policy_authorizations')->where('parent_id',$id)->where('action','enablement')->lockForUpdate()->exists())$this->reject('Aprobación ya habilitada; no reutilizarla.');
+            $scope=$this->scope($a);$scope['valid_from']=$f;$scope['valid_until']=$u;
+            return $this->append($scope+['action'=>'enablement','parent_id'=>$id,'parent_action'=>'approval'],$actor,$reference,$reason,json_decode($a->evidence,true)['administration']);
+        });
+    }
+    public function revokeForAdministration(int $id,string $reference,string $reason): object {
+        $this->administrationBoundary();$seed=DB::table('accounting_policy_authorizations')->find($id);if(!$seed)$this->reject('Acto inexistente.');
+        return app(AccountIntegrityService::class)->withAdministrationLock(function()use($seed,$id,$reference,$reason){
+            $this->policy($seed->policy_version_id,true);$actor=$this->actor();$a=$this->administrativeRow($id);
+            if(!in_array($a->action,['approval','enablement'],true)||$this->revoked($id))$this->reject('Retirada repetida o acto incompatible.');
+            return $this->append($this->scope($a)+['action'=>'revocation','parent_id'=>$id,'parent_action'=>$a->action],$actor,$reference,$reason,json_decode($a->evidence,true)['administration']);
+        });
     }
 }
