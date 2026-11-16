@@ -53,22 +53,28 @@ class AccountIntegrityService
             if (DB::table($table)->where($column,$id)->exists()) $found[]=$table;
         }
         if (Schema::hasTable('inventory_openings') && DB::table('inventory_openings')->where('counterpart_account_id',$id)->exists()) $found[]='inventory_openings';
+        if (Schema::hasTable('accounting_account_bindings') && DB::table('accounting_account_bindings')->where('account_id',$id)->exists()) $found[]='accounting_account_bindings';
         return $found;
     }
 
     /** Serializa únicamente operaciones administrativas del árbol, no operaciones financieras. */
     public function catalogue(callable $action)
     {
+        return $this->withAdministrationLock(function () use ($action) {
+            $accounts=CuentaContable::orderBy('id')->lockForUpdate()->get()->keyBy('id');
+            return $action($accounts);
+        });
+    }
+
+    /** Mismo mutex administrativo, sin bloquear todo el catálogo para publicar políticas. */
+    public function withAdministrationLock(callable $action)
+    {
         $name='salon-cat:'.substr(hash('sha256',DB::connection()->getDatabaseName()),0,40);
         if ((int)DB::selectOne('SELECT GET_LOCK(?, 10) AS acquired',[$name])->acquired!==1) {
             throw ValidationException::withMessages(['cuenta_padre_id'=>'Catálogo en edición; intente de nuevo.']);
         }
         try {
-            return DB::transaction(function () use ($action) {
-                // Lectura actual del conjunto antes de comprobar historia o reparentar.
-                $accounts=CuentaContable::orderBy('id')->lockForUpdate()->get()->keyBy('id');
-                return $action($accounts);
-            });
+            return DB::transaction($action);
         } finally { DB::selectOne('SELECT RELEASE_LOCK(?) AS released',[$name]); }
     }
 
