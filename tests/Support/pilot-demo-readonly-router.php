@@ -2,7 +2,7 @@
 
 /** Servidor de consulta aislado. Nunca retornar false ni servir el workspace. */
 try {
-    if(PHP_SAPI!=='cli-server'||($_SERVER['REMOTE_ADDR']??'')!=='127.0.0.1'||($_SERVER['HTTP_HOST']??'')!=='127.0.0.1:8774'){http_response_code(404);exit;}
+    if(PHP_SAPI!=='cli-server'||($_SERVER['REMOTE_ADDR']??'')!=='127.0.0.1'||(string)($_SERVER['SERVER_PORT']??'')!=='8774'||($_SERVER['HTTP_HOST']??'')!=='127.0.0.1:8774'){http_response_code(404);exit;}
     $path=parse_url($_SERVER['REQUEST_URI']??'/',PHP_URL_PATH);$method=$_SERVER['REQUEST_METHOD']??'';
     if($path==='/__pilot-demo/assets/app.css'&&$method==='GET'){
         $root=dirname(__DIR__,2);$manifest=json_decode(file_get_contents($root.'/public/build/manifest.json'),true,512,JSON_THROW_ON_ERROR);$file=realpath($root.'/public/build/'.$manifest['resources/css/app.css']['file']);$base=realpath($root.'/public/build');
@@ -23,4 +23,4 @@ try {
     $db->getPdo()->exec('SET SESSION TRANSACTION READ ONLY');
     $db->beforeExecuting(function($sql){if(!preg_match('/^\s*(select|show)\b/i',$sql))throw new LogicException('SQL de escritura no permitido en la demostración.');});
     $app->handleRequest(Illuminate\Http\Request::capture());
-}catch(Throwable){http_response_code(503);echo 'Demostración temporalmente no disponible. No se confirmó ninguna operación por esta interfaz.';}
+}catch(Throwable){http_response_code(503);echo 'Resultado temporalmente desconocido. Consulte el UUID original antes de repetir; no genere otro.';}

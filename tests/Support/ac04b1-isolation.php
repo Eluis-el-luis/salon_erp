@@ -2,9 +2,10 @@
 
 ini_set('zend.exception_ignore_args','1');$root=dirname(__DIR__,2);
 try {
-    $phase=$argv[2]??'AC04B1';if(!in_array($phase,['AC04B1','AC04B2A','AC04B2B1','AC04B2B2R','AC04B2B3A','AC04B2B4A','AC04B2B4B'],true))throw new RuntimeException('Fase inválida');$pilot=$phase!=='AC04B1';$administration=$phase==='AC04B2B1';$refund=$phase==='AC04B2B3A';$demo=$phase==='AC04B2B4A';$web=$phase==='AC04B2B4B';
+    $phase=$argv[2]??'AC04B1';if(!in_array($phase,['AC04B1','AC04B2A','AC04B2B1','AC04B2B2R','AC04B2B3A','AC04B2B4A','AC04B2B4B','AC04B2B4C'],true))throw new RuntimeException('Fase inválida');$pilot=$phase!=='AC04B1';$administration=$phase==='AC04B2B1';$refund=$phase==='AC04B2B3A';$demo=$phase==='AC04B2B4A';$web=$phase==='AC04B2B4B';$audit=$phase==='AC04B2B4C';
     $mode=$argv[1]??'';if(!in_array($mode,['before','after'],true))throw new RuntimeException('Modo inválido');
     $pdo=new PDO('mysql:host=127.0.0.1;port=3306;charset=utf8mb4','root','',[PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION]);
+    if($audit)$pdo->exec('SET SESSION TRANSACTION READ ONLY');
     $file=$root.'/storage/app/private/'.strtolower($phase).'-isolation-before.json';$base=$mode==='after'?json_decode(file_get_contents($file),true,512,JSON_THROW_ON_ERROR):[];$snap=[];
     foreach(['salon_erp','salon_erp_test','salon_erp_bootstrap_check'] as $schema) {
         foreach($pdo->query("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA='$schema' AND TABLE_TYPE='BASE TABLE' ORDER BY TABLE_NAME")->fetchAll(PDO::FETCH_COLUMN) as $table) {
@@ -16,10 +17,12 @@ try {
             foreach($pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC) as $r)$rows[]=hash('sha256',serialize($r));sort($rows);
             $ddl=$pdo->query("SHOW CREATE TABLE `$schema`.`$table`")->fetch(PDO::FETCH_NUM)[1];
             $snap[$schema][$table]=['columns'=>$cols,'rows'=>$rows,'ddl'=>hash('sha256',preg_replace('/ AUTO_INCREMENT=[0-9]+/','',$ddl))];
+            if($audit)$snap[$schema][$table]['ddl_full']=hash('sha256',$ddl);
         }
     }
     if($mode==='before'){$h=fopen($file,'xb');if(!$h)throw new RuntimeException('Baseline existente');fwrite($h,json_encode($snap,JSON_THROW_ON_ERROR));fclose($h);}
     else {
+        if($audit&&$snap!==$base)throw new RuntimeException('Auditoría: debe conservarse exactamente cada fila y DDL de las tres bases, incluido AUTO_INCREMENT.');
         foreach(['salon_erp','salon_erp_bootstrap_check'] as $s)if($snap[$s]!==$base[$s])throw new RuntimeException('Base ajena modificada');
         $indexed=$pilot?[]:['accounting_policy_versions','accounting_account_bindings','asientos_contables','detalle_asientos','movimientos_bancarios'];
         $append=['accounting_policy_versions','accounting_account_bindings','accounting_policy_audits'];
@@ -27,7 +30,7 @@ try {
         if($administration)$append=['accounting_policy_versions','accounting_account_bindings','accounting_policy_audits','accounting_policy_authorizations','cuentas_contables'];
         if($phase==='AC04B2B2R')$append=array_merge($append,['conciliaciones_bancarias','transferencias','sesiones_caja','cash_sessions','operaciones_cambio','saldos_moneda','diferenciales_cambiarios']);
         if($refund)$append=array_merge($append,['migrations','conciliaciones_bancarias']);
-        if($demo)$append=[];if($web)$append=array_merge($append,['users','cuentas_contables','conciliaciones_bancarias']);
+        if($demo||$audit)$append=[];if($web)$append=array_merge($append,['users','cuentas_contables','conciliaciones_bancarias']);
         foreach($base['salon_erp_test'] as $table=>$b) {
             $a=$snap['salon_erp_test'][$table]??throw new RuntimeException('Tabla previa ausente');
             if(in_array($table,$append,true)?array_diff($b['rows'],$a['rows']):$b['rows']!==$a['rows'])throw new RuntimeException('Filas previas cambiaron: '.$table);
@@ -36,10 +39,11 @@ try {
         }
         $added=array_values(array_diff(array_keys($snap['salon_erp_test']),array_keys($base['salon_erp_test'])));sort($added);
         if($added!==($refund?['bank_charge_reversal_lines','bank_charge_reversals']:($pilot?[]:['accounting_entry_line_resolutions','accounting_event_operations','accounting_policy_authorizations'])))throw new RuntimeException('Tablas nuevas inesperadas');
-        if((int)$pdo->query('SELECT COUNT(*) FROM salon_erp_test.migrations')->fetchColumn()!==(($refund||$demo||$web)?82:81))throw new RuntimeException('Migraciones distintas');
+        if((int)$pdo->query('SELECT COUNT(*) FROM salon_erp_test.migrations')->fetchColumn()!==(($refund||$demo||$web||$audit)?82:81))throw new RuntimeException('Migraciones distintas');
         if(!$pilot&&(int)$pdo->query('SELECT COUNT(*) FROM salon_erp_test.asientos_contables WHERE accounting_policy_version_id IS NOT NULL OR accounting_policy_hash IS NOT NULL OR accounting_authorization_id IS NOT NULL')->fetchColumn()!==0)throw new RuntimeException('Se atribuyó política a asiento');
         echo "OTHER_DATABASES_EXACT=True; OLD_ROWS_PRESERVED=True; LEGACY_ENTRIES_UNATTRIBUTED=True\n";
         if($phase==='AC04B2B2R')foreach($snap['salon_erp_test'] as $table=>$data){$delta=count($data['rows'])-count($base['salon_erp_test'][$table]['rows']);if($delta)echo json_encode(['table'=>$table,'new_fixture_rows'=>$delta]),PHP_EOL;}
     }
     foreach($snap as $schema=>$tables)echo json_encode(['schema'=>$schema,'tables'=>count($tables),'rows'=>array_sum(array_map(fn($t)=>count($t['rows']),$tables))+(!$pilot&&$mode==='after'&&$schema==='salon_erp_test'?1:0),'migrations'=>(int)$pdo->query("SELECT COUNT(*) FROM `$schema`.migrations")->fetchColumn()]),PHP_EOL;
 } catch(Throwable $e){fwrite(STDERR,'Aislamiento detenido: '.get_class($e).' '.basename($e->getFile()).':'.$e->getLine().PHP_EOL);exit(1);}
+finally {putenv('SALON_TEST_DB_RESET_ALLOWED=0');}

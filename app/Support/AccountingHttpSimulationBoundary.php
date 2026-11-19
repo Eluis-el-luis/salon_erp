@@ -14,6 +14,8 @@ final class AccountingHttpSimulationBoundary
             || !defined('SALON_HTTP_SYNTHETIC_CHARGE') || SALON_HTTP_SYNTHETIC_CHARGE !== self::CONTRACT
             || ($_SERVER['REMOTE_ADDR'] ?? '') !== '127.0.0.1'
             || !in_array($_SERVER['HTTP_HOST'] ?? '', ['127.0.0.1:8775', '127.0.0.1:8776'], true)
+            || !in_array((string)($_SERVER['SERVER_PORT'] ?? ''), ['8775', '8776'], true)
+            || ($_SERVER['HTTP_HOST'] ?? '') !== '127.0.0.1:'.($_SERVER['SERVER_PORT'] ?? '')
             || !defined('SALON_TEST_DATABASE_BOOTSTRAPPED') || !SALON_TEST_DATABASE_BOOTSTRAPPED
             || !defined('SALON_TEST_DATABASE_RESET_ALLOWED') || SALON_TEST_DATABASE_RESET_ALLOWED) {
             abort(404);

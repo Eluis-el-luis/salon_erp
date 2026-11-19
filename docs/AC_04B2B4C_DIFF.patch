@@ -1,0 +1,319 @@
+--- a/tests/Support/run-ac04b1-tests.php
++++ b/tests/Support/run-ac04b1-tests.php
+@@ -13,6 +13,7 @@
+         'reconciliation-regressions'=>['AccountIntegrityTest','AccountHierarchyConcurrencyTest','AccountingPolicyTest','AccountingAccountResolverTest','BankBalanceIntegrityTest','AccountingEventDocumentationTest','AccountingEventRollbackGuardTest','AccountingBankChargeSimulationTest','AccountingAdministrationTest'],
+         'refund-preflight'=>[],'refund-install'=>['BankChargeRefundInstallationTest'],'refund-core'=>['BankChargeRefundTest'],'refund-race'=>['BankChargeRefundConcurrencyTest'],'refund-guard'=>['BankChargeRefundRollbackGuardTest'],
+         'refund-regressions'=>['AccountIntegrityTest','AccountHierarchyConcurrencyTest','AccountingPolicyTest','AccountingAccountResolverTest','BankBalanceIntegrityTest','AccountingEventDocumentationTest','AccountingEventRollbackGuardTest','AccountingBankChargeSimulationTest','AccountingAdministrationTest','BankReconciliationTest'],
++        'audit-preflight'=>[],'audit-readonly'=>['PilotDemoHttpBoundaryTest','PilotDemoFinalAuditTest'],
+         'web-preflight'=>[],'web-core'=>['PilotDemoHttpExecutionTest'],'web-boundary'=>['PilotDemoBoundarySeparationTest'],'web-race'=>['PilotDemoHttpConcurrencyTest'],'web-race-resume'=>['PilotDemoHttpConcurrencyTest'],'web-history'=>['PilotDemoHistoricalTest'],'demo-preflight'=>[],'demo-core'=>['PilotDemoReadOnlyTest'],'demo-http'=>['PilotDemoHttpBoundaryTest'],
+         'demo-regressions'=>['AccountIntegrityTest','AccountHierarchyConcurrencyTest','AccountingPolicyTest','AccountingAccountResolverTest','BankBalanceIntegrityTest','AccountingEventDocumentationTest','AccountingEventRollbackGuardTest','AccountingBankChargeSimulationTest','AccountingAdministrationTest','BankReconciliationTest','BankChargeRefundTest','BankChargeRefundRollbackGuardTest']];
+     if(!isset($groups[$mode])||PHP_VERSION!=='8.3.30'||realpath(getcwd())!==realpath($root))throw new RuntimeException('Modo/raíz/PHP inválido');
+@@ -25,7 +26,7 @@
+     foreach($grants as $g)if(!str_starts_with($g,'GRANT USAGE ')){[$p,$s]=explode(' ON ',$g,2);$ps=explode(', ',substr($p,6));sort($ps);if($ps!==$expected||$s!=='`'.str_replace('_',chr(92).'_','salon_erp_test').'`.* TO `salon_erp_tester`@`localhost`')throw new RuntimeException('Privilegios inesperados');}
+     foreach(['salon_erp','salon_erp_bootstrap_check'] as $s){try{$pdo->query("SELECT 1 FROM `$s`.users LIMIT 0");throw new RuntimeException('Base ajena accesible');}catch(PDOException $e){if(($e->errorInfo[1]??0)!==1142)throw $e;}}
+     $files=array_map(fn($f)=>basename($f,'.php'),glob($root.'/database/migrations/*.php'));sort($files);
+-    $refund=str_starts_with($mode,'refund-');$web=str_starts_with($mode,'web-');$demo=str_starts_with($mode,'demo-')||$web;if(count($files)!==(($refund||$demo)?82:81))throw new RuntimeException('Archivos de migraciones');
++    $refund=str_starts_with($mode,'refund-');$web=str_starts_with($mode,'web-')||str_starts_with($mode,'audit-');$demo=str_starts_with($mode,'demo-')||$web;if(count($files)!==(($refund||$demo)?82:81))throw new RuntimeException('Archivos de migraciones');
+     if(in_array($mode,['refund-preflight','refund-install'],true))$files=array_values(array_diff($files,['2026_11_16_000003_create_bank_charge_refunds']));
+     if(in_array($mode,['preflight','install'],true))$files=array_values(array_diff($files,['2026_11_16_000002_add_accounting_event_documentation']));
+     if($files!==$pdo->query('SELECT migration FROM migrations ORDER BY migration')->fetchAll(PDO::FETCH_COLUMN))throw new RuntimeException('Migraciones aplicadas distintas');
+@@ -50,7 +51,7 @@
+     $b=json_decode(file_get_contents($root.'/storage/app/private/'.strtolower($backupPhase).'-backup.json'),true,512,JSON_THROW_ON_ERROR);
+     if(!str_starts_with($b['file'],'E:/salon-erp-backups/salon_erp_test_'.$backupPhase.'_')||!$b['source_unchanged']||$b['migrations']!==($backupPhase==='AC04B1'?80:($demo?82:81))||filesize($b['file'])!==$b['bytes']||hash_file('sha256',$b['file'])!==$b['sha256'])throw new RuntimeException('Nuevo respaldo inválido');
+     if(!str_starts_with(file_get_contents($b['file'].'.sha256'),$b['sha256'].'  '))throw new RuntimeException('Sidecar inválido');
+-    echo 'PREFLIGHT: PHP 8.3.30; MySQL 8.4.3; salon_erp_test / salon_erp_tester@localhost /3306; roles NONE; privilegios exactos; bases ajenas denegadas; '.count($files).' migraciones; NUEVO respaldo SHA256 válido'.PHP_EOL;$pdo=null;
++    echo 'PREFLIGHT: PHP 8.3.30; MySQL 8.4.3; salon_erp_test / salon_erp_tester@localhost /3306; roles NONE; privilegios exactos; bases ajenas denegadas; '.count($files).' migraciones; '.(str_starts_with($mode,'audit-')?'respaldo existente SHA256 verificado':'NUEVO respaldo SHA256 válido').PHP_EOL;$pdo=null;
+     if(!$groups[$mode])$exit=0;
+     else {
+         if($mode==='web-race-resume')putenv('AC04B2B4B_RESUME=after_fixture_rejection');
+--- a/tests/Support/ac04b1-isolation.php
++++ b/tests/Support/ac04b1-isolation.php
+@@ -2,9 +2,10 @@
+ 
+ ini_set('zend.exception_ignore_args','1');$root=dirname(__DIR__,2);
+ try {
+-    $phase=$argv[2]??'AC04B1';if(!in_array($phase,['AC04B1','AC04B2A','AC04B2B1','AC04B2B2R','AC04B2B3A','AC04B2B4A','AC04B2B4B'],true))throw new RuntimeException('Fase inválida');$pilot=$phase!=='AC04B1';$administration=$phase==='AC04B2B1';$refund=$phase==='AC04B2B3A';$demo=$phase==='AC04B2B4A';$web=$phase==='AC04B2B4B';
++    $phase=$argv[2]??'AC04B1';if(!in_array($phase,['AC04B1','AC04B2A','AC04B2B1','AC04B2B2R','AC04B2B3A','AC04B2B4A','AC04B2B4B','AC04B2B4C'],true))throw new RuntimeException('Fase inválida');$pilot=$phase!=='AC04B1';$administration=$phase==='AC04B2B1';$refund=$phase==='AC04B2B3A';$demo=$phase==='AC04B2B4A';$web=$phase==='AC04B2B4B';$audit=$phase==='AC04B2B4C';
+     $mode=$argv[1]??'';if(!in_array($mode,['before','after'],true))throw new RuntimeException('Modo inválido');
+     $pdo=new PDO('mysql:host=127.0.0.1;port=3306;charset=utf8mb4','root','',[PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION]);
++    if($audit)$pdo->exec('SET SESSION TRANSACTION READ ONLY');
+     $file=$root.'/storage/app/private/'.strtolower($phase).'-isolation-before.json';$base=$mode==='after'?json_decode(file_get_contents($file),true,512,JSON_THROW_ON_ERROR):[];$snap=[];
+     foreach(['salon_erp','salon_erp_test','salon_erp_bootstrap_check'] as $schema) {
+         foreach($pdo->query("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA='$schema' AND TABLE_TYPE='BASE TABLE' ORDER BY TABLE_NAME")->fetchAll(PDO::FETCH_COLUMN) as $table) {
+@@ -16,10 +17,12 @@
+             foreach($pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC) as $r)$rows[]=hash('sha256',serialize($r));sort($rows);
+             $ddl=$pdo->query("SHOW CREATE TABLE `$schema`.`$table`")->fetch(PDO::FETCH_NUM)[1];
+             $snap[$schema][$table]=['columns'=>$cols,'rows'=>$rows,'ddl'=>hash('sha256',preg_replace('/ AUTO_INCREMENT=[0-9]+/','',$ddl))];
++            if($audit)$snap[$schema][$table]['ddl_full']=hash('sha256',$ddl);
+         }
+     }
+     if($mode==='before'){$h=fopen($file,'xb');if(!$h)throw new RuntimeException('Baseline existente');fwrite($h,json_encode($snap,JSON_THROW_ON_ERROR));fclose($h);}
+     else {
++        if($audit&&$snap!==$base)throw new RuntimeException('Auditoría: debe conservarse exactamente cada fila y DDL de las tres bases, incluido AUTO_INCREMENT.');
+         foreach(['salon_erp','salon_erp_bootstrap_check'] as $s)if($snap[$s]!==$base[$s])throw new RuntimeException('Base ajena modificada');
+         $indexed=$pilot?[]:['accounting_policy_versions','accounting_account_bindings','asientos_contables','detalle_asientos','movimientos_bancarios'];
+         $append=['accounting_policy_versions','accounting_account_bindings','accounting_policy_audits'];
+@@ -27,7 +30,7 @@
+         if($administration)$append=['accounting_policy_versions','accounting_account_bindings','accounting_policy_audits','accounting_policy_authorizations','cuentas_contables'];
+         if($phase==='AC04B2B2R')$append=array_merge($append,['conciliaciones_bancarias','transferencias','sesiones_caja','cash_sessions','operaciones_cambio','saldos_moneda','diferenciales_cambiarios']);
+         if($refund)$append=array_merge($append,['migrations','conciliaciones_bancarias']);
+-        if($demo)$append=[];if($web)$append=array_merge($append,['users','cuentas_contables','conciliaciones_bancarias']);
++        if($demo||$audit)$append=[];if($web)$append=array_merge($append,['users','cuentas_contables','conciliaciones_bancarias']);
+         foreach($base['salon_erp_test'] as $table=>$b) {
+             $a=$snap['salon_erp_test'][$table]??throw new RuntimeException('Tabla previa ausente');
+             if(in_array($table,$append,true)?array_diff($b['rows'],$a['rows']):$b['rows']!==$a['rows'])throw new RuntimeException('Filas previas cambiaron: '.$table);
+@@ -36,10 +39,11 @@
+         }
+         $added=array_values(array_diff(array_keys($snap['salon_erp_test']),array_keys($base['salon_erp_test'])));sort($added);
+         if($added!==($refund?['bank_charge_reversal_lines','bank_charge_reversals']:($pilot?[]:['accounting_entry_line_resolutions','accounting_event_operations','accounting_policy_authorizations'])))throw new RuntimeException('Tablas nuevas inesperadas');
+-        if((int)$pdo->query('SELECT COUNT(*) FROM salon_erp_test.migrations')->fetchColumn()!==(($refund||$demo||$web)?82:81))throw new RuntimeException('Migraciones distintas');
++        if((int)$pdo->query('SELECT COUNT(*) FROM salon_erp_test.migrations')->fetchColumn()!==(($refund||$demo||$web||$audit)?82:81))throw new RuntimeException('Migraciones distintas');
+         if(!$pilot&&(int)$pdo->query('SELECT COUNT(*) FROM salon_erp_test.asientos_contables WHERE accounting_policy_version_id IS NOT NULL OR accounting_policy_hash IS NOT NULL OR accounting_authorization_id IS NOT NULL')->fetchColumn()!==0)throw new RuntimeException('Se atribuyó política a asiento');
+         echo "OTHER_DATABASES_EXACT=True; OLD_ROWS_PRESERVED=True; LEGACY_ENTRIES_UNATTRIBUTED=True\n";
+         if($phase==='AC04B2B2R')foreach($snap['salon_erp_test'] as $table=>$data){$delta=count($data['rows'])-count($base['salon_erp_test'][$table]['rows']);if($delta)echo json_encode(['table'=>$table,'new_fixture_rows'=>$delta]),PHP_EOL;}
+     }
+     foreach($snap as $schema=>$tables)echo json_encode(['schema'=>$schema,'tables'=>count($tables),'rows'=>array_sum(array_map(fn($t)=>count($t['rows']),$tables))+(!$pilot&&$mode==='after'&&$schema==='salon_erp_test'?1:0),'migrations'=>(int)$pdo->query("SELECT COUNT(*) FROM `$schema`.migrations")->fetchColumn()]),PHP_EOL;
+ } catch(Throwable $e){fwrite(STDERR,'Aislamiento detenido: '.get_class($e).' '.basename($e->getFile()).':'.$e->getLine().PHP_EOL);exit(1);}
++finally {putenv('SALON_TEST_DB_RESET_ALLOWED=0');}
+--- a/tests/Support/pilot-demo-readonly-router.php
++++ b/tests/Support/pilot-demo-readonly-router.php
+@@ -2,7 +2,7 @@
+ 
+ /** Servidor de consulta aislado. Nunca retornar false ni servir el workspace. */
+ try {
+-    if(PHP_SAPI!=='cli-server'||($_SERVER['REMOTE_ADDR']??'')!=='127.0.0.1'||($_SERVER['HTTP_HOST']??'')!=='127.0.0.1:8774'){http_response_code(404);exit;}
++    if(PHP_SAPI!=='cli-server'||($_SERVER['REMOTE_ADDR']??'')!=='127.0.0.1'||(string)($_SERVER['SERVER_PORT']??'')!=='8774'||($_SERVER['HTTP_HOST']??'')!=='127.0.0.1:8774'){http_response_code(404);exit;}
+     $path=parse_url($_SERVER['REQUEST_URI']??'/',PHP_URL_PATH);$method=$_SERVER['REQUEST_METHOD']??'';
+     if($path==='/__pilot-demo/assets/app.css'&&$method==='GET'){
+         $root=dirname(__DIR__,2);$manifest=json_decode(file_get_contents($root.'/public/build/manifest.json'),true,512,JSON_THROW_ON_ERROR);$file=realpath($root.'/public/build/'.$manifest['resources/css/app.css']['file']);$base=realpath($root.'/public/build');
+@@ -23,4 +23,4 @@
+     $db->getPdo()->exec('SET SESSION TRANSACTION READ ONLY');
+     $db->beforeExecuting(function($sql){if(!preg_match('/^\s*(select|show)\b/i',$sql))throw new LogicException('SQL de escritura no permitido en la demostración.');});
+     $app->handleRequest(Illuminate\Http\Request::capture());
+-}catch(Throwable){http_response_code(503);echo 'Demostración temporalmente no disponible. No se confirmó ninguna operación por esta interfaz.';}
++}catch(Throwable){http_response_code(503);echo 'Resultado temporalmente desconocido. Consulte el UUID original antes de repetir; no genere otro.';}
+--- a/tests/Support/pilot-demo-http-router.php
++++ b/tests/Support/pilot-demo-http-router.php
+@@ -2,7 +2,7 @@
+ 
+ /** Servidor HTTP sintético aislado, distinto del servidor de solo lectura. Nunca retornar false ni servir el workspace. */
+ try {
+-    if(PHP_SAPI!=='cli-server'||($_SERVER['REMOTE_ADDR']??'')!=='127.0.0.1'||!in_array($_SERVER['HTTP_HOST']??'',['127.0.0.1:8775','127.0.0.1:8776'],true)){http_response_code(404);exit;}
++    if(PHP_SAPI!=='cli-server'||($_SERVER['REMOTE_ADDR']??'')!=='127.0.0.1'||!in_array((string)($_SERVER['SERVER_PORT']??''),['8775','8776'],true)||($_SERVER['HTTP_HOST']??'')!=='127.0.0.1:'.($_SERVER['SERVER_PORT']??'')){http_response_code(404);exit;}
+     $path=parse_url($_SERVER['REQUEST_URI']??'/',PHP_URL_PATH);$method=$_SERVER['REQUEST_METHOD']??'';
+     if($path==='/__pilot-demo/assets/app.css'&&$method==='GET'){
+         $root=dirname(__DIR__,2);$manifest=json_decode(file_get_contents($root.'/public/build/manifest.json'),true,512,JSON_THROW_ON_ERROR);$file=realpath($root.'/public/build/'.$manifest['resources/css/app.css']['file']);$base=realpath($root.'/public/build');
+@@ -26,4 +26,4 @@
+         if($path!=='/__pilot-demo/confirm'||!preg_match('/^(?:insert into|update) `(accounting_event_operations|accounting_entry_line_resolutions|movimientos_bancarios|asientos_contables|detalle_asientos|cuentas_bancarias|periodos_contables)`/i',$sql))throw new LogicException('SQL fuera del evento sintético.');
+     });
+     $app->handleRequest(Illuminate\Http\Request::capture());
+-}catch(Throwable){http_response_code(503);echo 'Demostración temporalmente no disponible. No se confirmó ninguna operación por esta interfaz.';}
++}catch(Throwable){http_response_code(503);echo 'Resultado temporalmente desconocido. Consulte el UUID original antes de repetir; no genere otro.';}
+--- a/app/Support/AccountingHttpSimulationBoundary.php
++++ b/app/Support/AccountingHttpSimulationBoundary.php
+@@ -14,6 +14,8 @@
+             || !defined('SALON_HTTP_SYNTHETIC_CHARGE') || SALON_HTTP_SYNTHETIC_CHARGE !== self::CONTRACT
+             || ($_SERVER['REMOTE_ADDR'] ?? '') !== '127.0.0.1'
+             || !in_array($_SERVER['HTTP_HOST'] ?? '', ['127.0.0.1:8775', '127.0.0.1:8776'], true)
++            || !in_array((string)($_SERVER['SERVER_PORT'] ?? ''), ['8775', '8776'], true)
++            || ($_SERVER['HTTP_HOST'] ?? '') !== '127.0.0.1:'.($_SERVER['SERVER_PORT'] ?? '')
+             || !defined('SALON_TEST_DATABASE_BOOTSTRAPPED') || !SALON_TEST_DATABASE_BOOTSTRAPPED
+             || !defined('SALON_TEST_DATABASE_RESET_ALLOWED') || SALON_TEST_DATABASE_RESET_ALLOWED) {
+             abort(404);
+--- /dev/null
++++ b/tests/Feature/PilotDemoFinalAuditTest.php
+@@ -0,0 +1,93 @@
++<?php
++namespace Tests\Feature;
++
++use App\Models\Usuario;
++use App\Services\{AccountingAccountResolver,AccountingBankChargeSimulation,AccountingEventAuthorizationService,PilotDemoReadOnly};
++use App\Support\{AccountingHttpSimulationBoundary,AccountingSimulationBoundary,AccountingSimulationPosting};
++use Carbon\Carbon;
++use Illuminate\Support\Facades\DB;
++use PHPUnit\Framework\Attributes\{PreserveGlobalState,RunInSeparateProcess};
++use Tests\Support\PilotHttpClient;
++use Tests\TestCase;
++
++/** No INSERT/UPDATE/DELETE/DDL, fixtures nuevos, reenvíos financieros ni cambios de metadata. */
++final class PilotDemoFinalAuditTest extends TestCase
++{
++    protected function setUp(): void {
++        parent::setUp();DB::connection()->getPdo()->exec('SET SESSION TRANSACTION READ ONLY');
++        DB::connection()->beforeExecuting(function($sql){if(!preg_match('/^\s*(SELECT|SHOW)\b/i',$sql))throw new \LogicException('AC04B2B4C solo permite consultas.');});
++    }
++
++    public function test_strict_cli_http_and_business_entries_remain_closed(): void {
++        $this->actingAs(Usuario::where('is_active',true)->whereIn('role',['alvaro','contador'])->firstOrFail());
++        AccountingSimulationBoundary::assert(AccountingSimulationBoundary::CONTRACT);
++        foreach([
++            fn()=>AccountingSimulationBoundary::assert(AccountingHttpSimulationBoundary::CONTRACT),
++            fn()=>app(AccountingBankChargeSimulation::class)->executeForInternalHarness(0,[],AccountingHttpSimulationBoundary::CONTRACT),
++            fn()=>app(AccountingAccountResolver::class)->inspectPinnedForInternalHarness([],new \DateTimeImmutable,0,AccountingHttpSimulationBoundary::CONTRACT),
++            fn()=>AccountingSimulationPosting::forPrepared(0,0,new \DateTimeImmutable,AccountingHttpSimulationBoundary::CONTRACT),
++            fn()=>app(AccountingAccountResolver::class)->resolveForPosting(),
++            fn()=>app(AccountingEventAuthorizationService::class)->assertBusinessAuthority(0),
++        ] as $call){try{$call();$this->fail('Autoridad no autorizada.');}catch(\LogicException $e){$this->assertNotSame('',$e->getMessage());}}
++        try{AccountingHttpSimulationBoundary::assert(AccountingHttpSimulationBoundary::CONTRACT);$this->fail('CLI no es el servidor HTTP.');}catch(\Symfony\Component\HttpKernel\Exception\HttpExceptionInterface $e){$this->assertSame(404,$e->getStatusCode());}
++        $this->assertFalse(\Illuminate\Support\Facades\Route::has('pilot.demo.confirm'));
++        $this->get('/__pilot-demo/login')->assertNotFound();$this->post('/__pilot-demo/confirm',[])->assertNotFound();
++    }
++
++    #[RunInSeparateProcess]
++    #[PreserveGlobalState(false)]
++    public function test_existing_prepared_refund_and_expired_revoked_history_are_read_only(): void {
++        define('SALON_PILOT_DEMO_READONLY',PilotDemoReadOnly::CONTRACT);
++        $prepared=DB::table('accounting_event_operations')->where('id',131)->first();$before=json_encode($prepared);
++        $this->actingAs(Usuario::findOrFail($prepared->created_by));
++        $this->get('/__pilot-demo/operations/'.$prepared->operation_uuid)->assertOk()->assertSee('Prepared no equivale a éxito financiero')->assertDontSee('Asiento original #');
++        $refund=DB::table('bank_charge_reversals')->where('status','confirmed')->first();$original=DB::table('accounting_event_operations')->find($refund->original_operation_id);
++        $this->actingAs(Usuario::findOrFail($original->created_by));
++        $this->get('/__pilot-demo/operations/'.$original->operation_uuid)->assertOk()->assertSee('Devolución acreditada sintética')->assertSee('Correspondencias originales');
++        $f=json_decode(file_get_contents(storage_path('app/private/ac04b2b4b-http-fixture.json')),true,512,JSON_THROW_ON_ERROR);
++        $this->actingAs(Usuario::findOrFail($f['actor']));$g=DB::table('accounting_policy_authorizations')->find($f['grant']);
++        $this->assertTrue($g->valid_until<now('UTC')->format('Y-m-d H:i:s'));
++        $this->assertTrue(DB::table('accounting_policy_authorizations')->where('parent_id',$g->id)->where('action','revocation')->exists());
++        $d=(new PilotDemoReadOnly)->document($f['input']['uuid']);$this->assertSame($f['policy'],(int)$d['policy']->id);$this->assertTrue($d['revoked']);$this->assertCount(2,$d['details']);$this->assertCount(2,$d['resolutions']);
++        try{Carbon::setTestNow('2100-01-01 10:00:00');$future=(new PilotDemoReadOnly)->document($f['input']['uuid']);$this->assertSame($d['o']->content_hash,$future['o']->content_hash);$this->assertSame($d['o']->result_asiento_id,$future['o']->result_asiento_id);}finally{Carbon::setTestNow();}
++        $this->get('/__pilot-demo/operations/'.$original->operation_uuid)->assertForbidden();
++        $unprivileged=Usuario::where('is_active',true)->whereNotIn('role',['alvaro','contador'])->firstOrFail();$this->actingAs($unprivileged);$this->get('/__pilot-demo')->assertForbidden();
++        $this->assertSame($before,json_encode(DB::table('accounting_event_operations')->find(131)));
++    }
++
++    public function test_actual_forbidden_listener_cannot_spoof_an_allowed_host(): void {
++        $client=new PilotHttpClient(8777);$server=$client->startServer();
++        try{
++            $this->assertSame(404,$client->request('/__pilot-demo/login')['status']);
++            foreach(['127.0.0.1:8775','127.0.0.1:8776','127.0.0.1:8774'] as $host){
++                $ctx=stream_context_create(['http'=>['header'=>'Host: '.$host."\r\nServer-Port: 8775\r\n",'ignore_errors'=>true,'follow_location'=>0,'timeout'=>10]]);
++                file_get_contents('http://127.0.0.1:8777/__pilot-demo/login',false,$ctx);$this->assertStringContainsString(' 404 ',$http_response_header[0]);
++            }
++        }finally{proc_terminate($server);$status=proc_get_status($server);proc_close($server);$this->assertFalse($status['running']);}
++    }
++
++    public function test_live_http_session_csrf_ownership_and_read_only_queries(): void {
++        $f=json_decode(file_get_contents(storage_path('app/private/ac04b2b4b-http-fixture.json')),true,512,JSON_THROW_ON_ERROR);$actor=Usuario::findOrFail($f['actor']);
++        $this->assertStringContainsString('SYNTHETIC',$actor->name);$this->assertStringEndsWith('@example.test',$actor->email);
++        // Credencial del fixture existente; solo en memoria, sin crear o cambiar accesos.
++        $password=(new \ReflectionClass(PilotDemoHttpExecutionTest::class))->getConstant('PASSWORD');
++        $a=new PilotHttpClient(8775);$b=new PilotHttpClient(8776);$servers=[];
++        try{
++            $servers[]=$a->startServer();$servers[]=$b->startServer();
++            $login=$a->request('/__pilot-demo/login');$this->assertSame(200,$login['status']);$cookie=$login['headers']['set-cookie']??'';$this->assertStringContainsString('httponly',strtolower($cookie));$this->assertStringContainsString('samesite=strict',strtolower($cookie));
++            $this->assertSame(419,$a->request('/__pilot-demo/confirm','POST',[])['status']);$this->assertSame(419,$a->request('/__pilot-demo/confirm','POST',['_token'=>'invalid'])['status']);
++            $this->assertSame(302,$a->login($actor->email,$password));unset($password);
++            $this->assertSame(422,$a->request('/__pilot-demo/confirm','POST',['_token'=>$a->token,'account_id'=>1])['status']);
++            $this->assertSame(200,$a->request('/__pilot-demo/operations/'.$f['input']['uuid'])['status']);
++            $foreignUuid=DB::table('accounting_event_operations')->where('id',131)->value('operation_uuid');$this->assertSame(403,$a->request('/__pilot-demo/operations/'.$foreignUuid)['status']);
++            // Dos puertos del mismo ensayo comparten intencionadamente la sesión; no afirmar aislamiento por puerto.
++            $b->cookie=$a->cookie;$this->assertSame(200,$b->request('/__pilot-demo')['status']);
++            $anonymous=new PilotHttpClient(8776);$this->assertSame(302,$anonymous->request('/__pilot-demo')['status']);
++            foreach(['/bancos','/.env','/tests/bootstrap.php','/vendor/autoload.php','/public/index.php','/__pilot-demo/refund'] as $path)$this->assertSame(404,$a->request($path)['status']);
++            $this->assertSame(419,$a->request('/__pilot-demo/review','POST',[])['status']);
++            $this->assertSame(302,$a->request('/__pilot-demo/review','POST',['_token'=>$a->token,'amount'=>'invalid'])['status']);
++            $error=$a->request('/__pilot-demo');$this->assertStringContainsString('Revise los datos',$error['body']);$this->assertStringNotContainsString('SQLSTATE',$error['body']);
++            $this->assertSame(302,$a->request('/__pilot-demo/logout','POST',['_token'=>$a->token])['status']);$this->assertSame(302,$a->request('/__pilot-demo')['status']);
++        }finally{foreach($servers as $server){proc_terminate($server);$status=proc_get_status($server);proc_close($server);$this->assertFalse($status['running']);}}
++    }
++}
+--- /dev/null
++++ b/tests/Support/ac04b2b4c-browser-info.php
+@@ -0,0 +1,17 @@
++<?php
++/** Información de fixture existente para el navegador local; nunca emite secretos. */
++ini_set('zend.exception_ignore_args','1');
++try {
++    if(PHP_SAPI!=='cli'||PHP_VERSION!=='8.3.30')throw new RuntimeException('CLI/PHP no autorizado.');
++    require dirname(__DIR__).'/bootstrap.php';
++    $app=require dirname(__DIR__,2).'/bootstrap/app.php';$app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();$app['config']->set('database.connections',['mysql'=>config('database.connections.mysql')]);
++    Tests\Support\TestDatabaseSafety::assertConfiguration($app->environment(),config('database'));
++    $db=$app['db']->connection();Tests\Support\TestDatabaseSafety::assertServerIdentity($db->selectOne('SELECT DATABASE() AS database_name,CURRENT_USER() AS account_name,@@port AS server_port'));
++    $db->getPdo()->exec('SET SESSION TRANSACTION READ ONLY');
++    if(SALON_TEST_DATABASE_RESET_ALLOWED||$db->table('migrations')->count()!==82)throw new RuntimeException('Guardias no válidos.');
++    $f=json_decode(file_get_contents(__DIR__.'/../../storage/app/private/ac04b2b4b-http-fixture.json'),true,512,JSON_THROW_ON_ERROR);
++    $u=$db->table('users')->where('id',$f['actor'])->first(['id','name','email','role','is_active']);
++    if(!$u||!$u->is_active||!in_array($u->role,['alvaro','contador'],true)||!str_contains($u->name,'SYNTHETIC')||!str_ends_with($u->email,'@example.test'))throw new RuntimeException('Solo identidad sintética preexistente.');
++    echo json_encode(['actor_id'=>$u->id,'email'=>$u->email,'uuid'=>$f['input']['uuid']],JSON_THROW_ON_ERROR);
++}catch(Throwable $e){fwrite(STDERR,'Inspección de navegador bloqueada: '.get_class($e).PHP_EOL);exit(1);}
++finally{putenv('SALON_TEST_DB_RESET_ALLOWED=0');}
+--- /dev/null
++++ b/tests/Support/ac04b2b4c-browser.mjs
+@@ -0,0 +1,78 @@
++// Chrome real por CDP nativo; sin dependencias ni confirmación financiera.
++import {spawn,spawnSync} from 'node:child_process';
++import {readFile,mkdir,writeFile} from 'node:fs/promises';
++import path from 'node:path';
++import net from 'node:net';
++import {once} from 'node:events';
++
++const root=process.cwd(), php='E:/laragon/bin/php/php-8.3.30-Win32-vs16-x64/php.exe';
++const out=path.join(root,'storage/app/private/ac04b2b4c-visual');
++const chrome='C:/Program Files/Google/Chrome/Application/chrome.exe';
++const pause=ms=>new Promise(r=>setTimeout(r,ms));
++await mkdir(out,{recursive:true});
++const env={};for(const k of ['SystemRoot','WINDIR','PATH','SYSTEMDRIVE'])if(process.env[k])env[k]=process.env[k];
++env.TEMP=env.TMP=out;env.SALON_TEST_DB_RESET_ALLOWED='0';
++const boot=spawnSync(php,['-d','display_errors=0','-d','zend.exception_ignore_args=1',path.join(root,'tests/Support/ac04b2b4c-browser-info.php')],{cwd:root,env,encoding:'utf8',timeout:15000,windowsHide:true});
++if(boot.status!==0)throw Error('Preflight de navegador no disponible.');
++const info=JSON.parse(boot.stdout);
++const source=await readFile(path.join(root,'tests/Feature/PilotDemoHttpExecutionTest.php'),'utf8');
++let credential=source.match(/private const PASSWORD='([^']+)'/u)?.[1];
++if(!credential)throw Error('Fixture de acceso ausente.');
++const busy=await new Promise(resolve=>{const s=net.connect({host:'127.0.0.1',port:8775});s.once('connect',()=>{s.destroy();resolve(true)});s.once('error',()=>resolve(false));});
++if(busy)throw Error('Puerto ocupado; no se toca el proceso existente.');
++let server,browser,ws,session,id=0;const pending=new Map(),stats=[];let blocked=0,financialBlocked=0;
++const check=(condition,text)=>{if(!condition)throw Error(text);};
++const call=(method,params={},sid=session)=>new Promise((resolve,reject)=>{
++    const key=++id;const timer=setTimeout(()=>{pending.delete(key);reject(Error('Timeout CDP: '+method));},10000);
++    pending.set(key,{resolve:value=>{clearTimeout(timer);resolve(value)},reject:error=>{clearTimeout(timer);reject(error)}});
++    ws.send(JSON.stringify({id:key,method,params,...(sid?{sessionId:sid}:{})}));
++});
++const evaluate=async expression=>{const r=await call('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true});if(r.exceptionDetails)throw Error('Evaluación DOM no disponible.');return r.result.value;};
++const wait=async expression=>{for(let i=0;i<70;i++){if(await evaluate(expression))return;await pause(100);}throw Error('Página no disponible.');};
++const screenshot=async(name,width,height)=>{
++    await call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});await pause(150);
++    const r=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});await writeFile(path.join(out,name+'.png'),Buffer.from(r.data,'base64'));
++    const size=await evaluate('({viewport:innerWidth,document:document.documentElement.scrollWidth})');stats.push({name,width,height,...size});
++};
++try {
++    server=spawn(php,['-d','display_errors=0','-d','zend.exception_ignore_args=1','-S','127.0.0.1:8775','-t',path.join(root,'public'),path.join(root,'tests/Support/pilot-demo-http-router.php')],{cwd:root,env,stdio:'ignore',windowsHide:true});
++    for(let i=0;i<40;i++){try{if((await fetch('http://127.0.0.1:8775/__pilot-demo/login')).status===200)break;}catch{}await pause(100);}
++    browser=spawn(chrome,['--headless=new','--incognito','--remote-debugging-address=127.0.0.1','--remote-debugging-port=0','--user-data-dir='+path.join(out,'profile'),'--no-first-run','--no-default-browser-check','--disable-background-networking','--disable-component-update','--disable-sync','--disable-extensions','--disable-default-apps','--disable-breakpad','--disable-features=OptimizationHints,MediaRouter,AutofillServerCommunication','--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1','about:blank'],{env,stdio:['ignore','ignore','pipe'],windowsHide:true});
++    const endpoint=await new Promise((resolve,reject)=>{let text='';const timer=setTimeout(()=>reject(Error('Chrome no inició CDP.')),15000);browser.stderr.on('data',chunk=>{text+=chunk.toString();const match=text.match(/DevTools listening on (ws:\/\/127\.0\.0\.1:[^\s]+)/u);if(match){clearTimeout(timer);resolve(match[1]);}});browser.once('error',reject);});
++    ws=new WebSocket(endpoint);await once(ws,'open');
++    ws.addEventListener('message',event=>{const message=JSON.parse(event.data);if(message.id){const p=pending.get(message.id);if(p){pending.delete(message.id);message.error?p.reject(Error(message.error.message)):p.resolve(message.result);}}
++        if(message.method==='Fetch.requestPaused'){
++            const req=message.params.request;const url=new URL(req.url);const finance=req.method==='POST'&&url.pathname==='/__pilot-demo/confirm';
++            const allowed=url.origin==='http://127.0.0.1:8775'&&url.pathname.startsWith('/__pilot-demo');
++            if(finance)financialBlocked++;if(!allowed)blocked++;
++            call(finance||!allowed?'Fetch.failRequest':'Fetch.continueRequest',{requestId:message.params.requestId,...(finance||!allowed?{errorReason:'BlockedByClient'}:{})},message.sessionId).catch(()=>{});
++        }
++    });
++    const target=await call('Target.createTarget',{url:'about:blank'},null);session=(await call('Target.attachToTarget',{targetId:target.targetId,flatten:true},null)).sessionId;
++    await call('Page.enable');await call('Runtime.enable');await call('Fetch.enable',{patterns:[{urlPattern:'*'}]});
++    await call('Page.navigate',{url:'http://127.0.0.1:8775/__pilot-demo/login'});await wait('!!document.querySelector("#password")');
++    await screenshot('01-login',1366,900);
++    await evaluate(`document.querySelector('#email').value=${JSON.stringify(info.email)};document.querySelector('#password').value=${JSON.stringify(credential)};document.querySelector('form[action$="/login"]').requestSubmit();true`);credential=null;
++    await wait('!!document.querySelector("#authorization_id")');
++    for(const [w,h] of [[1280,800],[1366,900],[1920,1080]])await screenshot('02-index-'+w,w,h);
++    await call('Page.navigate',{url:'http://127.0.0.1:8775/__pilot-demo/operations/'+info.uuid});await wait('document.body.innerText.includes("Asiento original #")');
++    check(await evaluate('document.body.innerText.includes("Correspondencias originales")'),'Sin correspondencias');
++    await screenshot('03-confirmed-1366',1366,900);await screenshot('03-confirmed-1920',1920,1080);
++    await call('Page.navigate',{url:'http://127.0.0.1:8775/__pilot-demo'});await wait('!!document.querySelector("#description")');
++    await evaluate(`document.querySelector('#reference').value='REFERENCIA SINTETICA LARGA '.repeat(3);document.querySelector('#description').value='Descripcion extensa de comprobacion visual sin envio financiero. '.repeat(4);document.querySelector('#reference').scrollIntoView();true`);
++    await screenshot('04-long-controls',1366,900);
++    const uuid=await evaluate('document.querySelector("#uuid").value');
++    await evaluate(`const f=document.querySelector('form[action$="/review"]');document.querySelector('#authorization_id').value='';f.noValidate=true;f.requestSubmit();true`);
++    await wait('document.readyState==="complete"&&!!document.querySelector("#error-summary")&&!!document.querySelector("#uuid")');check(await evaluate('document.querySelector("#uuid").value')===uuid,'UUID cambió tras error');
++    await screenshot('05-validation',1366,900);
++    check(financialBlocked===0,'Se intentó una confirmación financiera no autorizada.');
++    await call('Network.clearBrowserCookies');await call('Browser.close',{},null).catch(()=>{});
++    await Promise.race([once(browser,'exit'),pause(3000)]);check(browser.exitCode!==null,'Chrome no finalizó.');
++    server.kill();await once(server,'exit');
++    const result={browser:'Chrome headless real / CDP nativo',mode:'consulta autenticada y validacion sin habilitacion',actor_id:info.actor_id,stats,financial_requests:0,blocked_non_allowlisted_requests:blocked,processes_stopped:true};
++    await writeFile(path.join(out,'result.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
++} finally {
++    credential=null;
++    if(ws?.readyState===WebSocket.OPEN)await call('Browser.close',{},null).catch(()=>{});
++    if(browser&&browser.exitCode===null)browser.kill();if(server&&server.exitCode===null)server.kill();
++}
