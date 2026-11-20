@@ -13,6 +13,13 @@ try {
         'reconciliation-regressions'=>['AccountIntegrityTest','AccountHierarchyConcurrencyTest','AccountingPolicyTest','AccountingAccountResolverTest','BankBalanceIntegrityTest','AccountingEventDocumentationTest','AccountingEventRollbackGuardTest','AccountingBankChargeSimulationTest','AccountingAdministrationTest'],
         'refund-preflight'=>[],'refund-install'=>['BankChargeRefundInstallationTest'],'refund-core'=>['BankChargeRefundTest'],'refund-race'=>['BankChargeRefundConcurrencyTest'],'refund-guard'=>['BankChargeRefundRollbackGuardTest'],
         'refund-regressions'=>['AccountIntegrityTest','AccountHierarchyConcurrencyTest','AccountingPolicyTest','AccountingAccountResolverTest','BankBalanceIntegrityTest','AccountingEventDocumentationTest','AccountingEventRollbackGuardTest','AccountingBankChargeSimulationTest','AccountingAdministrationTest','BankReconciliationTest'],
+        'reports-preflight'=>[],'reports-core'=>['AccountingPresentationTest','AccountingReportCharacterizationTest'],
+        'reports-regressions'=>['AccountingPolicyTest','AccountingAccountResolverTest'],
+        'reports-bank'=>['AccountingBankChargeSimulationTest'],
+        'extract-preflight'=>[],'extract-core'=>['AccountingReportExtractionTest'],'extract-race'=>['AccountingReportSnapshotTest'],
+        'report-demo-preflight'=>[],'report-demo-core'=>['ReportPresentationDemoTest'],'report-demo-http'=>['ReportPresentationHttpTest'],
+        'closing-preflight'=>[],'closing-reproduce'=>['AccountingReportCharacterizationTest'],
+        'closing-core'=>['FiscalClosingSignsTest'],'closing-regressions'=>['AccountingPresentationTest','AccountingReportCharacterizationTest'],
         'audit-preflight'=>[],'audit-readonly'=>['PilotDemoHttpBoundaryTest','PilotDemoFinalAuditTest'],
         'web-preflight'=>[],'web-core'=>['PilotDemoHttpExecutionTest'],'web-boundary'=>['PilotDemoBoundarySeparationTest'],'web-race'=>['PilotDemoHttpConcurrencyTest'],'web-race-resume'=>['PilotDemoHttpConcurrencyTest'],'web-history'=>['PilotDemoHistoricalTest'],'demo-preflight'=>[],'demo-core'=>['PilotDemoReadOnlyTest'],'demo-http'=>['PilotDemoHttpBoundaryTest'],
         'demo-regressions'=>['AccountIntegrityTest','AccountHierarchyConcurrencyTest','AccountingPolicyTest','AccountingAccountResolverTest','BankBalanceIntegrityTest','AccountingEventDocumentationTest','AccountingEventRollbackGuardTest','AccountingBankChargeSimulationTest','AccountingAdministrationTest','BankReconciliationTest','BankChargeRefundTest','BankChargeRefundRollbackGuardTest']];
@@ -26,10 +33,22 @@ try {
     foreach($grants as $g)if(!str_starts_with($g,'GRANT USAGE ')){[$p,$s]=explode(' ON ',$g,2);$ps=explode(', ',substr($p,6));sort($ps);if($ps!==$expected||$s!=='`'.str_replace('_',chr(92).'_','salon_erp_test').'`.* TO `salon_erp_tester`@`localhost`')throw new RuntimeException('Privilegios inesperados');}
     foreach(['salon_erp','salon_erp_bootstrap_check'] as $s){try{$pdo->query("SELECT 1 FROM `$s`.users LIMIT 0");throw new RuntimeException('Base ajena accesible');}catch(PDOException $e){if(($e->errorInfo[1]??0)!==1142)throw $e;}}
     $files=array_map(fn($f)=>basename($f,'.php'),glob($root.'/database/migrations/*.php'));sort($files);
-    $refund=str_starts_with($mode,'refund-');$web=str_starts_with($mode,'web-')||str_starts_with($mode,'audit-');$demo=str_starts_with($mode,'demo-')||$web;if(count($files)!==(($refund||$demo)?82:81))throw new RuntimeException('Archivos de migraciones');
+    $reports=str_starts_with($mode,'reports-')||str_starts_with($mode,'closing-')||str_starts_with($mode,'extract-')||str_starts_with($mode,'report-demo-');$refund=str_starts_with($mode,'refund-');$web=str_starts_with($mode,'web-')||str_starts_with($mode,'audit-');$demo=str_starts_with($mode,'demo-')||$web||$reports;if(count($files)!==(($refund||$demo)?82:81))throw new RuntimeException('Archivos de migraciones');
     if(in_array($mode,['refund-preflight','refund-install'],true))$files=array_values(array_diff($files,['2026_11_16_000003_create_bank_charge_refunds']));
     if(in_array($mode,['preflight','install'],true))$files=array_values(array_diff($files,['2026_11_16_000002_add_accounting_event_documentation']));
     if($files!==$pdo->query('SELECT migration FROM migrations ORDER BY migration')->fetchAll(PDO::FETCH_COLUMN))throw new RuntimeException('Migraciones aplicadas distintas');
+    if($reports){
+        if((int)$pdo->query("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_TYPE='BASE TABLE'")->fetchColumn()!==89)throw new RuntimeException('Se esperaban 89 tablas');
+        foreach(['cuentas_contables','asientos_contables','detalle_asientos','periodos_contables','accounting_account_bindings'] as $table){
+            $s=$pdo->prepare('SELECT ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=?');$s->execute([$table]);
+            if($s->fetchColumn()!=='InnoDB')throw new RuntimeException('Fixture no transaccional');
+        }
+        $columns=array_column($pdo->query('SHOW COLUMNS FROM detalle_asientos')->fetchAll(PDO::FETCH_ASSOC),'Type','Field');
+        if(($columns['debe']??null)!=='decimal(15,2)'||($columns['haber']??null)!=='decimal(15,2)')throw new RuntimeException('Precisión contable inesperada');
+        $prepared=$pdo->query('SELECT status,bank_account_id,result_movement_id,result_asiento_id FROM accounting_event_operations WHERE id=131')->fetch(PDO::FETCH_ASSOC);
+        if(!$prepared||$prepared['status']!=='prepared'||(int)$prepared['bank_account_id']!==221||$prepared['result_movement_id']!==null||$prepared['result_asiento_id']!==null)throw new RuntimeException('Preparado 131 alterado');
+        echo 'REPORT SCHEMA: InnoDB; DECIMAL(15,2); prepared 131 intacto'.PHP_EOL;
+    }
     if(str_starts_with($mode,'reconciliation-')){
         foreach(['cuentas_bancarias','movimientos_bancarios','conciliaciones_bancarias'] as $table){
             $s=$pdo->prepare('SELECT ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=?');$s->execute([$table]);if($s->fetchColumn()!=='InnoDB')throw new RuntimeException('Tabla bancaria no transaccional');
@@ -48,6 +67,7 @@ try {
     if(str_starts_with($mode,'reconciliation-'))$backupPhase='AC04B2B2R';
     if($refund)$backupPhase='AC04B2B3A';
     if($demo)$backupPhase='AC04B2B4A';if($web)$backupPhase='AC04B2B4B';
+    if($reports)$backupPhase='AC05B1';
     $b=json_decode(file_get_contents($root.'/storage/app/private/'.strtolower($backupPhase).'-backup.json'),true,512,JSON_THROW_ON_ERROR);
     if(!str_starts_with($b['file'],'E:/salon-erp-backups/salon_erp_test_'.$backupPhase.'_')||!$b['source_unchanged']||$b['migrations']!==($backupPhase==='AC04B1'?80:($demo?82:81))||filesize($b['file'])!==$b['bytes']||hash_file('sha256',$b['file'])!==$b['sha256'])throw new RuntimeException('Nuevo respaldo inválido');
     if(!str_starts_with(file_get_contents($b['file'].'.sha256'),$b['sha256'].'  '))throw new RuntimeException('Sidecar inválido');

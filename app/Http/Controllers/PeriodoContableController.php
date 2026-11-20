@@ -231,50 +231,56 @@ class PeriodoContableController extends Controller
                 ->get();
 
             foreach ($cuentasResultado as $cuenta) {
-                $debe = (float) $cuenta->detalles->sum('debe');
-                $haber = (float) $cuenta->detalles->sum('haber');
+                // DECIMAL(15,2): conservar centavos exactos, incluso saldos contrarios.
+                $debe = 0;
+                $haber = 0;
+                foreach ($cuenta->detalles as $detalle) {
+                    $debe = $this->sumarCentavosCierre($debe, $this->centavosCierre($detalle->debe));
+                    $haber = $this->sumarCentavosCierre($haber, $this->centavosCierre($detalle->haber));
+                }
 
                 if (str_starts_with($cuenta->codigo, '4')) {
-                    $saldo = $haber - $debe; // saldo acreedor
-                    $ingresos += $saldo;
-                    if (abs($saldo) > 0.005) {
+                    $saldo = $this->sumarCentavosCierre($haber, -$debe); // saldo acreedor, en centavos
+                    $ingresos = $this->sumarCentavosCierre($ingresos, $saldo);
+                    if ($saldo !== 0) {
                         DetalleAsiento::create([
                             'asiento_id' => $asientoCierre->id,
                             'cuenta_id' => $cuenta->id,
                             'moneda_id' => $monedaBase,
-                            'debe' => round($saldo, 2),
-                            'haber' => 0,
+                            'debe' => $this->importeCierre(max($saldo, 0)),
+                            'haber' => $this->importeCierre(max(-$saldo, 0)),
                             'descripcion' => 'Cierre Ingreso: ' . $cuenta->nombre,
                         ]);
                     }
                 } else {
-                    $saldo = $debe - $haber; // saldo deudor (costos, gastos y otros)
-                    if (str_starts_with($cuenta->codigo, '5')) $costos += $saldo;
-                    elseif (str_starts_with($cuenta->codigo, '6')) $gastos += $saldo;
-                    else $otros += $saldo;
+                    $saldo = $this->sumarCentavosCierre($debe, -$haber); // saldo deudor, en centavos
+                    if (str_starts_with($cuenta->codigo, '5')) $costos = $this->sumarCentavosCierre($costos, $saldo);
+                    elseif (str_starts_with($cuenta->codigo, '6')) $gastos = $this->sumarCentavosCierre($gastos, $saldo);
+                    else $otros = $this->sumarCentavosCierre($otros, $saldo);
 
-                    if (abs($saldo) > 0.005) {
+                    if ($saldo !== 0) {
                         DetalleAsiento::create([
                             'asiento_id' => $asientoCierre->id,
                             'cuenta_id' => $cuenta->id,
                             'moneda_id' => $monedaBase,
-                            'debe' => 0,
-                            'haber' => round($saldo, 2),
+                            'debe' => $this->importeCierre(max(-$saldo, 0)),
+                            'haber' => $this->importeCierre(max($saldo, 0)),
                             'descripcion' => 'Cierre Resultado: ' . $cuenta->nombre,
                         ]);
                     }
                 }
             }
 
-            $utilidadNeta = round($ingresos - ($costos + $gastos + $otros), 2);
+            $egresos = $this->sumarCentavosCierre($this->sumarCentavosCierre($costos, $gastos), $otros);
+            $utilidadNeta = $this->sumarCentavosCierre($ingresos, -$egresos);
 
-            if (abs($utilidadNeta) > 0.005) {
+            if ($utilidadNeta !== 0) {
                 DetalleAsiento::create([
                     'asiento_id' => $asientoCierre->id,
                     'cuenta_id' => $cuentaUtilidades->id,
                     'moneda_id' => $monedaBase,
-                    'debe' => $utilidadNeta > 0 ? 0 : abs($utilidadNeta),
-                    'haber' => $utilidadNeta > 0 ? $utilidadNeta : 0,
+                    'debe' => $this->importeCierre(max(-$utilidadNeta, 0)),
+                    'haber' => $this->importeCierre(max($utilidadNeta, 0)),
                     'descripcion' => 'Resultado del Ejercicio ' . $periodo->nombre,
                 ]);
             }
@@ -288,7 +294,7 @@ class PeriodoContableController extends Controller
             return redirect()->route('periodos.index')
                 ->with('success', 'Cierre fiscal ejecutado exitosamente. Periodo cerrado.');
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             DB::rollBack();
             Log::error('Error en cierre fiscal', [
                 'exception' => $e->getMessage(),
@@ -296,6 +302,33 @@ class PeriodoContableController extends Controller
             ]);
             return back()->withErrors(['error' => 'Error en cierre fiscal: ' . $e->getMessage()]);
         }
+    }
+
+    /** Lectura exacta de los importes originales; no normaliza datos inválidos. */
+    private function centavosCierre($importe): int
+    {
+        if (!is_string($importe) || !preg_match('/^-?(?:0|[1-9][0-9]{0,12})\.[0-9]{2}$/D', $importe)) {
+            throw new \App\Exceptions\ContabilidadException('Importe original de cierre no representable.');
+        }
+        return (str_starts_with($importe, '-') ? -1 : 1) * (int) str_replace(['-', '.'], '', $importe);
+    }
+
+    private function sumarCentavosCierre(int $acumulado, int $importe): int
+    {
+        $total = $acumulado + $importe;
+        if (!is_int($total) || $total === PHP_INT_MIN) {
+            throw new \App\Exceptions\ContabilidadException('Acumulado de cierre no representable.');
+        }
+        return $total;
+    }
+
+    /** Una línea DECIMAL(15,2) no admite un importe negativo ni fuera de rango. */
+    private function importeCierre(int $centavos): string
+    {
+        if ($centavos < 0 || $centavos > 999999999999999) {
+            throw new \App\Exceptions\ContabilidadException('Línea de cierre fuera del límite monetario.');
+        }
+        return intdiv($centavos, 100).'.'.str_pad((string) ($centavos % 100), 2, '0', STR_PAD_LEFT);
     }
 
     /**

@@ -2,7 +2,7 @@
 
 ini_set('zend.exception_ignore_args','1');$root=dirname(__DIR__,2);
 try {
-    $phase=$argv[2]??'AC04B1';if(!in_array($phase,['AC04B1','AC04B2A','AC04B2B1','AC04B2B2R','AC04B2B3A','AC04B2B4A','AC04B2B4B','AC04B2B4C'],true))throw new RuntimeException('Fase inválida');$pilot=$phase!=='AC04B1';$administration=$phase==='AC04B2B1';$refund=$phase==='AC04B2B3A';$demo=$phase==='AC04B2B4A';$web=$phase==='AC04B2B4B';$audit=$phase==='AC04B2B4C';
+    $phase=$argv[2]??'AC04B1';if(!in_array($phase,['AC04B1','AC04B2A','AC04B2B1','AC04B2B2R','AC04B2B3A','AC04B2B4A','AC04B2B4B','AC04B2B4C','AC05B1','AC05C0','AC05B2','AC05B3A'],true))throw new RuntimeException('Fase inválida');$pilot=$phase!=='AC04B1';$administration=$phase==='AC04B2B1';$refund=$phase==='AC04B2B3A';$demo=in_array($phase,['AC04B2B4A','AC05B1','AC05C0','AC05B2','AC05B3A'],true);$web=$phase==='AC04B2B4B';$audit=$phase==='AC04B2B4C';
     $mode=$argv[1]??'';if(!in_array($mode,['before','after'],true))throw new RuntimeException('Modo inválido');
     $pdo=new PDO('mysql:host=127.0.0.1;port=3306;charset=utf8mb4','root','',[PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION]);
     if($audit)$pdo->exec('SET SESSION TRANSACTION READ ONLY');

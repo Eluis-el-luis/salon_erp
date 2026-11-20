@@ -3,8 +3,8 @@
 ini_set('zend.exception_ignore_args','1');
 $root=dirname(__DIR__,2);$exit=1;
 try {
-    $phase=$argv[1]??'AC04B1';if(!in_array($phase,['AC04B1','AC04B2A','AC04B2B2R','AC04B2B3A','AC04B2B4A','AC04B2B4B'],true))throw new RuntimeException('Fase inválida');
-    $expectedMigrations=$phase==='AC04B1'?80:(in_array($phase,['AC04B2B4A','AC04B2B4B'],true)?82:81);
+    $phase=$argv[1]??'AC04B1';if(!in_array($phase,['AC04B1','AC04B2A','AC04B2B2R','AC04B2B3A','AC04B2B4A','AC04B2B4B','AC05B1'],true))throw new RuntimeException('Fase inválida');
+    $expectedMigrations=$phase==='AC04B1'?80:(in_array($phase,['AC04B2B4A','AC04B2B4B','AC05B1'],true)?82:81);
     if(PHP_VERSION!=='8.3.30'||realpath(getcwd())!==realpath($root))throw new RuntimeException('Raíz/PHP inválido');
     require $root.'/tests/bootstrap.php';
     if(SALON_TEST_DATABASE_RESET_ALLOWED)throw new RuntimeException('Reset debe estar deshabilitado');
