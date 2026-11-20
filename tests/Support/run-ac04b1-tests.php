@@ -25,6 +25,7 @@ try {
         'demo-regressions'=>['AccountIntegrityTest','AccountHierarchyConcurrencyTest','AccountingPolicyTest','AccountingAccountResolverTest','BankBalanceIntegrityTest','AccountingEventDocumentationTest','AccountingEventRollbackGuardTest','AccountingBankChargeSimulationTest','AccountingAdministrationTest','BankReconciliationTest','BankChargeRefundTest','BankChargeRefundRollbackGuardTest']];
     if(!isset($groups[$mode])||PHP_VERSION!=='8.3.30'||realpath(getcwd())!==realpath($root))throw new RuntimeException('Modo/raíz/PHP inválido');
     require $root.'/tests/bootstrap.php';if(SALON_TEST_DATABASE_RESET_ALLOWED)throw new RuntimeException('Reset debe ser cero');
+    $schemaProfile=Tests\Support\AccountingTestSchemaProfiles::readerProfile($mode,$argv[2]??null);
     $pdo=new PDO('mysql:host=127.0.0.1;port=3306;dbname=salon_erp_test;charset=utf8mb4','salon_erp_tester',$_ENV['DB_PASSWORD'],[PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION]);
     $i=$pdo->query('SELECT DATABASE() AS database_name,CURRENT_USER() AS account_name,@@port AS server_port,CURRENT_ROLE() AS roles,VERSION() AS version')->fetch(PDO::FETCH_OBJ);
     Tests\Support\TestDatabaseSafety::assertServerIdentity($i);if($i->roles!=='NONE'||$i->version!=='8.4.3')throw new RuntimeException('Roles/servidor inesperados');
@@ -38,7 +39,8 @@ try {
     if(in_array($mode,['preflight','install'],true))$files=array_values(array_diff($files,['2026_11_16_000002_add_accounting_event_documentation']));
     if($files!==$pdo->query('SELECT migration FROM migrations ORDER BY migration')->fetchAll(PDO::FETCH_COLUMN))throw new RuntimeException('Migraciones aplicadas distintas');
     if($reports){
-        if((int)$pdo->query("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_TYPE='BASE TABLE'")->fetchColumn()!==89)throw new RuntimeException('Se esperaban 89 tablas');
+        $pdo->exec('SET SESSION TRANSACTION READ ONLY');
+        Tests\Support\AccountingTestSchemaProfiles::assertSchema($schemaProfile,Tests\Support\AccountingSchemaInspection::metadata($pdo));
         foreach(['cuentas_contables','asientos_contables','detalle_asientos','periodos_contables','accounting_account_bindings'] as $table){
             $s=$pdo->prepare('SELECT ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=?');$s->execute([$table]);
             if($s->fetchColumn()!=='InnoDB')throw new RuntimeException('Fixture no transaccional');
@@ -68,6 +70,7 @@ try {
     if($refund)$backupPhase='AC04B2B3A';
     if($demo)$backupPhase='AC04B2B4A';if($web)$backupPhase='AC04B2B4B';
     if($reports)$backupPhase='AC05B1';
+    if($reports&&$schemaProfile===Tests\Support\AccountingTestSchemaProfiles::CURRENT){Tests\Support\AccountingTestSchemaProfiles::verifyCurrentBackup();$backupPhase='AC05B3B2R';echo 'SCHEMA PROFILE: '.$schemaProfile.PHP_EOL;}
     $b=json_decode(file_get_contents($root.'/storage/app/private/'.strtolower($backupPhase).'-backup.json'),true,512,JSON_THROW_ON_ERROR);
     if(!str_starts_with($b['file'],'E:/salon-erp-backups/salon_erp_test_'.$backupPhase.'_')||!$b['source_unchanged']||$b['migrations']!==($backupPhase==='AC04B1'?80:($demo?82:81))||filesize($b['file'])!==$b['bytes']||hash_file('sha256',$b['file'])!==$b['sha256'])throw new RuntimeException('Nuevo respaldo inválido');
     if(!str_starts_with(file_get_contents($b['file'].'.sha256'),$b['sha256'].'  '))throw new RuntimeException('Sidecar inválido');

@@ -3,8 +3,8 @@
 ini_set('zend.exception_ignore_args','1');
 $root=dirname(__DIR__,2);$exit=1;
 try {
-    $phase=$argv[1]??'AC04B1';if(!in_array($phase,['AC04B1','AC04B2A','AC04B2B2R','AC04B2B3A','AC04B2B4A','AC04B2B4B','AC05B1','AC05B3B2'],true))throw new RuntimeException('Fase inválida');
-    $expectedMigrations=$phase==='AC04B1'?80:(in_array($phase,['AC04B2B4A','AC04B2B4B','AC05B1','AC05B3B2'],true)?82:81);
+    $phase=$argv[1]??'AC04B1';if(!in_array($phase,['AC04B1','AC04B2A','AC04B2B2R','AC04B2B3A','AC04B2B4A','AC04B2B4B','AC05B1','AC05B3B2','AC05B3B2R'],true))throw new RuntimeException('Fase inválida');
+    $expectedMigrations=$phase==='AC04B1'?80:(in_array($phase,['AC04B2B4A','AC04B2B4B','AC05B1','AC05B3B2','AC05B3B2R'],true)?82:81);
     if(PHP_VERSION!=='8.3.30'||realpath(getcwd())!==realpath($root))throw new RuntimeException('Raíz/PHP inválido');
     require $root.'/tests/bootstrap.php';
     if(SALON_TEST_DATABASE_RESET_ALLOWED)throw new RuntimeException('Reset debe estar deshabilitado');
@@ -20,7 +20,14 @@ try {
             $out[$name]=[count($rows),hash('sha256',implode('',$rows)),hash('sha256',$pdo->query("SHOW CREATE TABLE `$name`")->fetch(PDO::FETCH_NUM)[1])];
         }return $out;
     };
-    $before=$snapshot();$dir='E:/salon-erp-backups';if(str_replace('\\','/',realpath($dir))!==$dir)throw new RuntimeException('Directorio de respaldo inválido');
+    $before=$snapshot();
+    if($phase==='AC05B3B2R'){
+        $proof=json_decode(file_get_contents($root.'/storage/app/private/ac05b3b2r-verified-source.json'),true,512,JSON_THROW_ON_ERROR);
+        if(count($before)!==91||array_keys($before)!==array_keys($proof['metadata']['tables'])||array_sum(array_column($before,0))!==1963
+            ||$before['test_financial_presentation_drafts'][0]!==42||$before['test_financial_presentation_draft_audits'][0]!==48)throw new RuntimeException('Perfil R no coincide con evidencia previa');
+        foreach($before as $table=>$data)if($data[2]!==hash('sha256',$proof['metadata']['tables'][$table]))throw new RuntimeException('DDL R distinto de evidencia verificada');
+    }
+    $dir='E:/salon-erp-backups';if(str_replace('\\','/',realpath($dir))!==$dir)throw new RuntimeException('Directorio de respaldo inválido');
     $file=$dir.'/salon_erp_test_'.$phase.'_'.gmdate('Ymd_His').'_'.bin2hex(random_bytes(6)).'.sql';$partial=$file.'.partial';
     $h=fopen($partial,'xb');if(!$h)throw new RuntimeException('No se reservó archivo único');fclose($h);
     $args=['E:/laragon/bin/mysql/mysql-8.4.3-winx64/bin/mysqldump.exe','--no-defaults','--protocol=TCP','--host=127.0.0.1','--port=3306','--user=root','--skip-password',
