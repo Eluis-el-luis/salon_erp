@@ -9,7 +9,6 @@ use App\Models\Cliente;
 use App\Models\ClienteGrupo;
 use App\Models\ConsumoVenta;
 use App\Models\FormulaServicio;
-use App\Models\ServicioVariante;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
@@ -24,6 +23,7 @@ use App\Services\ComisionService;
 use App\Services\LibroPagosService;
 use App\Services\NotificationService;
 use App\Services\AgendaService;
+use App\Services\CarritoVentaService;
 use App\Traits\AutorizaPinSupervisor;
 use App\Traits\Notificable;
 
@@ -45,7 +45,7 @@ class VentaController extends Controller
         }
 
         $request->validate([
-            'discount' => 'nullable|numeric|min:0',
+            'discount' => CarritoVentaService::reglas()['discount'],
             'payment_method' => 'nullable|string|in:efectivo,bac,lafise',
             'currency' => 'nullable|string|in:nio,usd',
             'exchange_rate' => 'nullable|numeric|min:1',
@@ -56,9 +56,15 @@ class VentaController extends Controller
         try {
             $cita = app(AgendaService::class)->validarParaFacturar([(int)$id])->get((int)$id);
             $cita->load('servicio');
-            $subtotal = $cita->servicio->price;
-            $descuento = $request->discount ?? 0;
-            $total = $subtotal - $descuento;
+            if (!$cita->servicio || !$cita->servicio->is_active) {
+                throw new \App\Exceptions\ContabilidadException('El servicio no está disponible para venta.');
+            }
+            $totales = CarritoVentaService::totales(
+                CarritoVentaService::centavos($cita->servicio->getRawOriginal('price')), $request->discount ?? '0'
+            );
+            $subtotal = $totales['subtotal'];
+            $descuento = $totales['discount'];
+            $total = $totales['total'];
 
             // FLUJO DE PRE-APROBACIÓN: facturas sensibles (monto sobre el umbral
             // o flag explícito) se RETIENEN sin contabilidad, inventario, divisas
@@ -91,15 +97,15 @@ class VentaController extends Controller
             $cantidadEstilistas = $estilistas->count();
 
             if ($cantidadEstilistas > 0) {
-                $precioPorEstilista = round($cita->servicio->price / $cantidadEstilistas, 2);
-                foreach ($estilistas as $estilista) {
+                $precios = CarritoVentaService::repartir(CarritoVentaService::centavos($subtotal), $cantidadEstilistas);
+                foreach ($estilistas->values() as $posicion => $estilista) {
                     \App\Models\DetalleVenta::create([
                         'sale_id' => $venta->id,
                         'service_id' => $cita->service_id,
                         'item_id' => null,
                         'stylist_id' => $estilista->id,
                         'quantity' => 1,
-                        'unit_price' => $precioPorEstilista,
+                        'unit_price' => \App\Support\InventoryDecimal::text($precios[$posicion]),
                     ]);
                 }
             } else {
@@ -110,7 +116,7 @@ class VentaController extends Controller
                     'item_id' => null,
                     'stylist_id' => null,
                     'quantity' => 1,
-                    'unit_price' => $cita->servicio->price,
+                    'unit_price' => $subtotal,
                 ]);
             }
 
@@ -208,15 +214,8 @@ class VentaController extends Controller
         }
 
         try { $request->validate([
-            'cart' => 'required|array',
-            // nullable: si el POS omite el descuento, se aplica el % del grupo del cliente
-            'discount' => 'nullable|numeric|min:0',
-            'cart.*.variant_id' => 'nullable|integer',
+            ...CarritoVentaService::reglas(),
             'cart.*.appointment_id' => 'nullable|integer|exists:appointments,id',
-            // BOM DINÁMICO: consumo real editado por recepción antes de facturar
-            'cart.*.consumo' => 'nullable|array',
-            'cart.*.consumo.*.item_id' => 'required|integer|exists:items,id',
-            'cart.*.consumo.*.cantidad' => 'required|numeric|min:0',
             // PAGOS MIXTOS: arreglo de pagos. Si no viene, se usa el pago único legacy.
             'payments' => 'nullable|array',
             'payments.*.metodo' => 'required|in:efectivo,bac,lafise',
@@ -281,18 +280,13 @@ class VentaController extends Controller
             }
             if ($accion !== 'cotizar') app(AgendaService::class)->validarParaFacturar($citasValidadas);
             else app(AgendaService::class)->validarVinculosDocumentales($citasValidadas);
-            $subtotal = collect($request->cart)->sum(function($item) {
-                return $item['precio_c'] * $item['quantity'];
-            });
-
-            // FIDELIZACIÓN: si el POS no envía descuento manual, se aplica el %
-            // del grupo del cliente (VIP/Mayorista). Con descuento explícito,
-            // manda el capturado en pantalla.
-            $descuento = $request->filled('discount')
-                ? (float) $request->discount
-                : $this->descuentoPorGrupo($request->client_id, $subtotal);
-
-            $total = $subtotal - $descuento;
+            $preparado = app(CarritoVentaService::class)->preparar(
+                $request->cart, $request->input('discount'), $request->client_id ? (int) $request->client_id : null
+            );
+            $cart = $preparado['cart'];
+            $subtotal = $preparado['subtotal'];
+            $descuento = $preparado['discount'];
+            $total = $preparado['total'];
 
             // FLUJO DE PRE-APROBACIÓN: ventas de mostrador sensibles (monto sobre
             // el umbral de config('salon.aprobaciones') o flag explícito) creadas
@@ -323,7 +317,7 @@ class VentaController extends Controller
                 }
             }
 
-            $appointmentId = collect($request->cart)->pluck('appointment_id')->filter()->first();
+            $appointmentId = collect($cart)->pluck('appointment_id')->filter()->first();
 
             if ($request->draft_id) {
                 // Transformar una cotización guardada: se reutiliza el MISMO documento
@@ -343,6 +337,10 @@ class VentaController extends Controller
                 if(\App\Services\CapturaConsumoService::activa())foreach($venta->detalles as $d) {
                     if(($d->consumption_snapshot['version']??null)!==2)throw new \App\Exceptions\ContabilidadException('Cotización heredada sin composición verificable: requiere conciliación.');
                 }
+            }
+            // Conservar venta -> usuarios/artículos al editar borradores, sin escribir antes de validar.
+            $composiciones = (new InventarioService)->bloquearCarrito($cart);
+            if ($request->draft_id) {
                 $venta->detalles()->delete();
                 $venta->update([
                     'client_id' => $request->client_id,
@@ -373,25 +371,10 @@ class VentaController extends Controller
             }
 
             $detallesCreados = [];
-            $composiciones=(new InventarioService)->bloquearCarrito($request->cart);
-
-            foreach ($request->cart as $index => $cartItem) {
+            foreach ($cart as $index => $cartItem) {
                 $esServicio = $cartItem['type'] === 'servicio';
 
-                // VARIANTES DE PRECIO: validar que la variante pertenezca al
-                // servicio facturado (no confiar en el payload del navegador).
-                $variantId = null;
-                if ($esServicio && !empty($cartItem['variant_id'])) {
-                    $variante = ServicioVariante::find($cartItem['variant_id']);
-
-                    if (!$variante || (int) $variante->service_id !== (int) $cartItem['id']) {
-                        throw new \App\Exceptions\ContabilidadException(
-                            'La variante seleccionada no pertenece al servicio facturado.'
-                        );
-                    }
-
-                    $variantId = $variante->id;
-                }
+                $variantId = $cartItem['variant_id'];
 
                 $detallesCreados[$index] = \App\Models\DetalleVenta::create([
                     'sale_id' => $venta->id,
@@ -410,7 +393,7 @@ class VentaController extends Controller
 
             // BOM DINÁMICO: persistir el consumo real editado por recepción
             // (fuente de verdad del descuento de inventario y su reversión).
-            $this->registrarConsumosReales($request->cart, $detallesCreados,$composiciones);
+            $this->registrarConsumosReales($cart, $detallesCreados,$composiciones);
 
             $venta->load('detalles');
 
@@ -495,6 +478,9 @@ class VentaController extends Controller
                 'notificaciones' => $notificaciones,
             ], 201);
 
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            DB::rollBack();
+            return response()->json(['message' => 'Revise los datos de la venta.', 'errors' => $e->errors()], 422);
         } catch (\App\Exceptions\ContabilidadException $e) {
             \Illuminate\Support\Facades\DB::rollBack();
             Log::warning('Venta rechazada por regla contable', ['exception' => $e->getMessage()]);
@@ -528,23 +514,6 @@ class VentaController extends Controller
             ->paginate(20);
 
         return view('sales.mis-aprobaciones', compact('misVentasPendientes'));
-    }
-
-    /**
-     * FIDELIZACIÓN (Fase 1): descuento automático por grupo del cliente
-     * (VIP/Mayorista) sobre el subtotal. Solo aplica cuando el POS NO envía
-     * un descuento explícito; el descuento capturado en pantalla manda.
-     */
-    private function descuentoPorGrupo($clientId, float $subtotal): float
-    {
-        if (!$clientId) {
-            return 0.0;
-        }
-
-        $cliente = Cliente::find($clientId);
-        $porcentaje = (float) ($cliente?->grupo?->discount_percent ?? 0);
-
-        return $porcentaje > 0 ? round($subtotal * $porcentaje / 100, 2) : 0.0;
     }
 
     /**

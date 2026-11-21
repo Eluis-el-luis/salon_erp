@@ -105,6 +105,9 @@ class AprobacionService
                 );
             }
 
+            // No recalcular tarifas históricas: validar cantidades e importes guardados antes de efectos.
+            app(CarritoVentaService::class)->validarDocumento($venta);
+
             // 1. Inventario físico (insumos por fórmula + productos)
             (new InventarioService)->descontarPorVenta($venta);
 

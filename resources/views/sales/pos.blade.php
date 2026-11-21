@@ -562,8 +562,10 @@
                         .split(',').map(Number).filter(n => n > 0);
 
                     if (stylistIds.length > 0) {
-                        const precioPorEstilista = Math.round((price / stylistIds.length) * 100) / 100;
-                        stylistIds.forEach(sid => this.cart.push({ ...base, precio_c: precioPorEstilista, stylist_id: sid }));
+                        const centavos = Math.round(price * 100);
+                        stylistIds.forEach((sid, index) => this.cart.push({ ...base,
+                            precio_c: (Math.floor(centavos / stylistIds.length) + (index < centavos % stylistIds.length ? 1 : 0)) / 100,
+                            stylist_id: sid }));
                     } else {
                         this.cart.push({ ...base, precio_c: price });
                     }
