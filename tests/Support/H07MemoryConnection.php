@@ -19,7 +19,7 @@ final class H07MemoryConnection extends MySqlConnection
     {
         parent::__construct(fn () => throw new \LogicException('PDO prohibido: H07 es puro.'), 'h07-memory-only', '', ['name' => 'mysql']);
         foreach (['employees', 'users', 'salary_structures', 'salary_structure_details', 'salary_slips',
-            'payroll_runs', 'salary_slip_details', 'payrolls', 'attendances', 'leave_applications',
+            'payroll_runs', 'salary_slip_details', 'payrolls', 'attendances', 'leave_applications', 'leave_types',
             'comisiones_generadas', 'tips', 'adelanto_cuotas', 'adelantos', 'asientos_contables', 'detalle_asientos'] as $table) {
             $this->rows[$table] = [];
         }
@@ -68,6 +68,17 @@ final class H07MemoryConnection extends MySqlConnection
         if (str_contains($query, 'SUM(debe)')) {
             return [(object)['total_debe' => array_sum(array_column($rows, 'debe')),
                 'total_haber' => array_sum(array_column($rows, 'haber')) + ($this->unbalancedAggregate ? 0.01 : 0)]];
+        }
+        // El doble también debe respetar el orden SQL de cuotas y conceptos.
+        if (preg_match('/ order by (.*?)(?: limit | for update|$)/', $query, $order)) {
+            preg_match_all('/`(?:[a-z_]+`\.)?([a-z_]+)` (asc|desc)/', $order[1], $columns, PREG_SET_ORDER);
+            usort($rows, function ($a, $b) use ($columns) {
+                foreach ($columns as $column) {
+                    $result = ($a[$column[1]] ?? null) <=> ($b[$column[1]] ?? null);
+                    if ($result) return $column[2] === 'asc' ? $result : -$result;
+                }
+                return 0;
+            });
         }
         if (str_contains($query, 'limit 1')) $rows = array_slice($rows, 0, 1);
         return array_map(fn ($r) => (object)$r, array_values($rows));

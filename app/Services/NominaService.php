@@ -46,6 +46,16 @@ use Throwable;
  */
 class NominaService
 {
+    // Dependencias económicas; `orden` pertenece exclusivamente a la presentación.
+    private const ORDEN_CALCULO = [
+        // Ingresos: base gravada completa (propinas permanecen excluidas de esa base).
+        'salario_base' => 10, 'comisiones' => 20, 'propinas' => 30, 'horas_extras' => 40,
+        // Retenciones sobre la misma base vigente; luego las demás deducciones estructurales.
+        'inss' => 100, 'ir' => 110, 'sin_goce' => 120, 'tardanzas' => 130,
+        // Disponible definitivo, después de todos los ingresos y deducciones estructurales.
+        'adelantos' => 140,
+    ];
+
     public function __construct(protected ContabilidadService $contabilidad) {}
 
     // =====================================================================
@@ -443,7 +453,7 @@ class NominaService
         }
 
         // ------------------------------------------------------------------
-        // Recorrido de la ESTRUCTURA SALARIAL (una sola pasada, por orden)
+        // Recorrido por dependencias económicas, independiente del orden visual.
         // ------------------------------------------------------------------
         $lineas = [];
         $amortizaciones = [];
@@ -467,7 +477,10 @@ class NominaService
 
         $deduccionesAcumuladas = 0.0;
 
-        foreach ($estructura->detalles->where('activo', true)->sortBy('orden') as $detalle) {
+        // H08 ya comprobó que solo estén presentes calculadoras reconocidas, sin duplicados.
+        $detallesCalculo = $estructura->detalles->where('activo', true)
+            ->sortBy(fn ($detalle) => self::ORDEN_CALCULO[$detalle->calculadora]);
+        foreach ($detallesCalculo as $detalle) {
             switch ($detalle->calculadora) {
                 case 'salario_base':
                     $agregarIngresoGravado('SAL_BASE', 'Salario base del período', 'estructura', $salarioBase, (int) $detalle->orden);
@@ -617,6 +630,9 @@ class NominaService
         }
 
         $netoPagar = round($totalIngresos - $totalDeducciones, 2);
+
+        // La previsualización y la persistencia conservan el orden elegido para la colilla.
+        $lineas = collect($lineas)->sortBy('orden')->values()->all();
 
         return [
             'empleado' => $empleado,
