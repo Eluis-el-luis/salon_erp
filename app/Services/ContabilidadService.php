@@ -11,6 +11,7 @@ use App\Models\DetalleAsiento;
 use App\Models\FacturaCompra;
 use App\Models\Servicio;
 use App\Models\StockLedger;
+use App\Support\InventoryDecimal as D;
 use Carbon\Carbon;
 use Exception;
 use Illuminate\Support\Facades\DB;
@@ -1512,51 +1513,22 @@ class ContabilidadService
      */
     public function contabilizarColillaNomina($colilla, string $metodoPago = 'banco'): int
     {
+        $detalles = $colilla->detalles()->get();
+        // Misma política HRMS, con cobertura exhaustiva y autoridad monetaria en centavos.
+        $resumen = ConciliacionNomina::resumir($detalles, [
+            'total_ingresos' => $colilla->total_ingresos,
+            'total_deducciones' => $colilla->total_deducciones,
+            'neto_pagar' => $colilla->neto_pagar,
+        ]);
         $periodo = $this->resolverPeriodo(now());
         $monedaBase = $this->getMonedaBaseId();
-
-        $detalles = $colilla->detalles()->get();
-
-        $sueldosExtras = round($detalles
-            ->where('tipo', 'ingreso')
-            ->whereIn('codigo', ['SAL_BASE', 'HORAS_EXT'])
-            ->sum('monto'), 2);
-
-        $comisiones = round($detalles->where('tipo', 'ingreso')->where('codigo', 'COM_VENT')->sum('monto'), 2);
-        $propinas = round($detalles->where('tipo', 'ingreso')->where('codigo', 'PROPINAS')->sum('monto'), 2);
-
-        $retenciones = round($detalles
-            ->where('tipo', 'deduccion')
-            ->whereIn('codigo', ['INSS', 'IR'])
-            ->sum('monto'), 2);
-
-        $adelantos = round($detalles->where('tipo', 'deduccion')->where('codigo', 'ADELANTOS')->sum('monto'), 2);
-
-        // Las ausencias sin goce y las tardanzas reducen el GASTO real incurrido
-        $ajustesGasto = round($detalles
-            ->where('tipo', 'deduccion')
-            ->whereIn('codigo', ['SIN_GOCE', 'TARDANZAS'])
-            ->sum('monto'), 2);
-
-        $gastoSueldos = round(max(0, $sueldosExtras - $ajustesGasto), 2);
-
-        // Déficit laboral: si las retenciones + adelantos superan el devengado no
-        // propinas, la diferencia se absorbe del dinero custodiado (DEBE caja) y
-        // el colaborador recibe la diferencia desde la bóveda de propinas.
-        $deficitLaboral = round($adelantos + $retenciones - $gastoSueldos - $comisiones, 2);
-
-        // La custodia se libera COMPLETA (el pasivo 2.1.6 se extingue íntegro):
-        // una parte va al colaborador y, si hay déficit, la diferencia vuelve a caja.
-        $haberCustodia = $propinas;
-        $absorcionCaja = 0.0;
-        $haberFondo = 0.0;
-
-        if ($deficitLaboral > 0) {
-            $absorcionCaja = min($deficitLaboral, $propinas); // defensa: nunca exceder la custodia
-            $haberFondo = 0.0;
-        } else {
-            $haberFondo = round($gastoSueldos + $comisiones - $adelantos - $retenciones, 2);
-        }
+        $gastoSueldos = D::text($resumen['sueldos']);
+        $comisiones = D::text($resumen['comisiones']);
+        $propinas = $haberCustodia = D::text($resumen['propinas']);
+        $retenciones = D::text($resumen['retenciones']);
+        $adelantos = D::text($resumen['adelantos']);
+        $absorcionCaja = D::text($resumen['absorcion']);
+        $haberFondo = D::text($resumen['fondo']);
 
         $cuentaFondo = ($metodoPago === 'efectivo')
             ? $this->getCuentaIdByCodigo('1.1.1')
@@ -1641,6 +1613,11 @@ class ContabilidadService
                 ]);
             }
 
+            $cuentas = ['fondo' => $cuentaFondo];
+            foreach (ConciliacionNomina::asientoEsperado($resumen) as $codigo => $importe) {
+                if ($codigo !== 'fondo') $cuentas[$codigo] = $this->getCuentaIdByCodigo($codigo);
+            }
+            ConciliacionNomina::validarAsiento($resumen, $asiento->detalles()->get(), $cuentas, $monedaBase);
             $this->validarCuadre($asiento->id);
             DB::commit();
         } catch (\Throwable $e) {

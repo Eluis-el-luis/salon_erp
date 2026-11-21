@@ -14,6 +14,7 @@ use App\Models\EstructuraSalarial;
 use App\Models\Nomina;
 use App\Models\Propina;
 use App\Models\Usuario;
+use App\Support\InventoryDecimal as D;
 use Carbon\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -204,6 +205,7 @@ class NominaService
 
         foreach ($empleados->sortBy('codigo_empleado') as $empleado) {
             $data = $this->calcularColilla($empleado, $inicio, $fin, $estructuraId, $bloquear);
+            ConciliacionNomina::resumir($data['lineas'], $data);
             $colillas[] = $data;
 
             $totales['ingresos'] += $data['total_ingresos'];
@@ -379,12 +381,17 @@ class NominaService
             throw new \Exception("El colaborador {$empleado->codigo_empleado} no tiene estructura salarial asignada.");
         }
 
+        ConciliacionNomina::validarEstructura($estructura->detalles);
+
         $usuario = $empleado->usuario;
         $usuarioId = $usuario?->id;
 
         $salarioBase = (float) $empleado->salario_base;
         if ($salarioBase == 0.0 && $usuario) {
             $salarioBase = (float) $usuario->salario_fijo; // retrocompatibilidad
+        }
+        if (! is_finite($salarioBase) || $salarioBase < 0) {
+            throw new \App\Exceptions\ContabilidadException('Salario base negativo o inválido.');
         }
         $salarioBase = round($salarioBase, 2);
 
@@ -445,6 +452,9 @@ class NominaService
         $baseGravada = 0.0;   // Base para INSS/IR (salario + extras + comisiones; NUNCA propinas)
 
         $agregarIngresoGravado = function (string $codigo, string $concepto, string $fuente, float $monto, int $orden) use (&$lineas, &$baseGravada) {
+            if (! is_finite($monto) || $monto < 0) {
+                throw new \App\Exceptions\ContabilidadException('Importe salarial negativo o inválido: '.$codigo.'.');
+            }
             $monto = round($monto, 2);
             if ($monto > 0) {
                 $lineas[] = ['tipo' => 'ingreso', 'codigo' => $codigo, 'concepto' => $concepto, 'fuente' => $fuente, 'monto' => $monto, 'orden' => $orden];
@@ -470,6 +480,7 @@ class NominaService
                             ->whereBetween('fecha', [$inicio->copy()->startOfDay(), $fin->copy()->endOfDay()])
                             ->where('estado', 'pendiente');
                         $comisiones = $bloquear ? $query->lockForUpdate()->get() : $query->get();
+                        foreach ($comisiones as $comision) D::scaled($comision->monto_comision);
                         $comisionesIds = $comisiones->pluck('id')->all();
                         $agregarIngresoGravado('COM_VENT', 'Comisiones de ventas (congeladas)', 'comisiones', (float) $comisiones->sum('monto_comision'), (int) $detalle->orden);
                     }
@@ -481,6 +492,7 @@ class NominaService
                         ->whereBetween('fecha', [$inicio->toDateString(), $fin->toDateString()])
                         ->where('estado', 'pendiente');
                     $propinas = $bloquear ? $query->lockForUpdate()->get() : $query->get();
+                    foreach ($propinas as $propina) D::scaled($propina->monto);
                     $propinasIds = $propinas->pluck('id')->all();
                     $montoPropinas = round((float) $propinas->sum('monto'), 2);
                     if ($montoPropinas > 0) {

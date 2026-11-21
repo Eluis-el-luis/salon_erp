@@ -13,6 +13,7 @@ final class H07MemoryConnection extends MySqlConnection
     public array $snapshots = [];
     public ?string $failAfterInsert = null;
     public bool $unbalancedAggregate = false;
+    public ?\Closure $afterInsert = null;
 
     public function __construct()
     {
@@ -119,6 +120,7 @@ final class H07MemoryConnection extends MySqlConnection
         $row['id'] = $this->lastInsertId = ($this->rows[$table] ? max(array_keys($this->rows[$table])) : 0) + 1;
         $this->rows[$table][$row['id']] = $row;
         $this->trace[] = 'insert:'.$table;
+        if ($this->afterInsert) ($this->afterInsert)($this, $table, $row);
         if ($table === $this->failAfterInsert) throw new \Error('h07.after.'.$table);
         return true;
     }
