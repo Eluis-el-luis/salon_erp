@@ -196,7 +196,8 @@ class AgendaService
     private function exigirEjecucionFacturable(int $id, ?int $ventaActual = null): void
     {
         if ($this->ejecucionBloqueada($id)) throw new ContabilidadException('Esta ejecución ya fue prestada y su venta anulada sin restitución. No admite otra facturación ordinaria ni un segundo consumo.');
-        if (CapturaConsumoService::activa() && Venta::where('appointment_id',$id)->whereIn('status',Venta::ESTADOS_DEVENGADOS)
+        // El vínculo comercial existe también en legacy; no depende de activar inventario V2.
+        if (Venta::where('appointment_id',$id)->whereIn('status',Venta::ESTADOS_DEVENGADOS)
             ->when($ventaActual !== null, fn ($q) => $q->where('id','<>',$ventaActual))->orderBy('id')->lockForUpdate()->first(['id'])) {
             throw new ContabilidadException('Esta ejecución ya tiene una venta aplicada. No admite otro documento ni un segundo consumo.');
         }

@@ -44,12 +44,26 @@ class VentaController extends Controller
             return response()->json(['error' => 'ACCESO DENEGADO: Por seguridad, debes abrir tu turno de caja antes de facturar esta cita.'], 403);
         }
 
+        $finito = function ($atributo, $valor, $fallar) {
+            if (!is_numeric($valor) || !is_finite((float)$valor)) $fallar('El importe o tasa debe ser finito.');
+        };
         $request->validate([
             'discount' => CarritoVentaService::reglas()['discount'],
             'payment_method' => 'nullable|string|in:efectivo,bac,lafise',
             'currency' => 'nullable|string|in:nio,usd',
             'exchange_rate' => 'nullable|numeric|min:1',
+            'payments' => 'nullable|array|list',
+            'payments.*.metodo' => 'required|in:efectivo,bac,lafise',
+            'payments.*.moneda' => 'required|in:nio,usd',
+            'payments.*.monto' => ['required', 'numeric', 'min:0.01', $finito],
+            'payments.*.tasa' => ['required', 'numeric', 'min:1', $finito],
+            'change_currency' => 'nullable|in:nio,usd',
         ]);
+
+        // El total del servicio es NIO, no una declaración de dólares recibidos.
+        if ($request->currency === 'usd' && ! $request->input('payments')) {
+            return response()->json(['error' => 'Para cobrar USD indique payments con el importe realmente recibido y su tasa, o utilice el POS.'], 422);
+        }
 
         \Illuminate\Support\Facades\DB::beginTransaction();
 
@@ -65,6 +79,11 @@ class VentaController extends Controller
             $subtotal = $totales['subtotal'];
             $descuento = $totales['discount'];
             $total = $totales['total'];
+            $pagosRaw = $request->input('payments') ?: [[
+                'metodo' => $request->payment_method ?? 'efectivo', 'moneda' => 'nio',
+                'monto' => $total, 'tasa' => 1,
+            ]];
+            $primario = $pagosRaw[0];
 
             // FLUJO DE PRE-APROBACIÓN: facturas sensibles (monto sobre el umbral
             // o flag explícito) se RETIENEN sin contabilidad, inventario, divisas
@@ -83,9 +102,9 @@ class VentaController extends Controller
                 'total' => $total > 0 ? $total : 0,
                 
                 // NUEVOS CAMPOS ADAPTADOS (sin tasa fija: se valida desde el request)
-                'currency' => $request->currency ?? 'nio',
-                'exchange_rate' => $request->currency === 'usd' ? ($request->exchange_rate ?? 1.00) : 1.00,
-                'payment_method' => $request->payment_method ?? 'efectivo',
+                'currency' => $primario['moneda'],
+                'exchange_rate' => $primario['tasa'],
+                'payment_method' => $primario['metodo'],
                 'appointment_id' => $cita->id,
                 
                 'status' => $requiereAprobacion ? \App\Models\Venta::ESTADO_PENDIENTE_APROBACION : \App\Models\Venta::ESTADO_PAGADA
@@ -128,13 +147,8 @@ class VentaController extends Controller
             // el inventario se descuenta y el asiento se genera al aprobar.
             if ($requiereAprobacion) {
                 $venta->update(['payload_aprobacion' => [
-                    'payments' => [[
-                        'metodo' => $venta->payment_method,
-                        'moneda' => $venta->currency,
-                        'monto' => (float) $venta->total,
-                        'tasa' => (float) $venta->exchange_rate,
-                    ]],
-                    'change_currency' => null,
+                    'payments' => $pagosRaw,
+                    'change_currency' => $request->input('change_currency'),
                 ]]);
 
                 // NOTIFICACIÓN: venta de cita pendiente de aprobación (usa trait Notificable)
@@ -156,19 +170,10 @@ class VentaController extends Controller
             // Consumo de insumos fraccionados del servicio facturado (fórmulas)
             (new InventarioService())->descontarPorVenta($venta);
 
-            // Multimoneda: factura de servicio cobrada en USD en efectivo aumenta el inventario de dólares
-            if (($venta->currency === 'usd' || $venta->currency === 'dolar') && $venta->payment_method === 'efectivo') {
-                $cajaActiva = SesionCaja::where('user_id', auth()->id())->where('estado', 'abierta')->first();
-                if ($cajaActiva) {
-                    (new DivisaService())->ingresarDivisas(
-                        'USD',
-                        'App\Models\SesionCaja',
-                        $cajaActiva->id,
-                        (float) $venta->total,
-                        (float) $venta->exchange_rate
-                    );
-                }
-            }
+            // Mismo libro y movimiento de divisas que POS/aprobación; total siempre NIO.
+            app(LibroPagosService::class)->registrar($venta, (float) $total, $pagosRaw,
+                (float) $primario['tasa'], $request->input('change_currency'));
+            $venta->load('pagos');
 
             $contabilidad = new \App\Services\ContabilidadService();
             $contabilidad->contabilizarVenta($venta);
@@ -332,6 +337,10 @@ class VentaController extends Controller
                     throw new \App\Exceptions\ContabilidadException(
                         'El documento #' . $venta->id . ' ya fue procesado y no puede reutilizarse como cotización.'
                     );
+                }
+
+                if ($venta->appointment_id && (int)$appointmentId !== (int)$venta->appointment_id) {
+                    throw new \App\Exceptions\ContabilidadException('La cotización vinculada debe conservar su cita en el carrito. No se puede facturar otro contenido dejando ese vínculo en la cabecera.');
                 }
 
                 if(\App\Services\CapturaConsumoService::activa())foreach($venta->detalles as $d) {
