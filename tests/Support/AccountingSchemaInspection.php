@@ -2,7 +2,6 @@
 
 namespace Tests\Support;
 
-use App\Services\FinancialPresentationContractValidator;
 use PDO;
 use RuntimeException;
 
@@ -68,29 +67,12 @@ final class AccountingSchemaInspection
             $drafts = $pdo->query('SELECT * FROM test_financial_presentation_drafts ORDER BY id')->fetchAll(PDO::FETCH_ASSOC);
             $audits = $pdo->query('SELECT * FROM test_financial_presentation_draft_audits ORDER BY draft_id,revision')->fetchAll(PDO::FETCH_ASSOC);
             if (count($drafts) !== 42 || count($audits) !== 48) throw new RuntimeException('Synthetic row counts changed.');
-            $validator = new FinancialPresentationContractValidator; $used = [];
+            $used = [];
             foreach ($drafts as $d) {
-                $v = $validator->validate(json_decode($d['canonical_content'],true,512,JSON_THROW_ON_ERROR));
-                $p = json_decode($d['provenance'],true,512,JSON_THROW_ON_ERROR);
-                if ($v['hash'] !== $d['content_hash'] || $v['canonical_json'] !== $d['canonical_content']
-                    || $d['purpose'] !== 'simulation' || $d['origin'] !== 'synthetic_fixture' || $d['installation_scope'] !== 'TEST-FIXTURE-ONLY'
-                    || $d['status'] !== 'draft' || $v['canonical_content']['author'] !== 'SYNTHETIC:executor_'.$d['actor_id']
-                    || $v['canonical_content']['family_uuid'] !== $d['family_uuid'] || $v['canonical_content']['version_number'] !== (int)$d['version_number']
-                    || ($p['contract']??null) !== SyntheticPresentationHarness::CONTRACT || ($p['synthetic']??null) !== true
-                    || ($p['actor_selection']??null) !== 'first_active_accounting_harness_actor') throw new RuntimeException('Draft integrity changed.');
-                $history = array_values(array_filter($audits,fn($a)=>(int)$a['draft_id']===(int)$d['id'])); $previous = null;
-                foreach ($history as $index=>$a) {
-                    $av = $validator->validate(json_decode($a['after_content'],true,512,JSON_THROW_ON_ERROR));
-                    if ((int)$a['revision'] !== $index+1 || (int)$a['expected_revision'] !== $index || $a['event'] !== ($index===0?'created':'revised')
-                        || (int)$a['actor_id'] !== (int)$d['actor_id'] || $av['hash'] !== $a['after_hash'] || $av['canonical_json'] !== $a['after_content']
-                        || $a['before_hash'] !== ($previous['after_hash']??null) || $a['before_content'] !== ($previous['after_content']??null)
-                        || ($index===0 && $a['request_uuid'] !== $d['document_uuid'])) throw new RuntimeException('Audit chain changed.');
-                    foreach (['family_uuid','version_number','purpose','origin','installation_scope','author','prepared_at'] as $field) {
-                        if ($av['canonical_content'][$field] !== $v['canonical_content'][$field]) throw new RuntimeException('Audit identity changed.');
-                    }
-                    $used[$a['id']] = true; $previous = $a;
-                }
-                if (!$previous || count($history) !== (int)$d['revision'] || $previous['after_hash'] !== $d['content_hash'] || $previous['after_content'] !== $d['canonical_content']) throw new RuntimeException('Audit coverage changed.');
+                if ($d['status'] !== 'draft') throw new RuntimeException('Expected preserved draft state.');
+                $history = array_values(array_filter($audits, fn($a)=>(int)$a['draft_id']===(int)$d['id']));
+                (new \App\Services\SyntheticPresentationDraftIntegrity)->verify($d, $history, (int)$d['actor_id']);
+                foreach ($history as $a) $used[$a['id']] = true;
             }
             if (count($used) !== count($audits)) throw new RuntimeException('Orphan audit.');
             $prepared = $pdo->query('SELECT * FROM accounting_event_operations WHERE id=131')->fetch(PDO::FETCH_ASSOC);

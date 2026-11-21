@@ -112,30 +112,10 @@ final class SyntheticFinancialPresentationDraftRepository
 
     private function verified(array $row): array
     {
-        $r = $this->validate(json_decode($row['canonical_content'], true, 512, JSON_THROW_ON_ERROR));
-        $p = json_decode($row['provenance'], true, 512, JSON_THROW_ON_ERROR);
-        $expectedProvenance = ['contract'=>SyntheticPresentationHarness::CONTRACT,'synthetic'=>true,'actor_selection'=>'first_active_accounting_harness_actor'];
-        ksort($p); ksort($expectedProvenance);
-        if ((int)$row['actor_id'] !== $this->actor || $row['purpose'] !== 'simulation' || $row['origin'] !== 'synthetic_fixture'
-            || $row['installation_scope'] !== 'TEST-FIXTURE-ONLY' || !in_array($row['status'], ['draft','frozen_simulation'], true)
-            || $p !== $expectedProvenance
-            || $r['hash'] !== $row['content_hash'] || $r['canonical_json'] !== $row['canonical_content']
-            || $r['canonical_content']['family_uuid'] !== $row['family_uuid'] || $r['canonical_content']['version_number'] !== (int)$row['version_number']) throw new DomainException('document.integrity');
+        $integrity = new SyntheticPresentationDraftIntegrity;
+        $integrity->header($row, $this->actor); // Preserve validation before the audit lock.
         $history = $this->query('SELECT * FROM test_financial_presentation_draft_audits WHERE draft_id=? ORDER BY revision FOR UPDATE', [$row['id']])->fetchAll(PDO::FETCH_ASSOC);
-        $previous = null;
-        foreach ($history as $index => $a) {
-            $after = $this->validate(json_decode($a['after_content'], true, 512, JSON_THROW_ON_ERROR));
-            foreach (['family_uuid','version_number','purpose','origin','installation_scope','author','prepared_at'] as $field) {
-                if ($after['canonical_content'][$field] !== $r['canonical_content'][$field]) throw new DomainException('audit.identity_changed');
-            }
-            if ((int)$a['actor_id'] !== $this->actor || (int)$a['revision'] !== $index + 1 || (int)$a['expected_revision'] !== $index
-                || $a['event'] !== ($index === 0 ? 'created' : 'revised') || $after['hash'] !== $a['after_hash']
-                || $after['canonical_json'] !== $a['after_content'] || $a['before_content'] !== ($previous['after_content'] ?? null)
-                || $a['before_hash'] !== ($previous['after_hash'] ?? null)) throw new DomainException('audit.integrity');
-            if ($index === 0 && $a['request_uuid'] !== $row['document_uuid']) throw new DomainException('audit.creation_identity');
-            $previous = $a;
-        }
-        if (!$previous || count($history) !== (int)$row['revision'] || $previous['after_hash'] !== $row['content_hash'] || $previous['after_content'] !== $row['canonical_content']) throw new DomainException('audit.incomplete');
+        $integrity->verify($row, $history, $this->actor);
         return $history;
     }
 
