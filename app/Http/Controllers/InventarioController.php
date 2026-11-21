@@ -255,7 +255,7 @@ class InventarioController extends Controller
             DB::commit();
 
             return back()->with('success', 'Saldo de apertura registrado en el kárdex.');
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             DB::rollBack();
             Log::error('Error al registrar apertura de kárdex', ['exception' => $e->getMessage()]);
 

@@ -207,6 +207,8 @@ class StockLedger extends Model
         if (\Illuminate\Support\Facades\DB::transactionLevel() === 0) {
             throw new \LogicException('La apertura heredada requiere una transacción y el mutex del artículo.');
         }
+        // La FK del movimiento exige usuario antes de artículo/lotes, igual que H02.
+        app(\App\Services\InventarioService::class)->bloquearUsuarios([$usuarioId ?? auth()->id()]);
         // Misma semántica heredada, con lectura actual. No usar la copia previa
         // al bloqueo para decidir versión, cantidades o ausencia de movimientos.
         $articulo = Articulo::whereKey($articulo->getKey())->lockForUpdate()->firstOrFail();

@@ -31,6 +31,7 @@ class MermaController extends Controller
             'motivo' => 'required|string|max:255',
         ]);
 
+        $nivelInicial = DB::transactionLevel();
         DB::beginTransaction();
 
         try {
@@ -74,11 +75,12 @@ class MermaController extends Controller
 
             return back()->with('success', 'Merma registrada y contabilizada correctamente.');
         } catch (ContabilidadException $e) {
-            DB::rollBack();
+            DB::rollBack($nivelInicial);
 
             return back()->withErrors(['error' => $e->getMessage()]);
-        } catch (\Exception $e) {
-            DB::rollBack();
+        } catch (\Throwable $e) {
+            // Incluye niveles internos que un Error contable haya dejado abiertos.
+            DB::rollBack($nivelInicial);
             Log::error('Error al registrar merma de inventario', [
                 'exception' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
