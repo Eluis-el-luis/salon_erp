@@ -159,9 +159,9 @@ class PanelController extends Controller
             'total' => (float) $venta->total,
             'items' => $venta->detalles->map(function ($d) {
                 return [
-                    'producto' => trim(($d->servicio?->name ?? $d->articulo?->producto ?? 'Ítem')
+                    'producto' => $d->performance_key ? $d->nombreComercial() : trim(($d->servicio?->name ?? $d->articulo?->producto ?? 'Ítem')
                         .($d->variante ? ' ('.$d->variante->name.')' : '')),
-                    'estilista' => $d->estilista?->name,
+                    'estilista' => $d->performance_key ? $d->participantes->map(fn ($p) => $p->usuario?->name)->implode(', ') : $d->estilista?->name,
                     'cantidad' => (int) $d->quantity,
                     'precio' => (float) $d->unit_price,
                     'subtotal' => round((float) $d->quantity * (float) $d->unit_price, 2),

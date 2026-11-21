@@ -24,6 +24,7 @@ use App\Services\LibroPagosService;
 use App\Services\NotificationService;
 use App\Services\AgendaService;
 use App\Services\CarritoVentaService;
+use App\Services\PrestacionCompartidaService;
 use App\Traits\AutorizaPinSupervisor;
 use App\Traits\Notificable;
 
@@ -34,6 +35,7 @@ class VentaController extends Controller
     public function __construct(private NotificationService $notifications) {}
     public function facturarCita(Request $request, $id)
     {
+        if (PrestacionCompartidaService::solicitada($request->all())) return $this->facturarCompartida($request, (int)$id);
         \Illuminate\Support\Facades\Log::info('facturarCita called', ['user_id' => auth()->id()]);
 
         $cajaAbierta = \App\Models\SesionCaja::where('user_id', auth()->id())
@@ -204,6 +206,12 @@ class VentaController extends Controller
 
     public function store(Request $request)
     {
+        $compartida = null;
+        if (PrestacionCompartidaService::solicitada($request->all())) {
+            try { $compartida = app(PrestacionCompartidaService::class)->entrada($request->all(), $request->attributes->get('h06_direct_intent')); }
+            catch (\Illuminate\Validation\ValidationException $e) { return response()->json(['errors' => $e->errors()], 422); }
+            catch (\App\Exceptions\ContabilidadException $e) { return response()->json(['error' => $e->getMessage()], 422); }
+        }
         \Illuminate\Support\Facades\Log::info('Venta store llamada', [
             'user_id' => auth()->id(),
             'headers' => $request->headers->all(),
@@ -268,9 +276,18 @@ class VentaController extends Controller
         $currency = $primario['moneda'];
         $exchangeRate = (float) $primario['tasa'];
 
+        $nivelInicial = $compartida ? DB::transactionLevel() : 0;
         \Illuminate\Support\Facades\DB::beginTransaction();
 
         try {
+            if ($compartida) {
+                app(PrestacionCompartidaService::class)->bloquearContexto($compartida);
+                if ($replay = app(PrestacionCompartidaService::class)->repeticion($compartida)) {
+                    DB::commit();
+                    return response()->json(app(PrestacionCompartidaService::class)->respuestaRepeticion($replay));
+                }
+                app(PrestacionCompartidaService::class)->exigirAplicacion();
+            }
             // Antes de clientes/ventas: adquirir todos los mutex de agenda en orden.
             $citasDelCarrito = collect($request->cart)->pluck('appointment_id')->filter()->map(fn($id) => (int)$id)->all();
             $citasValidadas = $citasDelCarrito;
@@ -289,6 +306,7 @@ class VentaController extends Controller
                 $request->cart, $request->input('discount'), $request->client_id ? (int) $request->client_id : null
             );
             $cart = $preparado['cart'];
+            if ($compartida) app(PrestacionCompartidaService::class)->validarCarrito($cart, $compartida);
             $subtotal = $preparado['subtotal'];
             $descuento = $preparado['discount'];
             $total = $preparado['total'];
@@ -339,6 +357,9 @@ class VentaController extends Controller
                     );
                 }
 
+                if ($compartida) app(PrestacionCompartidaService::class)->validarEdicion($venta, $compartida);
+                elseif (PrestacionCompartidaService::nueva($venta)) throw new \App\Exceptions\ContabilidadException('La propuesta compartida requiere su contrato y revisión; no se convierte a legacy.');
+
                 if ($venta->appointment_id && (int)$appointmentId !== (int)$venta->appointment_id) {
                     throw new \App\Exceptions\ContabilidadException('La cotización vinculada debe conservar su cita en el carrito. No se puede facturar otro contenido dejando ese vínculo en la cabecera.');
                 }
@@ -350,7 +371,7 @@ class VentaController extends Controller
             // Conservar venta -> usuarios/artículos al editar borradores, sin escribir antes de validar.
             $composiciones = (new InventarioService)->bloquearCarrito($cart);
             if ($request->draft_id) {
-                $venta->detalles()->delete();
+                if (!$compartida) $venta->detalles()->delete();
                 $venta->update([
                     'client_id' => $request->client_id,
                     'subtotal' => $subtotal,
@@ -361,6 +382,7 @@ class VentaController extends Controller
                     'payment_method' => $paymentMethod,
                     'status' => $nuevoEstado,
                 ]);
+                if ($compartida) { $venta->document_revision = (int)$venta->getRawOriginal('document_revision') + 1; $venta->save(); }
             } else {
                 $venta = \App\Models\Venta::create([
                     'cashier_id' => auth()->id() ?? 1,
@@ -377,6 +399,7 @@ class VentaController extends Controller
 
                     'status' => $nuevoEstado
                 ]);
+                if ($compartida) { foreach (app(PrestacionCompartidaService::class)->metadatos($compartida) as $key => $value) $venta->$key = $value; $venta->save(); }
             }
 
             $detallesCreados = [];
@@ -385,7 +408,7 @@ class VentaController extends Controller
 
                 $variantId = $cartItem['variant_id'];
 
-                $detallesCreados[$index] = \App\Models\DetalleVenta::create([
+                $atributosDetalle = [
                     'sale_id' => $venta->id,
                     'service_id' => $esServicio ? $cartItem['id'] : null,
                     'item_id' => $esServicio ? null : $cartItem['id'],
@@ -393,7 +416,11 @@ class VentaController extends Controller
                     'stylist_id' => isset($cartItem['stylist_id']) ? $cartItem['stylist_id'] : null,
                     'quantity' => $cartItem['quantity'],
                     'unit_price' => $cartItem['precio_c']
-                ]);
+                ];
+                $detallesCreados[$index] = $compartida
+                    ? app(PrestacionCompartidaService::class)->guardarDetalle($venta, $atributosDetalle, $cartItem,
+                        $compartida['cart'][$index] + ['draft_id' => $compartida['draft_id']])
+                    : \App\Models\DetalleVenta::create($atributosDetalle);
 
                 if (isset($cartItem['appointment_id']) && $accion !== 'cotizar' && !$requiereAprobacion) {
                     app(AgendaService::class)->completarDesdeVenta([(int)$cartItem['appointment_id']], $venta->id);
@@ -442,6 +469,7 @@ class VentaController extends Controller
                 ], 201);
             }
 
+            if ($compartida) app(ComisionService::class)->prepararParticipaciones($venta);
             // Descuento de inventario (insumos fraccionados por fórmulas + productos físicos)
             $stockCritico = (new InventarioService())->descontarPorVenta($venta);
 
@@ -488,20 +516,67 @@ class VentaController extends Controller
             ], 201);
 
         } catch (\Illuminate\Validation\ValidationException $e) {
-            DB::rollBack();
+            $compartida ? DB::rollBack($nivelInicial) : DB::rollBack();
             return response()->json(['message' => 'Revise los datos de la venta.', 'errors' => $e->errors()], 422);
         } catch (\App\Exceptions\ContabilidadException $e) {
-            \Illuminate\Support\Facades\DB::rollBack();
+            $compartida ? DB::rollBack($nivelInicial) : DB::rollBack();
             Log::warning('Venta rechazada por regla contable', ['exception' => $e->getMessage()]);
-            return response()->json(['error' => $e->getMessage()], 422);
+            return response()->json(['error' => $e->getMessage()], $e->getCode() === 409 ? 409 : 422);
+        } catch (\Illuminate\Database\UniqueConstraintViolationException $e) {
+            $compartida ? DB::rollBack($nivelInicial) : DB::rollBack();
+            if ($compartida) {
+                try {
+                    if ($replay = app(PrestacionCompartidaService::class)->repeticion($compartida, false)) return response()->json(app(PrestacionCompartidaService::class)->respuestaRepeticion($replay));
+                } catch (\App\Exceptions\ContabilidadException $conflict) { return response()->json(['error' => $conflict->getMessage()], 409); }
+            }
+            return response()->json(['error' => 'Conflicto de identidad; vuelva a consultar el documento.'], 409);
         } catch (\Throwable $e) {
-            \Illuminate\Support\Facades\DB::rollBack();
+            $compartida ? DB::rollBack($nivelInicial) : DB::rollBack();
             Log::error('Error al guardar la venta', [
                 'exception' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
                 'request' => $request->all(),
             ]);
             return response()->json(['error' => 'Error al guardar la venta. Contacte al administrador.'], 500);
+        }
+    }
+
+    /** Adaptador nuevo: una línea de servidor; la aplicación permanece en store. */
+    protected function facturarCompartida(Request $request, int $id)
+    {
+        $service = app(PrestacionCompartidaService::class);
+        try {
+            $service->exigirAplicacion();
+            $request->validate(['creation_key' => 'required|uuid', 'performance_key' => 'required|uuid', 'variant_id' => 'nullable|integer|min:1']);
+            $intent = $request->only(['service_contract_version','creation_key','performance_key','variant_id','discount','payments','payment_method','currency','exchange_rate','change_currency','consumo','requiere_aprobacion']);
+            $intent['direct_appointment_id'] = $id;
+            $data = ['creation_key' => strtolower($request->creation_key), 'hash' => PrestacionCompartidaService::huella($intent), 'draft_id' => null];
+            if ($replay = $service->repeticion($data, false)) return response()->json($service->respuestaRepeticion($replay));
+        } catch (\Illuminate\Validation\ValidationException $e) { return response()->json(['errors' => $e->errors()], 422); }
+        catch (\App\Exceptions\ContabilidadException $e) { return response()->json(['error' => $e->getMessage()], $e->getCode() === 409 ? 409 : 422); }
+        $level = DB::transactionLevel(); DB::beginTransaction();
+        try {
+            $cita = app(AgendaService::class)->bloquearCitas([$id])->get($id);
+            if ($replay = $service->repeticion($data)) { DB::commit(); return response()->json($service->respuestaRepeticion($replay)); }
+            $cita->load('servicio');
+            if (!$cita->servicio || !$cita->servicio->is_active) throw new \App\Exceptions\ContabilidadException('El servicio no está disponible.');
+            $variant = $request->variant_id ? \App\Models\ServicioVariante::findOrFail($request->variant_id) : null;
+            $line = ['type' => 'servicio', 'id' => (int)$cita->service_id, 'quantity' => 1,
+                'precio_c' => $variant?->getRawOriginal('price') ?? $cita->servicio->getRawOriginal('price'),
+                'variant_id' => $request->variant_id, 'appointment_id' => $id, 'performance_key' => $request->performance_key,
+                'participants' => $cita->estilistas->modelKeys()];
+            if ($request->exists('consumo')) $line['consumo'] = $request->input('consumo');
+            // USD sin monto real sigue siendo ambiguo, igual que en H06-R.
+            if ($request->currency === 'usd' && !$request->payments) throw new \App\Exceptions\ContabilidadException('Declare payments con USD realmente recibidos.');
+            $request->attributes->set('h06_direct_intent', $intent);
+            $request->replace($request->only(['service_contract_version','creation_key','payments','payment_method','currency','exchange_rate','change_currency','requiere_aprobacion'])
+                + ['cart' => [$line], 'client_id' => $cita->client_id, 'discount' => $request->input('discount', '0'), 'action' => 'pagar']);
+            $response = $this->store($request);
+            if ($response->getStatusCode() < 300) DB::commit(); else DB::rollBack($level);
+            return $response;
+        } catch (\Throwable $e) {
+            DB::rollBack($level);
+            return response()->json(['error' => $e instanceof \App\Exceptions\ContabilidadException ? $e->getMessage() : 'No se pudo aplicar la prestación.'], $e->getCode() === 409 ? 409 : 422);
         }
     }
 
@@ -536,6 +611,12 @@ class VentaController extends Controller
     protected function registrarConsumosReales(array $cart, array $detalles,array $composiciones=[]): void
     {
         foreach ($cart as $index => $cartItem) {
+            if ($detalles[$index]->performance_key) {
+                app(PrestacionCompartidaService::class)->exigirAplicacion();
+                if (!$detalles[$index]->wasRecentlyCreated) $detalles[$index]->consumos()->delete(); // Revisión explícita de captura de propuesta sin efectos.
+                app(\App\Services\CapturaConsumoService::class)->guardar($detalles[$index], $cartItem, $composiciones[$index] ?? null);
+                continue;
+            }
             if (\App\Services\CapturaConsumoService::activa()) {
                 app(\App\Services\CapturaConsumoService::class)->guardar($detalles[$index],$cartItem,$composiciones[$index]??null);
                 continue;
@@ -604,6 +685,7 @@ class VentaController extends Controller
 
         try {
             $venta = Venta::where('id', $id)->lockForUpdate()->firstOrFail();
+            if (PrestacionCompartidaService::nueva($venta)) app(PrestacionCompartidaService::class)->exigirHabilitado();
 
             if ($venta->status !== Venta::ESTADO_EMITIDA) {
                 throw new \App\Exceptions\ContabilidadException(
@@ -680,6 +762,7 @@ class VentaController extends Controller
 
         try {
             $venta = app(AgendaService::class)->bloquearVenta((int)$id, false);
+            if (PrestacionCompartidaService::nueva($venta)) app(PrestacionCompartidaService::class)->validarDocumento($venta->load('detalles'));
             $venta->load(['detalles', 'pagos']);
             if (\App\Services\CapturaConsumoService::activa()) {
                 // La venta es exclusiva; sus fotografías inmutables solo requieren lectura actual compartida.
@@ -820,6 +903,7 @@ class VentaController extends Controller
 
         // Permitir ver detalles de cualquier estado
         $estadosVisibles = [Venta::ESTADO_BORRADOR, Venta::ESTADO_EMITIDA, Venta::ESTADO_PAGADA, Venta::ESTADO_ANULADA];
+        if (PrestacionCompartidaService::nueva($venta)) $estadosVisibles[] = Venta::ESTADO_PENDIENTE_APROBACION;
         
         if (!in_array($venta->status, $estadosVisibles)) {
             abort(404, 'Estado de venta no válido para visualización.');
@@ -828,6 +912,7 @@ class VentaController extends Controller
         // Si es petición API (Accept: application/json), retorna JSON para el POS
         if (request()->wantsJson()) {
             return response()->json([
+                ...app(PrestacionCompartidaService::class)->presentar($venta),
                 'id' => $venta->id,
                 'status' => $venta->status,
                 'client_id' => $venta->client_id,
@@ -836,12 +921,14 @@ class VentaController extends Controller
                 'items' => $venta->detalles->map(function ($d) {
                     return [
                         'id' => $d->service_id ?? $d->item_id,
-                        'producto' => trim(($d->servicio?->name ?? $d->articulo?->producto ?? 'Artículo')
-                            . ($d->variante ? ' (' . $d->variante->name . ')' : '')),
+                        'producto' => $d->nombreComercial(),
                         'precio_c' => (float) $d->unit_price,
                         'type' => $d->service_id ? 'servicio' : 'producto',
                         'quantity' => (int) $d->quantity,
                         'stylist_id' => $d->stylist_id,
+                        'detail_id' => $d->id,
+                        ...($d->performance_key ? ['performance_key' => $d->performance_key, 'appointment_id' => $d->appointment_id,
+                            'participants' => $d->participantes->pluck('user_id')->all(), 'participants_display' => $d->participantes->map(fn ($p) => $p->usuario?->name)->all()] : []),
                         'variant_id' => $d->service_variant_id,
                         'composition_reference' => $d->consumption_snapshot['reference'] ?? null,
                         'consumo' => ($d->consumption_snapshot && $d->consumption_snapshot['mode']!=='complete') ? null : $d->consumos->map(fn ($c) => [

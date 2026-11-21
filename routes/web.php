@@ -156,7 +156,9 @@ Route::middleware(['auth'])->group(function () {
             $productos = Articulo::where('type', '!=', 'servicio')->orderBy('producto', 'asc')->get();
             $clientes = Cliente::with('grupo')->orderBy('name', 'asc')->get();
 
-            return view('sales.pos', compact('servicios', 'productos', 'clientes'));
+            $contratoCompartido = app(\App\Services\PrestacionCompartidaService::class)->disponible();
+            $participantesCompartidos = $contratoCompartido ? \App\Models\Usuario::where('is_active', true)->orderBy('name')->get(['id','name']) : collect();
+            return view('sales.pos', compact('servicios', 'productos', 'clientes', 'contratoCompartido', 'participantesCompartidos'));
         });
 
         Route::post('/sales', [VentaController::class, 'store']);

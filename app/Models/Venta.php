@@ -7,6 +7,8 @@ use Illuminate\Database\Eloquent\Model;
 
 class Venta extends Model
 {
+    /** Resoluciones de esta transacción, nunca atributos SQL ni fuente para nómina. */
+    public array $sharedCommissionResolutions = [];
     use HasFactory;
 
     protected $table = 'sales';

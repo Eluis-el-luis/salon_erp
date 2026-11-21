@@ -153,6 +153,7 @@ class CarritoVentaService
     /** Aprobar conserva precios guardados; solo comprueba coherencia, sin consultar tarifas actuales. */
     public function validarDocumento(Venta $sale): void
     {
+        if (PrestacionCompartidaService::nueva($sale)) app(PrestacionCompartidaService::class)->validarDocumento($sale);
         $subtotal = 0;
         if ($sale->detalles->isEmpty()) throw new ContabilidadException('La factura no tiene detalles.');
         foreach ($sale->detalles as $detail) {

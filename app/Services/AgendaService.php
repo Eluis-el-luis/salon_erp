@@ -223,6 +223,14 @@ class AgendaService
     public function bloquearVenta(int $id, bool $paraFacturar): Venta
     {
         $anterior = Venta::findOrFail($id);
+        if (PrestacionCompartidaService::nueva($anterior)) {
+            app(PrestacionCompartidaService::class)->exigirAplicacion();
+            // También las ventas sin cita necesitan el mismo orden usuarios -> venta.
+            // Evita invertirlo al aprobar/anular frente a un reenvío de creación.
+            $participants = \App\Models\ServiceParticipation::where('sale_id', $id)->pluck('user_id')->all();
+            app(PrestacionCompartidaService::class)->bloquearContexto(['cart' => $anterior->appointment_id ? [['appointment_id' => $anterior->appointment_id]] : [],
+                'users' => array_merge($participants, [(int)$anterior->cashier_id]), 'draft_id' => null]);
+        }
         $ids = $anterior->appointment_id ? [(int)$anterior->appointment_id] : [];
         if ($paraFacturar) $this->validarParaFacturar($ids, $id);
         else $this->bloquearCitas($ids);

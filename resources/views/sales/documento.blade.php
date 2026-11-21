@@ -136,11 +136,13 @@
                     @foreach($venta->detalles as $detalle)
                         <tr class="hover:bg-gray-50">
                             <td class="px-6 py-4">
-                                <div class="font-bold text-gray-900">{{ $detalle->servicio->name ?? $detalle->articulo->producto ?? 'Item' }}</div>
-                                @if($detalle->variante)
+                                <div class="font-bold text-gray-900">{{ $detalle->performance_key ? $detalle->nombreComercial() : ($detalle->servicio->name ?? $detalle->articulo->producto ?? 'Item') }}</div>
+                                @if(!$detalle->performance_key && $detalle->variante)
                                     <div class="text-xs text-amber-700 font-bold">{{ $detalle->variante->name }}</div>
                                 @endif
-                                @if($detalle->estilista)
+                                @if($detalle->performance_key)
+                                    <div class="text-xs text-gray-500">Participantes: {{ $detalle->participantes->map(fn ($p) => $p->usuario?->name)->implode(', ') }}</div>
+                                @elseif($detalle->estilista)
                                     <div class="text-xs text-gray-500">Estilista: {{ $detalle->estilista->name }}</div>
                                 @endif
                             </td>

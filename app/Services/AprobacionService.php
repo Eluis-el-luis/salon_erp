@@ -97,6 +97,8 @@ class AprobacionService
     {
         return DB::transaction(function () use ($ventaId, $aprobadorId) {
             $venta = app(AgendaService::class)->bloquearVenta($ventaId, true);
+            $sharedLevel = PrestacionCompartidaService::nueva($venta) ? DB::transactionLevel() : null;
+            try {
             $venta->load('detalles');
 
             if ($venta->status !== Venta::ESTADO_PENDIENTE_APROBACION) {
@@ -107,6 +109,7 @@ class AprobacionService
 
             // No recalcular tarifas históricas: validar cantidades e importes guardados antes de efectos.
             app(CarritoVentaService::class)->validarDocumento($venta);
+            if (PrestacionCompartidaService::nueva($venta)) app(ComisionService::class)->prepararParticipaciones($venta);
 
             // 1. Inventario físico (insumos por fórmula + productos)
             (new InventarioService)->descontarPorVenta($venta);
@@ -183,6 +186,11 @@ class AprobacionService
             }
 
             return $venta->fresh();
+            } catch (\Throwable $error) {
+                // Cerrar niveles internos filtrados por un Error antes del rollback exterior de Laravel.
+                if ($sharedLevel !== null && DB::transactionLevel() > $sharedLevel) DB::rollBack($sharedLevel);
+                throw $error;
+            }
         });
     }
 

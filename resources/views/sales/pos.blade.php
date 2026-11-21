@@ -98,6 +98,13 @@
                         <div>
                             <h4 class="font-bold text-sm text-gray-800" x-text="item.producto"></h4>
                             <p class="text-xs text-gray-500" x-text="'C$ ' + item.precio_c + ' x ' + item.quantity"></p>
+                            <template x-if="sharedContract && item.type === 'servicio'">
+                                <label class="block text-xs mt-1">Participantes (una receta por prestación)
+                                    <select multiple x-model="item.participants" :disabled="!!cobroId || !!item.appointment_id">
+                                        <template x-for="persona in sharedParticipants" :key="persona.id"><option :value="persona.id" x-text="persona.name"></option></template>
+                                    </select>
+                                </label>
+                            </template>
                             <!-- BOM DINÁMICO: editor de consumo real de insumos -->
                             <button x-show="item.type === 'servicio' && servicioInfo(item.id) !== null"
                                     @click="abrirConsumo(index)" type="button"
@@ -441,12 +448,23 @@
 
 <script>
     window.posServicios = @json($serviciosData);
+    window.posSharedContract = @json($contratoCompartido ?? false);
+    window.posSharedParticipants = @json($participantesCompartidos ?? []);
 </script>
 
 <script>
     function posSystem() {
         return {
             cart: [],
+            sharedContract: window.posSharedContract === true,
+            sharedParticipants: window.posSharedParticipants || [],
+            creationKey: null,
+            documentRevision: null,
+            contractPayload() {
+                if (!this.sharedContract) return {};
+                this.creationKey ||= window.crypto.randomUUID();
+                return { service_contract_version: 1, creation_key: this.creationKey, document_revision: this.documentRevision };
+            },
             discount: 0,
             clientId: '',
 
@@ -561,7 +579,9 @@
                     const stylistIds = (urlParams.get('stylist_ids') || urlParams.get('stylist_id') || '')
                         .split(',').map(Number).filter(n => n > 0);
 
-                    if (stylistIds.length > 0) {
+                    if (this.sharedContract) {
+                        this.cart.push({ ...base, precio_c: price, performance_key: window.crypto.randomUUID(), participants: stylistIds });
+                    } else if (stylistIds.length > 0) {
                         const centavos = Math.round(price * 100);
                         stylistIds.forEach((sid, index) => this.cart.push({ ...base,
                             precio_c: (Math.floor(centavos / stylistIds.length) + (index < centavos % stylistIds.length ? 1 : 0)) / 100,
@@ -591,6 +611,9 @@
                         return;
                     }
                     this.cart = doc.items;
+                    this.sharedContract = doc.service_contract_version === 1;
+                    this.creationKey = doc.creation_key || null;
+                    this.documentRevision = doc.document_revision || null;
                     this.clientId = doc.client_id || '';
                     this.discount = doc.discount || 0;
                     if (esCobro) {
@@ -629,6 +652,7 @@
                             'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content')
                         },
                         body: JSON.stringify({
+                            ...this.contractPayload(),
                             cart: this.cart,
                             discount: this.discount,
                             client_id: this.clientId !== '' ? this.clientId : null,
@@ -658,6 +682,7 @@
                             'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content')
                         },
                         body: JSON.stringify({
+                            ...this.contractPayload(),
                             cart: this.cart,
                             discount: this.discount,
                             client_id: this.clientId,
@@ -703,6 +728,8 @@
                 this.checkoutOpen = false;
                 this.esCredito = false;
                 this.draftId = null;
+                this.creationKey = null;
+                this.documentRevision = null;
                 this.cobroId = null;
             },
 
@@ -809,7 +836,7 @@
                 // Dos líneas con misma variante se acumulan; variantes distintas son líneas separadas
                 let existingItem = this.cart.find(item =>
                     item.id === product.id && item.type === product.type &&
-                    (item.variant_id || null) === (product.variant_id || null)
+                    (item.variant_id || null) === (product.variant_id || null) && (!this.sharedContract || product.type !== 'servicio')
                 );
                 if (existingItem) {
                     existingItem.quantity++;
@@ -822,12 +849,17 @@
                         quantity: 1,
                         variant_id: product.variant_id || null,
                         consumo: product.consumo || null,
-                        composition_reference: product.composition_reference || this.servicioInfo(product.id)?.composition_reference || null
+                        composition_reference: product.composition_reference || this.servicioInfo(product.id)?.composition_reference || null,
+                        ...(this.sharedContract && product.type === 'servicio' ? { performance_key: window.crypto.randomUUID(), participants: [] } : {})
                     });
                 }
             },
 
             removeItem(index) {
+                if (this.sharedContract && this.draftId) {
+                    window.dispatchEvent(new CustomEvent('notify', { detail: 'Para retirar una prestación guardada, anula explícitamente la propuesta sin efectos y crea otra. Los demás detalles se conservan.' }));
+                    return;
+                }
                 if (this.cobroId) {
                     window.dispatchEvent(new CustomEvent('notify', { detail: 'Al cobrar una factura a crédito el detalle no puede modificarse.' }));
                     return;
@@ -874,6 +906,7 @@
                 const body = this.cobroId
                     ? { payments: payloadPagos, change_currency: payloadVuelto }
                     : {
+                        ...this.contractPayload(),
                         cart: this.cart,
                         discount: this.discount,
                         client_id: this.clientId !== '' ? this.clientId : null,

@@ -94,11 +94,19 @@
                         <span class="font-bold">{{ $detail->quantity }}x</span> 
                         
                         @if($detail->servicio)
-                            {{ $detail->servicio->name }} <br>
-                            <span class="text-[10px] text-gray-500 italic">Por: {{ $detail->estilista ? $detail->estilista->name : 'N/A' }}</span>
+                            {{ $detail->performance_key ? $detail->nombreComercial() : $detail->servicio->name }} <br>
+                            <span class="text-[10px] text-gray-500 italic">Por: {{ $detail->performance_key ? $detail->participantes->map(fn ($p) => $p->usuario?->name)->implode(', ') : ($detail->estilista ? $detail->estilista->name : 'N/A') }}</span>
                             
                             <!-- NUEVO: Mostrar insumos gastados -->
-                            @if($detail->servicio->formulas && $detail->servicio->formulas->count() > 0)
+                            @if($detail->performance_key)
+                                <span class="text-[9px] text-gray-400 block mt-1 leading-tight">
+                                    [ Consumo documentado por ejecución:
+                                    @foreach(($detail->consumption_snapshot['ingredients'] ?? []) as $ingredient)
+                                        {{ $ingredient['actual'] }} {{ $ingredient['unit'] }} (insumo #{{ $ingredient['item_id'] }})@if(!$loop->last), @endif
+                                    @endforeach
+                                    ]
+                                </span>
+                            @elseif($detail->servicio->formulas && $detail->servicio->formulas->count() > 0)
                                 <span class="text-[9px] text-gray-400 block mt-1 leading-tight">
                                     [ Insumos: 
                                     @foreach($detail->servicio->formulas as $formula)

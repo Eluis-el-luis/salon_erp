@@ -8,6 +8,7 @@ class ComisionGenerada extends Model
 {
     protected $table = 'comisiones_generadas';
     protected $fillable = [
+        'service_participation_id',
         'empleado_id', 'venta_id', 'monto_venta', 
         'porcentaje_aplicado', 'monto_comision', 
         'fecha', 'periodo_nomina_id', 'estado'

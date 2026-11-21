@@ -176,6 +176,7 @@ class InventarioService
      */
     public function descontarPorVenta($venta): array
     {
+        if (PrestacionCompartidaService::nueva($venta)) app(PrestacionCompartidaService::class)->validarDocumento($venta);
         $this->bloquearUsuarios(array_merge([auth()->id()], $venta->detalles->pluck('stylist_id')->all()));
         $operaciones = $this->operacionesVenta($venta);
         $this->validarDemanda($operaciones);

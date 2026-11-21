@@ -1,6 +1,8 @@
 <?php
 
 return [
+    // H06-P1: habilitación interna pendiente de SQL independiente. No se expone por .env.
+    'shared_services' => ['enabled' => false, 'sql_verified' => false],
     /*
     |--------------------------------------------------------------------------
     | Configuración del negocio

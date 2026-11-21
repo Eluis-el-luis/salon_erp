@@ -22,6 +22,7 @@ class DetalleVenta extends Model
     ];
 
     protected $casts = [
+        'commercial_identity_snapshot' => 'array',
         'consumption_snapshot' => 'array',
         'quantity' => 'integer',
         'unit_price' => 'float',
@@ -30,6 +31,19 @@ class DetalleVenta extends Model
     public function venta()
     {
         return $this->belongsTo(Venta::class, 'sale_id');
+    }
+
+    public function participantes() { return $this->hasMany(ServiceParticipation::class, 'sale_detail_id')->orderBy('user_id'); }
+
+    public function nombreComercial(): string
+    {
+        if ($this->performance_key) {
+            $snapshot = $this->commercial_identity_snapshot;
+            return trim(($snapshot['service_name'] ?? 'Servicio documentado')
+                . (!empty($snapshot['variant_name']) ? ' ('.$snapshot['variant_name'].')' : ''));
+        }
+        return trim(($this->servicio?->name ?? $this->articulo?->producto ?? 'Artículo')
+            . ($this->variante ? ' ('.$this->variante->name.')' : ''));
     }
 
     public function articulo()
