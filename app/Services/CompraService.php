@@ -246,7 +246,7 @@ class CompraService
     {
         return DB::transaction(function () use ($facturaId, $motivo, $usuarioId) {
             $factura = FacturaCompra::lockForUpdate()
-                ->with(['lineas', 'cuentaPorPagar'])
+                ->with('lineas')
                 ->findOrFail($facturaId);
 
             if ($factura->estado === FacturaCompra::ESTADO_ANULADA) {
@@ -259,9 +259,13 @@ class CompraService
                 throw new \Exception('Esta compra está pendiente de aprobación. Recházala desde Aprobaciones Pendientes.');
             }
 
-            $cxp = $factura->cuentaPorPagar;
-            if ($cxp && $cxp->pagos()->exists()) {
-                throw new \Exception('No se puede anular: la cuenta por pagar tiene abonos registrados. Corrige o revierte los pagos primero.');
+            // Orden: factura -> CxP -> pagos -> inventario. Pago solo pide CxP -> pagos.
+            $cxp = $factura->cuentaPorPagar()->lockForUpdate()->first();
+            if ($cxp && ($cxp->estado !== 'pendiente'
+                || $cxp->pagos()->orderBy('id')->lockForUpdate()->first(['id'])
+                || \App\Support\InventoryDecimal::scaled($cxp->getRawOriginal('saldo_pendiente'), 2, PagoProveedorService::MAX_CENTAVOS)
+                    !== \App\Support\InventoryDecimal::scaled($cxp->getRawOriginal('monto_original'), 2, PagoProveedorService::MAX_CENTAVOS))) {
+                throw new \Exception('No se puede anular: la cuenta por pagar tiene abonos o un estado/saldo incompatible. Requiere revisar la obligación.');
             }
 
             // Validaciones ANTES de mutar: lotes intactos y stock suficiente

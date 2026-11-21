@@ -233,6 +233,7 @@ class NominaController extends Controller
     protected function validarWizard(Request $request): array
     {
         return $request->validate([
+            'tipo_nomina' => 'sometimes|in:ordinaria',
             'periodo_inicio' => 'required|date',
             'periodo_fin' => 'required|date|after_or_equal:periodo_inicio',
             'metodo_pago' => 'required|in:efectivo,banco',

@@ -11,9 +11,11 @@ use App\Models\CorridaNomina;
 use App\Models\DetalleColilla;
 use App\Models\Empleado;
 use App\Models\EstructuraSalarial;
+use App\Models\Nomina;
 use App\Models\Propina;
 use App\Models\Usuario;
 use Carbon\Carbon;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Throwable;
@@ -89,13 +91,24 @@ class NominaService
      */
     public function anular(CorridaNomina $corrida, string $motivo): void
     {
-        if ($corrida->estado !== 'contabilizada') {
-            throw new \Exception('Solo se pueden anular corridas contabilizadas.');
-        }
-
         DB::beginTransaction();
         try {
-            foreach ($corrida->colillas()->where('estado', 'pagada')->get() as $colilla) {
+            if (trim($motivo) === '') {
+                throw new \Exception('La anulación requiere un motivo.');
+            }
+            // Descubrimiento de IDs inmutables; no decide estado ni libera cobertura.
+            $ids = $corrida->colillas()->pluck('employee_id')->all();
+            $this->cargarEmpleados($ids, true);
+            $corrida = CorridaNomina::lockForUpdate()->findOrFail($corrida->id);
+            if ($corrida->estado !== 'contabilizada') {
+                throw new \Exception('Solo se pueden anular corridas contabilizadas.');
+            }
+            $colillas = $corrida->colillas()->orderBy('employee_id')->orderBy('id')->lockForUpdate()->get();
+            if ($colillas->isEmpty() || $colillas->contains(fn ($c) => $c->estado !== 'pagada' || ! $c->asiento_contable_id)
+                || array_diff($colillas->pluck('employee_id')->all(), $ids)) {
+                throw new \Exception('La corrida cambió o tiene colillas incompatibles. Requiere revisión.');
+            }
+            foreach ($colillas as $colilla) {
                 // 1. Reabrir comisiones congeladas
                 ComisionGenerada::where('salary_slip_id', $colilla->id)->update([
                     'estado' => 'pendiente',
@@ -167,6 +180,10 @@ class NominaService
      */
     protected function liquidar(array $datos, bool $bloquear, bool $persistir): array
     {
+        // El propietario confirmó que este wizard es exclusivamente ordinario.
+        if (($datos['tipo_nomina'] ?? 'ordinaria') !== 'ordinaria') {
+            throw new \Exception('Los ajustes extraordinarios requieren un circuito con motivo y origen; no se procesan desde este wizard.');
+        }
         $inicio = Carbon::parse($datos['periodo_inicio'])->startOfDay();
         $fin = Carbon::parse($datos['periodo_fin'])->endOfDay();
         $metodoPago = $datos['metodo_pago'] ?? 'banco';
@@ -176,19 +193,16 @@ class NominaService
             throw new \Exception('El rango del período de nómina es inválido.');
         }
 
-        $empleados = Empleado::with('usuario')
-            ->whereIn('id', $datos['empleado_ids'])
-            ->orderBy('codigo_empleado')
-            ->get();
-
-        if ($empleados->isEmpty()) {
-            throw new \Exception('No hay colaboradores seleccionados para la nómina.');
+        $empleados = $this->cargarEmpleados($datos['empleado_ids'], $bloquear);
+        // Validar TODA la selección antes de calcular/cerrar fuentes o crear la corrida.
+        foreach ($empleados as $empleado) {
+            $this->validarCobertura($empleado, $inicio, $fin, $bloquear);
         }
 
         $colillas = [];
         $totales = ['ingresos' => 0.0, 'deducciones' => 0.0, 'neto' => 0.0];
 
-        foreach ($empleados as $empleado) {
+        foreach ($empleados->sortBy('codigo_empleado') as $empleado) {
             $data = $this->calcularColilla($empleado, $inicio, $fin, $estructuraId, $bloquear);
             $colillas[] = $data;
 
@@ -295,6 +309,57 @@ class NominaService
             'periodo_fin' => $fin->toDateString(),
             'metodo_pago' => $metodoPago,
         ];
+    }
+
+    /** Mutex estable aunque todavía no exista ninguna colilla. Orden de PK, no código mutable. */
+    protected function cargarEmpleados(array $ids, bool $bloquear): Collection
+    {
+        if ($bloquear && DB::transactionLevel() === 0) {
+            throw new \LogicException('Nómina requiere una transacción activa.');
+        }
+        foreach ($ids as $id) {
+            if (filter_var($id, FILTER_VALIDATE_INT) === false || (int) $id <= 0) {
+                throw new \Exception('Identificador de colaborador inválido.');
+            }
+        }
+        $ids = array_values(array_unique(array_map('intval', $ids)));
+        sort($ids, SORT_NUMERIC);
+        if (! $ids) {
+            throw new \Exception('No hay colaboradores seleccionados para la nómina.');
+        }
+        $empleados = collect();
+        foreach ($ids as $id) {
+            $query = Empleado::with('usuario')->whereKey($id);
+            $empleado = ($bloquear ? $query->lockForUpdate() : $query)->first();
+            if (! $empleado) {
+                throw new \Exception('Uno de los colaboradores seleccionados ya no existe.');
+            }
+            $empleados->push($empleado);
+        }
+        return $empleados;
+    }
+
+    /** Intervalos inclusivos: [1,15] y [16,30] son contiguos; compartir el día 15 es solape. */
+    protected function validarCobertura(Empleado $empleado, Carbon $inicio, Carbon $fin, bool $bloquear): void
+    {
+        $query = ColillaNomina::where('employee_id', $empleado->id)
+            ->where('periodo_inicio', '<=', $fin->toDateString())
+            ->where('periodo_fin', '>=', $inicio->toDateString())
+            ->where('estado', '!=', 'anulada')->orderBy('id');
+        $colilla = ($bloquear ? $query->lockForUpdate() : $query)->first();
+        if ($colilla) {
+            throw new \Exception('El colaborador '.$empleado->codigo_empleado.' ya tiene cobertura ordinaria activa en la colilla #'.$colilla->id.'.');
+        }
+        // Legacy es solo lectura, pero sus liquidaciones pagadas también representan cobertura.
+        if ($empleado->user_id) {
+            $legacy = Nomina::where('user_id', $empleado->user_id)
+                ->whereIn('status', ['pagado', 'pagada'])
+                ->where('start_date', '<=', $fin->toDateString())
+                ->where('end_date', '>=', $inicio->toDateString())->orderBy('id');
+            if (($bloquear ? $legacy->lockForUpdate() : $legacy)->first()) {
+                throw new \Exception('El colaborador '.$empleado->codigo_empleado.' tiene una nómina legacy pagada en ese período. Requiere revisar su cobertura.');
+            }
+        }
     }
 
     /**

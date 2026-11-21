@@ -1135,7 +1135,7 @@ class ContabilidadService
         DB::beginTransaction();
         try {
             $asiento = AsientoContable::create([
-                'numero_asiento' => 'PXP-'.time(),
+                'numero_asiento' => 'PXP-PAGO-'.$referenciaId,
                 'fecha' => Carbon::now(),
                 'concepto' => 'Abono a proveedor (Recibo de Pago #'.$referenciaId.')',
                 'modulo_origen' => 'pagos_proveedor',
@@ -1158,7 +1158,7 @@ class ContabilidadService
 
             $this->validarCuadre($asiento->id);
             DB::commit();
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             DB::rollBack();
             throw $e;
         }
@@ -1643,7 +1643,7 @@ class ContabilidadService
 
             $this->validarCuadre($asiento->id);
             DB::commit();
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             DB::rollBack();
             throw $e;
         }
@@ -1695,7 +1695,7 @@ class ContabilidadService
 
             $this->validarCuadre($reversa->id, $original->id);
             DB::commit();
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             DB::rollBack();
             throw $e;
         }
