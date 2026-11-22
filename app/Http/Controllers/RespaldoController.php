@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
 use Ifsnop\Mysqldump as IMysqldump;
+use App\Support\HttpRestoreGate;
 
 class RespaldoController extends Controller
 {
@@ -59,8 +60,24 @@ class RespaldoController extends Controller
         }
     }
 
-    // 3. Restaurar la base de datos desde un archivo .sql (Versión Nativa de Laravel)
+    // 3. R01-C0: rechazar antes de validar/abrir el archivo o resolver una conexión.
     public function restore(Request $request)
+    {
+        if (! HttpRestoreGate::allows(config('backups.http_restore_enabled', false))) {
+            if ($request->expectsJson()) {
+                return response()->json(['message' => HttpRestoreGate::MESSAGE, 'code' => 'http_restore_disabled'], 403);
+            }
+
+            // Sin flash de sesión, logs con payload ni redirección con datos del upload.
+            return response(HttpRestoreGate::MESSAGE, 403, ['Content-Type' => 'text/plain; charset=UTF-8']);
+        }
+
+        return $this->restoreLegacy($request);
+    }
+
+    // Evidencia histórica de R01: inaccesible por la puerta y sin ruta alternativa.
+    // No reactivar: requiere otro contrato de recuperación, autorización y pruebas.
+    private function restoreLegacy(Request $request)
     {
         $request->validate([
             'backup_file' => 'required|file|max:51200', // Máximo 50MB
